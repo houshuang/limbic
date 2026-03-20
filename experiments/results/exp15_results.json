@@ -1,0 +1,157 @@
+{
+  "experiment": "exp15_large_corpus_novelty",
+  "description": "Novelty scoring at real scale (~27K education claims from knowledge system)",
+  "corpus_size": 27614,
+  "embedding_model": "paraphrase-multilingual-MiniLM-L12-v2",
+  "embedding_dim": 384,
+  "embedding_time_s": 40.1,
+  "index_build_time_s": 0.04,
+  "sample_size": 100,
+  "age_stats": {
+    "min_days": 0.3,
+    "max_days": 16.6,
+    "mean_days": 16.2,
+    "median_days": 16.3
+  },
+  "configs": {
+    "baseline": {
+      "mean": 0.2867,
+      "std": 0.0755,
+      "min": 0.057,
+      "max": 0.4903,
+      "q25": 0.2398,
+      "median": 0.2753,
+      "q75": 0.3237,
+      "ms_per_call": 1.13,
+      "total_time_s": 0.11
+    },
+    "centroid": {
+      "mean": 0.3467,
+      "std": 0.0837,
+      "min": 0.1504,
+      "max": 0.5966,
+      "q25": 0.2861,
+      "median": 0.3268,
+      "q75": 0.3883,
+      "ms_per_call": 1.07,
+      "total_time_s": 0.11
+    },
+    "temporal": {
+      "mean": 0.2867,
+      "std": 0.0756,
+      "min": 0.057,
+      "max": 0.4903,
+      "q25": 0.2398,
+      "median": 0.2754,
+      "q75": 0.3239,
+      "ms_per_call": 1.1,
+      "total_time_s": 0.11
+    },
+    "combined": {
+      "mean": 0.3467,
+      "std": 0.0838,
+      "min": 0.1504,
+      "max": 0.5965,
+      "q25": 0.2862,
+      "median": 0.3268,
+      "q75": 0.3887,
+      "ms_per_call": 1.15,
+      "total_time_s": 0.12
+    }
+  },
+  "batch_performance": {
+    "100": {
+      "n": 100,
+      "total_s": 0.1,
+      "ms_per_claim": 1.01,
+      "mean_score": 0.2817
+    },
+    "1000": {
+      "n": 1000,
+      "total_s": 1.28,
+      "ms_per_claim": 1.28,
+      "mean_score": 0.2864
+    },
+    "all": {
+      "n": 27614,
+      "total_s": 100.0,
+      "ms_per_claim": 3.62,
+      "mean_score": 0.2819
+    }
+  },
+  "full_corpus_novelty": {
+    "mean": 0.2819,
+    "std": 0.0639,
+    "p5": 0.189,
+    "q25": 0.24,
+    "median": 0.2776,
+    "q75": 0.3199,
+    "p95": 0.3924
+  },
+  "sanity_check": {
+    "lowest_novelty": [
+      {
+        "rank": 1,
+        "id": "51ae4930-3dba-43d3-9a97-9445c192b0a3",
+        "score": 0.0057,
+        "text": "Chris Jenks is recognized as a dynamic and groundbreaking pioneer in the field of childhood research."
+      },
+      {
+        "rank": 2,
+        "id": "4a4eda1d-9304-488e-9ad6-5fa8b01a0bdb",
+        "score": 0.0057,
+        "text": "Chris Jenks is recognized as a dynamic and groundbreaking pioneer in the field of childhood research."
+      },
+      {
+        "rank": 3,
+        "id": "0df7d16a-c5bb-458f-9659-a8dd1c9e542b",
+        "score": 0.0057,
+        "text": "Chris Jenks is recognized as a dynamic and groundbreaking pioneer in the field of childhood research."
+      },
+      {
+        "rank": 4,
+        "id": "615fafbc-dfcd-4746-a073-493421105efe",
+        "score": 0.0057,
+        "text": "Chris Jenks is recognized as a dynamic and groundbreaking pioneer in the field of childhood research."
+      },
+      {
+        "rank": 5,
+        "id": "cebb34da-f1fa-491f-9693-caa7563fc6ee",
+        "score": 0.0057,
+        "text": "Chris Jenks is recognized as a dynamic and groundbreaking pioneer in the field of childhood research."
+      }
+    ],
+    "highest_novelty": [
+      {
+        "rank": 1,
+        "id": "7738b3d9-d645-4164-9be0-481728fa2e47",
+        "score": 0.6347,
+        "text": "everything is a remix"
+      },
+      {
+        "rank": 2,
+        "id": "2ef28ae8-733a-48a3-8b52-01fcc7bd2cd9",
+        "score": 0.5852,
+        "text": "DNA analysis of Mesolithic remains in Europe, such as the 'Cheddar Man', indicates that Stone Age populations had dark skin, dark hair, and blue eyes."
+      },
+      {
+        "rank": 3,
+        "id": "b775143b-2241-4724-b80d-0e99e5414f11",
+        "score": 0.5751,
+        "text": "sangho is the smartest in HCI"
+      },
+      {
+        "rank": 4,
+        "id": "9878949c-3448-4797-89e2-37f9412f7ea8",
+        "score": 0.5647,
+        "text": "The US administration faced eight federal lawsuits and protests from hundreds of universities regarding the visa policy."
+      },
+      {
+        "rank": 5,
+        "id": "2c015f55-cc42-41d2-a1dd-bafbe97c2486",
+        "score": 0.5645,
+        "text": "When debt is forgiven, the interest accrued on that specific portion of the loan is also cancelled."
+      }
+    ]
+  }
+}

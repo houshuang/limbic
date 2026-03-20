@@ -1,0 +1,196 @@
+{
+  "experiment": "exp21_all_but_top",
+  "model": "paraphrase-multilingual-MiniLM-L12-v2",
+  "corpus_size": 5000,
+  "calibration_size": 120,
+  "domain_eval_size": 2000,
+  "elapsed_seconds": 139.06371903419495,
+  "eigenvalue_spectrum": {
+    "top_10_singular_values": [
+      14.368988037109375,
+      12.432903289794922,
+      12.055599212646484,
+      11.711172103881836,
+      10.45055866241455,
+      10.06629467010498,
+      9.657261848449707,
+      8.964590072631836,
+      8.592432022094727,
+      8.372336387634277
+    ],
+    "top_10_variance_explained_pct": [
+      5.643272477655659,
+      4.224971314187709,
+      3.9724300324962782,
+      3.7486887273268406,
+      2.9850916425111085,
+      2.769605623402752,
+      2.5490987960400444,
+      2.19654206197133,
+      2.0179521482535496,
+      1.915896271617077
+    ],
+    "cumulative_variance": {
+      "1": 5.64327253241008,
+      "2": 9.868243933759633,
+      "3": 13.840674137404447,
+      "5": 20.574454558691276,
+      "10": 32.02354945302724,
+      "20": 46.876367540319876,
+      "50": 70.05583913400089,
+      "100": 87.33534044551335
+    },
+    "effective_rank": 56.614383697509766
+  },
+  "results": [
+    {
+      "method": "raw",
+      "params": {},
+      "calibration": {
+        "mean_related_cosine": 0.7573440576593081,
+        "mean_unrelated_cosine": 0.013573204105099042,
+        "mean_contradiction_cosine": 0.5909711112578709,
+        "discrimination_gap": 0.7437708535542091,
+        "classification_accuracy": 0.8,
+        "optimal_threshold": 0.5496480464935303
+      },
+      "domain_homogeneous": {
+        "mean_nn_cosine": 0.6604188680648804,
+        "mean_random_cosine": 0.24968079491332174,
+        "nn_random_gap": 0.41073807315155864,
+        "mean_pairwise_cosine": 0.25673040747642517
+      }
+    },
+    {
+      "method": "all_but_top",
+      "params": {
+        "D": 1
+      },
+      "calibration": {
+        "mean_related_cosine": 0.7625131418307622,
+        "mean_unrelated_cosine": 0.14667960836862523,
+        "mean_contradiction_cosine": 0.6503224392731984,
+        "discrimination_gap": 0.615833533462137,
+        "classification_accuracy": 0.7666666666666667,
+        "optimal_threshold": 0.7228144407272339
+      },
+      "domain_homogeneous": {
+        "mean_nn_cosine": 0.5204784870147705,
+        "mean_random_cosine": -0.0027608368201181292,
+        "nn_random_gap": 0.5232393238348887,
+        "mean_pairwise_cosine": 0.00021944500622339547
+      }
+    },
+    {
+      "method": "all_but_top",
+      "params": {
+        "D": 2
+      },
+      "calibration": {
+        "mean_related_cosine": 0.7395881816744805,
+        "mean_unrelated_cosine": 0.09685011490558584,
+        "mean_contradiction_cosine": 0.6242025216420491,
+        "discrimination_gap": 0.6427380667688947,
+        "classification_accuracy": 0.775,
+        "optimal_threshold": 0.7399129867553711
+      },
+      "domain_homogeneous": {
+        "mean_nn_cosine": 0.5121055841445923,
+        "mean_random_cosine": -0.001327389484271407,
+        "nn_random_gap": 0.5134329736288636,
+        "mean_pairwise_cosine": 0.00017076768563129008
+      }
+    },
+    {
+      "method": "all_but_top",
+      "params": {
+        "D": 3
+      },
+      "calibration": {
+        "mean_related_cosine": 0.7363236208756765,
+        "mean_unrelated_cosine": 0.09680705495799581,
+        "mean_contradiction_cosine": 0.6275084177652995,
+        "discrimination_gap": 0.6395165659176807,
+        "classification_accuracy": 0.7666666666666667,
+        "optimal_threshold": 0.7362048625946045
+      },
+      "domain_homogeneous": {
+        "mean_nn_cosine": 0.502145528793335,
+        "mean_random_cosine": 0.001667030731216073,
+        "nn_random_gap": 0.5004784980621189,
+        "mean_pairwise_cosine": 0.00021335453493520617
+      }
+    },
+    {
+      "method": "all_but_top",
+      "params": {
+        "D": 5
+      },
+      "calibration": {
+        "mean_related_cosine": 0.7323636603852113,
+        "mean_unrelated_cosine": 0.10363555022825797,
+        "mean_contradiction_cosine": 0.6274283945560455,
+        "discrimination_gap": 0.6287281101569533,
+        "classification_accuracy": 0.7666666666666667,
+        "optimal_threshold": 0.7767810821533203
+      },
+      "domain_homogeneous": {
+        "mean_nn_cosine": 0.4861120581626892,
+        "mean_random_cosine": 0.001074225283227861,
+        "nn_random_gap": 0.48503783287946134,
+        "mean_pairwise_cosine": 0.0001270581706194207
+      }
+    },
+    {
+      "method": "soft_zca",
+      "params": {
+        "epsilon": 0.1
+      },
+      "calibration": {
+        "mean_related_cosine": 0.7565757686893145,
+        "mean_unrelated_cosine": 0.13229997710635263,
+        "mean_contradiction_cosine": 0.6111455221970876,
+        "discrimination_gap": 0.6242757915829619,
+        "classification_accuracy": 0.8,
+        "optimal_threshold": 0.6044119596481323
+      },
+      "domain_homogeneous": {
+        "mean_nn_cosine": 0.516879141330719,
+        "mean_random_cosine": -0.0037766700740903617,
+        "nn_random_gap": 0.5206558114048093,
+        "mean_pairwise_cosine": 0.00017030982417054474
+      }
+    },
+    {
+      "method": "pca",
+      "params": {
+        "dims": 128
+      },
+      "calibration": {
+        "mean_related_cosine": 0.7066805762549241,
+        "mean_unrelated_cosine": 0.07080341088585555,
+        "mean_contradiction_cosine": 0.606231568257014,
+        "discrimination_gap": 0.6358771653690686,
+        "classification_accuracy": 0.7666666666666667,
+        "optimal_threshold": 0.713263988494873
+      },
+      "domain_homogeneous": {
+        "mean_nn_cosine": 0.4527692496776581,
+        "mean_random_cosine": 0.004083589037880302,
+        "nn_random_gap": 0.4486856606397778,
+        "mean_pairwise_cosine": 0.0001389523531543091
+      }
+    }
+  ],
+  "head_to_head": {
+    "best_abt_for_nn_gap": {
+      "D": 1,
+      "nn_gap": 0.5232393238348887
+    },
+    "soft_zca": {
+      "epsilon": 0.1,
+      "nn_gap": 0.5206558114048093
+    },
+    "abt_vs_zca_nn_gap_pct": 0.4962035136242271
+  }
+}

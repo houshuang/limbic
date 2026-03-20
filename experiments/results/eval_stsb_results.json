@@ -1,0 +1,121 @@
+{
+  "benchmark": "STS-B",
+  "test_pairs": 1379,
+  "train_sentences_for_whitening": 10566,
+  "results": [
+    {
+      "model": "Multilingual-MiniLM (384d)",
+      "model_name": "paraphrase-multilingual-MiniLM-L12-v2",
+      "variant": "raw",
+      "dim": 384,
+      "embed_time_s": 9.36,
+      "spearman": 0.844149834140811,
+      "spearman_p": 0.0,
+      "pearson": 0.8342050909996033,
+      "pearson_p": 0.0,
+      "mae": 0.30332934856414795
+    },
+    {
+      "model": "Multilingual-MiniLM (384d)",
+      "model_name": "paraphrase-multilingual-MiniLM-L12-v2",
+      "variant": "whitened-256d",
+      "dim": 256,
+      "embed_time_s": 1.13,
+      "whiten_fit_time_s": 8.55,
+      "spearman": 0.8313902341646066,
+      "spearman_p": 0.0,
+      "pearson": 0.8301032185554504,
+      "pearson_p": 0.0,
+      "mae": 0.26744353771209717
+    },
+    {
+      "model": "Multilingual-MiniLM (384d)",
+      "model_name": "paraphrase-multilingual-MiniLM-L12-v2",
+      "variant": "whitened-128d",
+      "dim": 128,
+      "embed_time_s": 1.08,
+      "whiten_fit_time_s": 7.44,
+      "spearman": 0.8367158453081808,
+      "spearman_p": 0.0,
+      "pearson": 0.8305248618125916,
+      "pearson_p": 0.0,
+      "mae": 0.28389957547187805
+    },
+    {
+      "model": "MiniLM-L6 (384d)",
+      "model_name": "all-MiniLM-L6-v2",
+      "variant": "raw",
+      "dim": 384,
+      "embed_time_s": 2.65,
+      "spearman": 0.8203013947512559,
+      "spearman_p": 0.0,
+      "pearson": 0.8273996114730835,
+      "pearson_p": 0.0,
+      "mae": 0.2941994369029999
+    },
+    {
+      "model": "MiniLM-L6 (384d)",
+      "model_name": "all-MiniLM-L6-v2",
+      "variant": "whitened-256d",
+      "dim": 256,
+      "embed_time_s": 0.69,
+      "whiten_fit_time_s": 5.46,
+      "spearman": 0.8114555152001381,
+      "spearman_p": 0.0,
+      "pearson": 0.8218382596969604,
+      "pearson_p": 0.0,
+      "mae": 0.2582399249076843
+    },
+    {
+      "model": "MiniLM-L6 (384d)",
+      "model_name": "all-MiniLM-L6-v2",
+      "variant": "whitened-128d",
+      "dim": 128,
+      "embed_time_s": 0.69,
+      "whiten_fit_time_s": 5.15,
+      "spearman": 0.8169512948738924,
+      "spearman_p": 0.0,
+      "pearson": 0.8258220553398132,
+      "pearson_p": 0.0,
+      "mae": 0.2781135141849518
+    },
+    {
+      "model": "MPNet-base (768d)",
+      "model_name": "all-mpnet-base-v2",
+      "variant": "raw",
+      "dim": 768,
+      "embed_time_s": 9.76,
+      "spearman": 0.8342216139244768,
+      "spearman_p": 0.0,
+      "pearson": 0.8404067754745483,
+      "pearson_p": 0.0,
+      "mae": 0.2863785922527313
+    },
+    {
+      "model": "MPNet-base (768d)",
+      "model_name": "all-mpnet-base-v2",
+      "variant": "whitened-256d",
+      "dim": 256,
+      "embed_time_s": 2.75,
+      "whiten_fit_time_s": 20.42,
+      "spearman": 0.8338911727805798,
+      "spearman_p": 0.0,
+      "pearson": 0.8416237235069275,
+      "pearson_p": 0.0,
+      "mae": 0.260367214679718
+    },
+    {
+      "model": "MPNet-base (768d)",
+      "model_name": "all-mpnet-base-v2",
+      "variant": "whitened-128d",
+      "dim": 128,
+      "embed_time_s": 2.53,
+      "whiten_fit_time_s": 13.02,
+      "spearman": 0.8371580942730609,
+      "spearman_p": 0.0,
+      "pearson": 0.8400477766990662,
+      "pearson_p": 0.0,
+      "mae": 0.27914130687713623
+    }
+  ]
+}

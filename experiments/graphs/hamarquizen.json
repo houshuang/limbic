@@ -1,0 +1,274 @@
+{
+  "domain": "Hamar Lokalhistorie",
+  "description": "Local history of Hamar, Norway — for the Hamarquizen competition. Covers ~1000 years from Viking-age trading post through medieval bishopric, destruction and ruin, 19th-century refounding, wartime resistance, to modern Olympic city.",
+  "nodes": [
+    {
+      "id": "geography_mjosa",
+      "title": "Mjøsa og landskapet",
+      "description": "Knows that Mjøsa is Norway's largest lake, that Hamar sits on its shore, and that the name Hamar comes from Old Norse 'hamarr' (rock/cliff)",
+      "level": 1,
+      "obscurity": 1,
+      "prerequisites": []
+    },
+    {
+      "id": "geography_vang",
+      "title": "Vang kommune",
+      "description": "Knows that Vang was the large surrounding municipality, that Hamar's church/hospital/seminary were in Vang, and that Vang merged with Hamar in 1992",
+      "level": 2,
+      "obscurity": 2,
+      "prerequisites": ["geography_mjosa"]
+    },
+    {
+      "id": "viking_kaupang",
+      "title": "Hamarkaupangen (~1050)",
+      "description": "Knows Hamar was a kaupang (trading post) around 1050, trading furs/iron/fish by Mjøsa — nearly 1000 years of history",
+      "level": 1,
+      "obscurity": 1,
+      "prerequisites": ["geography_mjosa"]
+    },
+    {
+      "id": "medieval_bishopric",
+      "title": "Bispesetet opprettes (1152/1153)",
+      "description": "Knows Cardinal Nicolaus Breakspear established the Hamar bishopric in 1152/1153, transforming the trading post into a major city. Knows Breakspear later became Pope Hadrian IV — the only English pope ever",
+      "level": 1,
+      "obscurity": 1,
+      "prerequisites": ["viking_kaupang"]
+    },
+    {
+      "id": "medieval_cathedral",
+      "title": "Hamardomen bygges (~1200)",
+      "description": "Knows the cathedral was built as a Romanesque basilica completed around 1200, with thick walls, round arches, twin west towers, and later Gothic additions with pointed arches",
+      "level": 2,
+      "obscurity": 1,
+      "prerequisites": ["medieval_bishopric"]
+    },
+    {
+      "id": "medieval_architecture",
+      "title": "Romansk vs. gotisk stil",
+      "description": "Understands the difference: Romanesque = round arches, thick walls; Gothic = pointed arches, tall windows. Can identify which style Hamardomen was built in",
+      "level": 2,
+      "obscurity": 2,
+      "prerequisites": ["medieval_cathedral"]
+    },
+    {
+      "id": "medieval_torfinn",
+      "title": "Biskop Torfinn",
+      "description": "Knows Bishop Torfinn was ordained 1278 by Archbishop Jon Raude, witnessed the Tonsberg Agreement 1277, was exiled 1282, and died 8 January 1285 at Ter Doest monastery near Bruges in Belgium. Now a Catholic saint",
+      "level": 2,
+      "obscurity": 2,
+      "prerequisites": ["medieval_bishopric"]
+    },
+    {
+      "id": "medieval_pilgrims",
+      "title": "Sankt Olavs-steinen og pilegrimsleden",
+      "description": "Knows the legend of St. Olav mooring his ship to the stone at Angarsneset and killing a troll. Knows this was a pilgrim stop on the way to Nidaros",
+      "level": 2,
+      "obscurity": 2,
+      "prerequisites": ["viking_kaupang"]
+    },
+    {
+      "id": "medieval_st_torfinn_church",
+      "title": "St. Torfinn katolske kirke",
+      "description": "Knows the Catholic parish was established November 1925, named after Bishop Torfinn. Church consecrated 3 September 1939 — the day WWII broke out in Europe",
+      "level": 3,
+      "obscurity": 3,
+      "prerequisites": ["medieval_torfinn"]
+    },
+    {
+      "id": "reformation",
+      "title": "Reformasjonen (1537)",
+      "description": "Knows the Reformation in 1537 ended the Catholic bishopric, transferred it to Oslo. Understands this was ordered by the king in Copenhagen and began Hamar's decline",
+      "level": 1,
+      "obscurity": 1,
+      "prerequisites": ["medieval_bishopric"]
+    },
+    {
+      "id": "reformation_mogens",
+      "title": "Biskop Mogens — siste biskop",
+      "description": "Knows Mogens was the last Catholic bishop of Hamar, taken prisoner and sent to Antvorskov monastery on Sjaelland, Denmark, where he died in 1542",
+      "level": 2,
+      "obscurity": 2,
+      "prerequisites": ["reformation"]
+    },
+    {
+      "id": "destruction_burning",
+      "title": "Domkirken brenner (1567)",
+      "description": "Knows the cathedral burned in 1567 during the Scandinavian Seven Years' War (1563-1570) when Swedish soldiers attacked. The bishop's residence was blown up",
+      "level": 1,
+      "obscurity": 1,
+      "prerequisites": ["reformation", "medieval_cathedral"]
+    },
+    {
+      "id": "destruction_300_years",
+      "title": "300 år i ruiner",
+      "description": "Knows Hamar lay in ruins for approximately 300 years (1567-1849), that cathedral stones were reused by farmers for houses and barns, and that Norway was under Danish rule during this period",
+      "level": 1,
+      "obscurity": 1,
+      "prerequisites": ["destruction_burning"]
+    },
+    {
+      "id": "preservation_ruins",
+      "title": "Ruinene reddes",
+      "description": "Knows Fortidsminneforeningen began protecting the ruins in 1844, and that architect Kjell Lund designed the glass building over the ruins. Knows about Domkirkeodden museum",
+      "level": 2,
+      "obscurity": 2,
+      "prerequisites": ["destruction_300_years"]
+    },
+    {
+      "id": "refounding",
+      "title": "Hamar gjenoppstår (1849)",
+      "description": "Knows Stortinget voted 26 April 1848 to re-establish Hamar as a kjopstad, officially founded 21 March 1849. Engineer Royem designed the street plan (Strandgata, Torggata, Gronnegata). First mayor: Christian Borchgrevink",
+      "level": 1,
+      "obscurity": 1,
+      "prerequisites": ["destruction_300_years"]
+    },
+    {
+      "id": "stallgarden",
+      "title": "Stallgarden",
+      "description": "Knows baker Carl Stuve built the building in 1849, named after horse stables in the backyard from 1860. Originally Oplandske Hotel. Hamar's oldest restaurant, reopened October 2022",
+      "level": 2,
+      "obscurity": 2,
+      "prerequisites": ["refounding"]
+    },
+    {
+      "id": "brewery",
+      "title": "Hamar bryggeri",
+      "description": "Knows the brewery was founded 1856, first beer brewed 22 June 1857. Under Gunerius Flakstad around 1900 it became Norway's largest beer exporter — over half the production went abroad",
+      "level": 2,
+      "obscurity": 2,
+      "prerequisites": ["refounding"]
+    },
+    {
+      "id": "skibladner",
+      "title": "Skibladner",
+      "description": "Knows Skibladner is the world's oldest paddle steamer still in regular service, launched 1856, built at Motala shipyard in Sweden. Named after the god Frey's magical ship in Norse mythology. Called 'Mjosas hvite svane'. Originally dark green hull and pink superstructure",
+      "level": 1,
+      "obscurity": 1,
+      "prerequisites": ["geography_mjosa"]
+    },
+    {
+      "id": "railway",
+      "title": "Jernbanen kommer (1862)",
+      "description": "Knows the Hamar-Grundset railway arrived in 1862, extended to Trondheim by 1877. Also knows Norsk Jernbanemuseum has been in Hamar since 1896",
+      "level": 2,
+      "obscurity": 2,
+      "prerequisites": ["refounding"]
+    },
+    {
+      "id": "library",
+      "title": "Folkebiblioteket (1888)",
+      "description": "Knows the library opened in 1888 with only 370 books, open one day a week. Librarian E. Traetteberg sat behind a small window. Took 37 years to get proper premises. Now in Hamar kulturhus",
+      "level": 3,
+      "obscurity": 3,
+      "prerequisites": ["refounding"]
+    },
+    {
+      "id": "ragnhild_kaata",
+      "title": "Ragnhild Kåta",
+      "description": "Knows Ragnhild Kaata (1873-1947) lost sight, hearing, smell and taste at age 3.5 from scarlet fever. Teacher Elias Hofgaard at Hamar Institute for the Deaf taught her to speak — first words were 'ur', 'fot', 'bord'. First deafblind person in Norway with schooling. Inspired 10-year-old Helen Keller in 1890. Hofgaard's method became known internationally as the Tadoma method",
+      "level": 2,
+      "obscurity": 2,
+      "prerequisites": ["refounding"]
+    },
+    {
+      "id": "coat_of_arms",
+      "title": "Kommunevåpenet",
+      "description": "Knows Hamar's coat of arms shows a black capercaillie (orrhane) with spread wings on a green pine tree, drawn by artist Andreas Bloch in 1896 for the city's 50th anniversary. Redesigned by Per Solheim 1962, officially approved 1993",
+      "level": 2,
+      "obscurity": 2,
+      "prerequisites": ["refounding"]
+    },
+    {
+      "id": "ideal_flatbrod",
+      "title": "Ideal Flatbrød",
+      "description": "Knows Emil Nordby invented an industrial flatbread machine, first box on market 1 May 1924. Factory was on Vangsvegen, demolished 2001 to build Hamar radhus. Later bought by Wasa (1987) then Barilla (1999)",
+      "level": 2,
+      "obscurity": 2,
+      "prerequisites": ["refounding"]
+    },
+    {
+      "id": "abraham_pihl",
+      "title": "Abraham Pihl — tusenkunstneren",
+      "description": "Knows Abraham Pihl (1756-1821) was priest at Vang church from 1789, also astronomer and architect. Designed an octagonal church with 1000 seats after the old one burned in 1804. Built telescopes and ground lenses for astronomer Christopher Hansteen",
+      "level": 3,
+      "obscurity": 3,
+      "prerequisites": ["geography_vang"]
+    },
+    {
+      "id": "hapaa",
+      "title": "HaPå",
+      "description": "Knows HaPa stands for Hamar Palegg, made from condensed milk, sugar, salt and citric acid. Originated from wartime practice of caramelizing milk. Produced from 1949 by De Norske Melkefabrikker. Kavli took over from Nestle in April 2009, moved production to Bergen",
+      "level": 1,
+      "obscurity": 1,
+      "prerequisites": []
+    },
+    {
+      "id": "ww2_milorg",
+      "title": "Motstandsbevegelsen i Hamar",
+      "description": "Knows about Milorg district D-25 in Hamar during WWII, with approximately 1200 underground soldiers. Understands the basic setup: coded messages, hidden weapons, Gestapo hunting them",
+      "level": 2,
+      "obscurity": 2,
+      "prerequisites": []
+    },
+    {
+      "id": "eva_klovstad",
+      "title": "Eva Kløvstad",
+      "description": "Knows Eva Klovstad (1921-2014), codename 'Jakob', was recruited by Christian Juell Sandberg to Milorg D-25. When Sandberg was shot by Gestapo on 2 December 1944, she took over leadership at age 23. On 9 May 1945 she marched into Hamar at the head of hundreds of soldiers. A square in Strandgateparken is named after her. Never met the king",
+      "level": 2,
+      "obscurity": 1,
+      "prerequisites": ["ww2_milorg"]
+    },
+    {
+      "id": "hamarhallen",
+      "title": "Hamarhallen (1961)",
+      "description": "Knows Hamarhallen was designed by architect Frode Rinnan, financed by profits from Hamar Mart'n (a large market/fair). Completed 1961. Second exhibition hall in Norway, first indoor handball hall outside Oslo",
+      "level": 2,
+      "obscurity": 2,
+      "prerequisites": ["refounding"]
+    },
+    {
+      "id": "vikingskipet_ol",
+      "title": "Vikingskipet og OL 1994",
+      "description": "Knows Vikingskipet was built for the 1994 Lillehammer Olympics, shaped like an upside-down Viking ship, was the world's largest indoor sports hall when it opened. Johann Olav Koss won 3 gold medals and set 3 world records (1500m, 5000m, 10000m), donated his bonus to Olympic Aid (now Right to Play)",
+      "level": 1,
+      "obscurity": 1,
+      "prerequisites": ["geography_mjosa"]
+    },
+    {
+      "id": "hamar_today",
+      "title": "Hamar i dag",
+      "description": "Knows Hamar has approximately 34,000 inhabitants, is home to Ham-Kam (football) and Storhamar (ice hockey). Domkirkeodden museum with ruins under glass, herbal garden, and folk museum",
+      "level": 1,
+      "obscurity": 1,
+      "prerequisites": ["geography_mjosa"]
+    },
+    {
+      "id": "timeline_mastery",
+      "title": "Tidslinje — 1000 år i rekkefølge",
+      "description": "Can order the key events chronologically: Kaupang ~1050, Bishopric 1152, Cathedral ~1200, Torfinn 1285, Reformation 1537, Burning 1567, Refounding 1849, Stallgarden 1849, Brewery/Skibladner 1856, Railway 1862, Flatbrod 1924, WWII 1940-45, HaPa 1949, Hamarhallen 1961, Vang merger 1992, OL 1994",
+      "level": 3,
+      "obscurity": 1,
+      "prerequisites": [
+        "viking_kaupang",
+        "medieval_bishopric",
+        "destruction_burning",
+        "refounding",
+        "vikingskipet_ol"
+      ]
+    },
+    {
+      "id": "cross_connections",
+      "title": "Forbindelser på tvers",
+      "description": "Can identify cross-cutting connections: brewery and Skibladner both from 1856; both Bishop Torfinn and Eva Klovstad forced to leave Hamar due to danger; Domkirken ~1200 > Stallgarden 1849 > Hamarhallen 1961 > Vikingskipet 1994 as a buildings timeline",
+      "level": 3,
+      "obscurity": 2,
+      "prerequisites": [
+        "timeline_mastery",
+        "medieval_torfinn",
+        "eva_klovstad",
+        "brewery",
+        "skibladner"
+      ]
+    }
+  ]
+}

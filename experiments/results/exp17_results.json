@@ -1,0 +1,219 @@
+{
+  "experiment": "exp17_query_expansion",
+  "description": "Pseudo-relevance feedback (PRF) query expansion on SciFact",
+  "model": "paraphrase-multilingual-MiniLM-L12-v2",
+  "corpus_size": 5183,
+  "num_queries": 300,
+  "k": 10,
+  "methods": {
+    "vector_baseline": {
+      "nDCG@10": 0.4836686080108774,
+      "MRR@10": 0.4549537037037037,
+      "Recall@10": 0.6155555555555556,
+      "avg_query_ms": 8.211563889999525
+    },
+    "fts5_baseline": {
+      "nDCG@10": 0.6802002583716251,
+      "MRR@10": 0.6430555555555555,
+      "Recall@10": 0.8154999999999999,
+      "avg_query_ms": 26.405561666667076
+    },
+    "PRF(3,0.7)": {
+      "nDCG@10": 0.4673413114439825,
+      "MRR@10": 0.43500132275132275,
+      "Recall@10": 0.6010555555555556,
+      "avg_query_ms": 8.49818125000032,
+      "n_feedback": 3,
+      "alpha": 0.7
+    },
+    "PRF(5,0.7)": {
+      "nDCG@10": 0.46365543449917934,
+      "MRR@10": 0.4272235449735449,
+      "Recall@10": 0.6088888888888889,
+      "avg_query_ms": 10.124432916666896,
+      "n_feedback": 5,
+      "alpha": 0.7
+    },
+    "PRF(3,0.5)": {
+      "nDCG@10": 0.4490477375785118,
+      "MRR@10": 0.41190476190476194,
+      "Recall@10": 0.5947222222222223,
+      "avg_query_ms": 6.609044720001596,
+      "n_feedback": 3,
+      "alpha": 0.5
+    },
+    "PRF(3,0.9)": {
+      "nDCG@10": 0.47769578403054386,
+      "MRR@10": 0.44508597883597883,
+      "Recall@10": 0.6152222222222222,
+      "avg_query_ms": 4.902012363333294,
+      "n_feedback": 3,
+      "alpha": 0.9
+    },
+    "hybrid_baseline": {
+      "nDCG@10": 0.6335197308592804,
+      "MRR@10": 0.5842486772486772,
+      "Recall@10": 0.8143333333333334,
+      "avg_query_ms": 21.7675841666672
+    },
+    "hybrid+PRF(3,0.9)": {
+      "nDCG@10": 0.6324648775357254,
+      "MRR@10": 0.5813637566137566,
+      "Recall@10": 0.8203333333333334,
+      "avg_query_ms": 19.125443333335472
+    }
+  },
+  "best_prf_config": "PRF(3,0.9)",
+  "vector_fts5_gap": 0.1965,
+  "best_prf_improvement": -0.006,
+  "gap_closed_pct": -3.0,
+  "per_query_analysis": {
+    "helped": 18,
+    "hurt": 21,
+    "unchanged": 261,
+    "top_helped": [
+      {
+        "qid": "54",
+        "query": "AMP-activated protein kinase (AMPK) activation increases inflammation-related fibrosis in the lungs.",
+        "baseline_ndcg": 0.0,
+        "prf_ndcg": 0.301,
+        "delta": 0.301
+      },
+      {
+        "qid": "508",
+        "query": "Hematopoietic Stem Cell purification reaches purity rate of up to 50%.",
+        "baseline_ndcg": 0.0,
+        "prf_ndcg": 0.2891,
+        "delta": 0.2891
+      },
+      {
+        "qid": "914",
+        "query": "PPAR-RXRs can be activated by PPAR ligands.",
+        "baseline_ndcg": 0.0,
+        "prf_ndcg": 0.2891,
+        "delta": 0.2891
+      },
+      {
+        "qid": "133",
+        "query": "Assembly of invadopodia is triggered by focal generation of phosphatidylinositol-3,4-biphosphate and",
+        "baseline_ndcg": 0.0,
+        "prf_ndcg": 0.2001,
+        "delta": 0.2001
+      },
+      {
+        "qid": "1132",
+        "query": "TCR/CD3 microdomains are a required to induce the immunologic synapse to activate T cells.",
+        "baseline_ndcg": 0.3066,
+        "prf_ndcg": 0.4838,
+        "delta": 0.1772
+      },
+      {
+        "qid": "36",
+        "query": "A deficiency of vitamin B12 increases blood levels of homocysteine.",
+        "baseline_ndcg": 0.1846,
+        "prf_ndcg": 0.2641,
+        "delta": 0.0795
+      },
+      {
+        "qid": "269",
+        "query": "Cold exposure reduces BAT recruitment.",
+        "baseline_ndcg": 0.3562,
+        "prf_ndcg": 0.4307,
+        "delta": 0.0745
+      },
+      {
+        "qid": "1196",
+        "query": "The availability of safe places to study is effective at decreasing homelessness.",
+        "baseline_ndcg": 0.3333,
+        "prf_ndcg": 0.3869,
+        "delta": 0.0535
+      },
+      {
+        "qid": "238",
+        "query": "Cells undergoing methionine restriction may activate miRNAs.",
+        "baseline_ndcg": 0.3333,
+        "prf_ndcg": 0.3869,
+        "delta": 0.0535
+      },
+      {
+        "qid": "513",
+        "query": "High cardiopulmonary fitness causes increased mortality rate.",
+        "baseline_ndcg": 0.3333,
+        "prf_ndcg": 0.3869,
+        "delta": 0.0535
+      }
+    ],
+    "top_hurt": [
+      {
+        "qid": "1221",
+        "query": "The genomic aberrations found in matasteses are very similar to those found in the primary tumor.",
+        "baseline_ndcg": 1.0,
+        "prf_ndcg": 0.5,
+        "delta": -0.5
+      },
+      {
+        "qid": "478",
+        "query": "Golli-deficient T-cells prefer to differentiate into an anergic phenotype in the adaptive immune res",
+        "baseline_ndcg": 1.0,
+        "prf_ndcg": 0.6309,
+        "delta": -0.3691
+      },
+      {
+        "qid": "800",
+        "query": "Modifying the epigenome in the brain affects the normal human aging process by affecting certain gen",
+        "baseline_ndcg": 1.0,
+        "prf_ndcg": 0.6309,
+        "delta": -0.3691
+      },
+      {
+        "qid": "303",
+        "query": "DMRT1 is a sex-determining gene that is epigenetically regulated by the MHM region.",
+        "baseline_ndcg": 0.3333,
+        "prf_ndcg": 0.0,
+        "delta": -0.3333
+      },
+      {
+        "qid": "535",
+        "query": "Hypertension is frequently observed in type 1 diabetes patients.",
+        "baseline_ndcg": 0.301,
+        "prf_ndcg": 0.0,
+        "delta": -0.301
+      },
+      {
+        "qid": "784",
+        "query": "MicroRNA is involved in the regulation of Neural Stem Cell (NSC) differentiation and proliferation d",
+        "baseline_ndcg": 0.301,
+        "prf_ndcg": 0.0,
+        "delta": -0.301
+      },
+      {
+        "qid": "501",
+        "query": "Headaches are not correlated with cognitive impairment.",
+        "baseline_ndcg": 0.2891,
+        "prf_ndcg": 0.0,
+        "delta": -0.2891
+      },
+      {
+        "qid": "597",
+        "query": "Incidence rates of cervical cancer have decreased.",
+        "baseline_ndcg": 0.4693,
+        "prf_ndcg": 0.2961,
+        "delta": -0.1732
+      },
+      {
+        "qid": "275",
+        "query": "Combining phosphatidylinositide 3-kinase and MEK 1/2 inhibitors is effective at treating KRAS mutant",
+        "baseline_ndcg": 0.6105,
+        "prf_ndcg": 0.4441,
+        "delta": -0.1664
+      },
+      {
+        "qid": "1104",
+        "query": "Stroke patients with prior use of direct oral anticoagulants have a lower risk of in-hospital mortal",
+        "baseline_ndcg": 0.4307,
+        "prf_ndcg": 0.2891,
+        "delta": -0.1416
+      }
+    ]
+  }
+}

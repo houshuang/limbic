@@ -1,0 +1,170 @@
+{
+  "experiment": "exp5_clustering_comparison",
+  "date": "2026-03-19 14:19",
+  "dataset": "20 Newsgroups (test split)",
+  "n_samples": 2000,
+  "n_topics": 20,
+  "topic_names": [
+    "alt.atheism",
+    "comp.graphics",
+    "comp.os.ms-windows.misc",
+    "comp.sys.ibm.pc.hardware",
+    "comp.sys.mac.hardware",
+    "comp.windows.x",
+    "misc.forsale",
+    "rec.autos",
+    "rec.motorcycles",
+    "rec.sport.baseball",
+    "rec.sport.hockey",
+    "sci.crypt",
+    "sci.electronics",
+    "sci.med",
+    "sci.space",
+    "soc.religion.christian",
+    "talk.politics.guns",
+    "talk.politics.mideast",
+    "talk.politics.misc",
+    "talk.religion.misc"
+  ],
+  "embedding_model": "paraphrase-multilingual-MiniLM-L12-v2",
+  "embedding_dim": 384,
+  "results": {
+    "greedy_centroid_t0.75": {
+      "v_measure": 0.5562,
+      "homogeneity": 0.9679,
+      "completeness": 0.3902,
+      "n_clusters": 35,
+      "singleton_rate": 0.9295,
+      "mean_cluster_size": 4.0,
+      "median_cluster_size": 2.0,
+      "max_cluster_size": 67,
+      "time_s": 2.9
+    },
+    "greedy_centroid_t0.8": {
+      "v_measure": 0.556,
+      "homogeneity": 0.9689,
+      "completeness": 0.3898,
+      "n_clusters": 20,
+      "singleton_rate": 0.947,
+      "mean_cluster_size": 5.3,
+      "median_cluster_size": 2.0,
+      "max_cluster_size": 67,
+      "time_s": 3.0
+    },
+    "greedy_centroid_t0.85": {
+      "v_measure": 0.5558,
+      "homogeneity": 0.9689,
+      "completeness": 0.3897,
+      "n_clusters": 16,
+      "singleton_rate": 0.951,
+      "mean_cluster_size": 6.1,
+      "median_cluster_size": 2.0,
+      "max_cluster_size": 67,
+      "time_s": 2.4
+    },
+    "greedy_centroid_t0.9": {
+      "v_measure": 0.5557,
+      "homogeneity": 0.9689,
+      "completeness": 0.3896,
+      "n_clusters": 13,
+      "singleton_rate": 0.954,
+      "mean_cluster_size": 7.1,
+      "median_cluster_size": 2.0,
+      "max_cluster_size": 67,
+      "time_s": 2.1
+    },
+    "complete_linkage_t0.7": {
+      "v_measure": 0.5568,
+      "homogeneity": 0.9668,
+      "completeness": 0.391,
+      "n_clusters": 67,
+      "singleton_rate": 0.8975,
+      "mean_cluster_size": 3.1,
+      "median_cluster_size": 2.0,
+      "max_cluster_size": 67,
+      "time_s": 0.3
+    },
+    "complete_linkage_t0.75": {
+      "v_measure": 0.5562,
+      "homogeneity": 0.9682,
+      "completeness": 0.3901,
+      "n_clusters": 35,
+      "singleton_rate": 0.9315,
+      "mean_cluster_size": 3.9,
+      "median_cluster_size": 2.0,
+      "max_cluster_size": 67,
+      "time_s": 0.1
+    },
+    "complete_linkage_t0.8": {
+      "v_measure": 0.556,
+      "homogeneity": 0.9689,
+      "completeness": 0.3898,
+      "n_clusters": 20,
+      "singleton_rate": 0.947,
+      "mean_cluster_size": 5.3,
+      "median_cluster_size": 2.0,
+      "max_cluster_size": 67,
+      "time_s": 0.1
+    },
+    "complete_linkage_t0.85": {
+      "v_measure": 0.5558,
+      "homogeneity": 0.9689,
+      "completeness": 0.3897,
+      "n_clusters": 16,
+      "singleton_rate": 0.951,
+      "mean_cluster_size": 6.1,
+      "median_cluster_size": 2.0,
+      "max_cluster_size": 67,
+      "time_s": 0.1
+    },
+    "hdbscan_ms5": {
+      "v_measure": 0.5437,
+      "homogeneity": 0.8656,
+      "completeness": 0.3963,
+      "n_clusters": 12,
+      "singleton_rate": 0.759,
+      "mean_cluster_size": 40.2,
+      "median_cluster_size": 15.5,
+      "max_cluster_size": 211,
+      "time_s": 0.1
+    },
+    "hdbscan_ms10": {
+      "v_measure": 0.5319,
+      "homogeneity": 0.8206,
+      "completeness": 0.3934,
+      "n_clusters": 5,
+      "singleton_rate": 0.731,
+      "mean_cluster_size": 107.6,
+      "median_cluster_size": 51.0,
+      "max_cluster_size": 244,
+      "time_s": 0.1
+    },
+    "hdbscan_ms15": {
+      "v_measure": 0.53,
+      "homogeneity": 0.8068,
+      "completeness": 0.3946,
+      "n_clusters": 5,
+      "singleton_rate": 0.71,
+      "mean_cluster_size": 116.0,
+      "median_cluster_size": 58.0,
+      "max_cluster_size": 244,
+      "time_s": 0.1
+    },
+    "hdbscan_ms25": {
+      "v_measure": 0.532,
+      "homogeneity": 0.8379,
+      "completeness": 0.3897,
+      "n_clusters": 4,
+      "singleton_rate": 0.7635,
+      "mean_cluster_size": 118.2,
+      "median_cluster_size": 115.5,
+      "max_cluster_size": 196,
+      "time_s": 0.1
+    }
+  },
+  "best_overall": {
+    "method": "Complete Linkage",
+    "config": "complete_linkage_t0.7",
+    "v_measure": 0.5568
+  }
+}

@@ -1,0 +1,85 @@
+{
+  "experiment": "exp20_embedding_cache",
+  "model": "paraphrase-multilingual-MiniLM-L12-v2",
+  "dim": 384,
+  "available_claims": 20000,
+  "correctness": {
+    "all_close": true,
+    "max_abs_diff": 0.0,
+    "misses": 0
+  },
+  "benchmarks": {
+    "1K": {
+      "n": 1000,
+      "cold_embed_sec": 4.0519,
+      "cache_write_sec": 0.013,
+      "batch_lookup_sec": 0.009,
+      "single_lookup_us": 16.2,
+      "batch_lookup_us_per_item": 9.0,
+      "speedup_vs_cold": 452.5,
+      "db_size_mb": 2.09,
+      "bytes_per_entry": 2187.0,
+      "texts_per_sec_cold": 247.0,
+      "texts_per_sec_warm": 111679.0
+    },
+    "5K": {
+      "n": 5000,
+      "cold_embed_sec": 15.7276,
+      "cache_write_sec": 0.2825,
+      "batch_lookup_sec": 0.1914,
+      "single_lookup_us": 118.8,
+      "batch_lookup_us_per_item": 38.3,
+      "speedup_vs_cold": 82.2,
+      "db_size_mb": 10.43,
+      "bytes_per_entry": 2188.0,
+      "texts_per_sec_cold": 318.0,
+      "texts_per_sec_warm": 26127.0
+    },
+    "10K": {
+      "n": 10000,
+      "cold_embed_sec": 30.9786,
+      "cache_write_sec": 0.2984,
+      "batch_lookup_sec": 0.1689,
+      "single_lookup_us": 23.9,
+      "batch_lookup_us_per_item": 16.9,
+      "speedup_vs_cold": 183.4,
+      "db_size_mb": 20.84,
+      "bytes_per_entry": 2185.0,
+      "texts_per_sec_cold": 323.0,
+      "texts_per_sec_warm": 59203.0
+    },
+    "20K": {
+      "n": 20000,
+      "cold_embed_sec": 48.4289,
+      "cache_write_sec": 0.822,
+      "batch_lookup_sec": 0.5849,
+      "single_lookup_us": 38.5,
+      "batch_lookup_us_per_item": 29.2,
+      "speedup_vs_cold": 82.8,
+      "db_size_mb": 41.67,
+      "bytes_per_entry": 2185.0,
+      "texts_per_sec_cold": 413.0,
+      "texts_per_sec_warm": 34193.0
+    }
+  },
+  "partial_cache": {
+    "n": 5000,
+    "cache_hits": 4000,
+    "cache_misses": 1000,
+    "lookup_sec": 0.1123,
+    "miss_embed_sec": 2.8923,
+    "store_new_sec": 0.0293,
+    "partial_total_sec": 3.0339,
+    "full_cold_sec": 14.3334,
+    "speedup": 4.7
+  },
+  "memory": {
+    "n": 10000,
+    "dim": 384,
+    "raw_data_mb": 14.65,
+    "in_memory_est_mb": 16.93,
+    "sqlite_db_mb": 20.84,
+    "sqlite_overhead_pct": 42.2,
+    "avg_text_len": 139.0
+  }
+}

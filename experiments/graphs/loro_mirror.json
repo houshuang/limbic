@@ -1,0 +1,334 @@
+{
+  "domain": "Loro Mirror System",
+  "description": "CRDT-based state management in application: from raw Loro CRDT documents to reactive React components via the Mirror projection layer, typed Handle hierarchy, and selector-based hooks",
+  "nodes": [
+    {
+      "id": "crdt_fundamentals",
+      "title": "CRDT Fundamentals",
+      "description": "Understand what Conflict-free Replicated Data Types are: data structures that can be independently updated on multiple peers and merged deterministically without coordination.",
+      "level": 1,
+      "obscurity": 2,
+      "prerequisites": []
+    },
+    {
+      "id": "loro_crdt_library",
+      "title": "Loro CRDT Library",
+      "description": "Know what Loro is: a Rust/WASM CRDT library providing LoroDoc as the root document, with typed containers (LoroMap, LoroList, LoroText, etc.) and binary operations with peer IDs.",
+      "level": 2,
+      "obscurity": 3,
+      "prerequisites": ["crdt_fundamentals"]
+    },
+    {
+      "id": "loro_containers",
+      "title": "Loro Container Types",
+      "description": "Know the specific container types (LoroMap, LoroList, LoroMovableList, LoroText, LoroTree) and that each container has a stable ID ($cid) that survives sync across peers.",
+      "level": 2,
+      "obscurity": 3,
+      "prerequisites": ["loro_crdt_library"]
+    },
+    {
+      "id": "loro_doc_operations",
+      "title": "LoroDoc Operations",
+      "description": "Understand doc.import() for applying remote ops, doc.subscribe() for change notifications, doc.commit() for batching local operations, and export/snapshot for persistence.",
+      "level": 2,
+      "obscurity": 4,
+      "prerequisites": ["loro_containers"]
+    },
+    {
+      "id": "react_hooks_basics",
+      "title": "React Hooks Fundamentals",
+      "description": "Understand useState, useEffect, useCallback, useMemo, useRef and their rules (call order stability, dependency arrays).",
+      "level": 1,
+      "obscurity": 1,
+      "prerequisites": []
+    },
+    {
+      "id": "react_concurrent_rendering",
+      "title": "React Concurrent Rendering",
+      "description": "Understand React 18's concurrent features: interruptible rendering, time-slicing, and the tearing problem where external state stores can show inconsistent data during concurrent renders.",
+      "level": 2,
+      "obscurity": 3,
+      "prerequisites": ["react_hooks_basics"]
+    },
+    {
+      "id": "use_sync_external_store",
+      "title": "useSyncExternalStore",
+      "description": "Understand React 18's hook for external stores: takes a subscribe function and getSnapshot function, uses snapshot identity to detect changes, and solves the tearing problem in concurrent mode.",
+      "level": 3,
+      "obscurity": 3,
+      "prerequisites": ["react_concurrent_rendering"]
+    },
+    {
+      "id": "use_sync_external_store_with_selector",
+      "title": "useSyncExternalStoreWithSelector",
+      "description": "Understand the selector variant from the shim package: adds a selector function that transforms the full snapshot into a derived slice, plus an equality comparator that controls whether re-renders fire.",
+      "level": 3,
+      "obscurity": 4,
+      "prerequisites": ["use_sync_external_store"]
+    },
+    {
+      "id": "immer_proxy_pattern",
+      "title": "Immer / Proxy-Based Immutable Updates",
+      "description": "Understand how Immer uses ES6 Proxies to enable 'mutable-looking' immutable updates: you write mutations on a draft object, and Immer produces a new immutable state with structural sharing.",
+      "level": 2,
+      "obscurity": 2,
+      "prerequisites": []
+    },
+    {
+      "id": "shallow_equality",
+      "title": "Shallow Equality Comparison",
+      "description": "Understand shallow equality on object properties: two objects are shallowEqual if every top-level key has the same reference (===). Used widely in React to decide whether to re-render.",
+      "level": 1,
+      "obscurity": 1,
+      "prerequisites": []
+    },
+    {
+      "id": "structural_sharing",
+      "title": "Structural Sharing (replaceEqualDeep)",
+      "description": "Understand how replaceEqualDeep walks a new result tree and replaces subtrees with previous references where data is deeply equal. Borrowed from TanStack Query. Without it, selectors returning new object literals would defeat shallowEqual.",
+      "level": 3,
+      "obscurity": 4,
+      "prerequisites": ["shallow_equality"]
+    },
+    {
+      "id": "structural_sharing_limitations",
+      "title": "Structural Sharing Limitations",
+      "description": "Know which types support structural sharing (plain objects, arrays, primitives) and which do not (Date, Map, Set, class instances). Selectors returning unshareable types trigger a dev-mode warning.",
+      "level": 3,
+      "obscurity": 4,
+      "prerequisites": ["structural_sharing"]
+    },
+    {
+      "id": "zod_schemas",
+      "title": "Zod Schema Basics",
+      "description": "Understand Zod's runtime type validation: z.string(), z.number(), z.optional(), and how Zod infers TypeScript types from schemas.",
+      "level": 1,
+      "obscurity": 1,
+      "prerequisites": []
+    },
+    {
+      "id": "mirror_schema_dsl",
+      "title": "Mirror Schema DSL",
+      "description": "Understand the loro.schema() / loro.map() / loro.list() DSL that defines document shapes, combining Zod primitives with Loro container types. Schemas drive both TypeScript type inference and runtime diffing.",
+      "level": 2,
+      "obscurity": 3,
+      "prerequisites": ["zod_schemas", "loro_containers"]
+    },
+    {
+      "id": "infer_type_system",
+      "title": "InferType vs InferInputType",
+      "description": "Understand the dual type inference: InferType (output/read) includes $cid on every map, while InferInputType (input/write) makes $cid optional. Mutations use InferInputType, getters use InferType.",
+      "level": 3,
+      "obscurity": 4,
+      "prerequisites": ["mirror_schema_dsl"]
+    },
+    {
+      "id": "mirror_concept",
+      "title": "The Mirror Concept",
+      "description": "Understand the Mirror as a bidirectional projection layer between Loro CRDT containers and a plain JavaScript state object. Despite ~7000 lines of code, it exposes only four runtime methods: getState(), setState(fn), subscribe(cb), dispose().",
+      "level": 2,
+      "obscurity": 3,
+      "prerequisites": ["loro_containers"]
+    },
+    {
+      "id": "mirror_set_state",
+      "title": "Mirror setState and Diffing",
+      "description": "Understand how setState(fn) works: your function mutates the JS state (Immer-style draft), then Mirror diffs the result against current Loro containers and applies minimal CRDT operations in a single commit.",
+      "level": 3,
+      "obscurity": 4,
+      "prerequisites": ["mirror_concept", "mirror_schema_dsl", "immer_proxy_pattern"]
+    },
+    {
+      "id": "mirror_event_apply",
+      "title": "Mirror Event Application (FROM_LORO)",
+      "description": "Understand the reverse direction: when Loro events arrive from network sync (doc.import()), the Mirror's event applier updates the JS state to match the new CRDT state.",
+      "level": 3,
+      "obscurity": 4,
+      "prerequisites": ["mirror_concept", "loro_doc_operations"]
+    },
+    {
+      "id": "mirror_subscribe",
+      "title": "Mirror subscribe()",
+      "description": "Know that mirror.subscribe() fires ONLY when setState() is called (local mutations). It does NOT fire when the LoroDoc is updated via doc.import() (network sync). This asymmetry drives the dual subscription design.",
+      "level": 3,
+      "obscurity": 4,
+      "prerequisites": ["mirror_set_state", "mirror_event_apply"]
+    },
+    {
+      "id": "cid_identity",
+      "title": "$cid Container Identity",
+      "description": "Understand that Mirror injects a non-enumerable $cid property into every map it manages. This is the Loro container ID — a stable identity surviving sync. Getters filter it out, diffs skip it.",
+      "level": 3,
+      "obscurity": 4,
+      "prerequisites": ["mirror_concept", "loro_containers"]
+    },
+    {
+      "id": "unmanaged_roots",
+      "title": "Unmanaged Root Containers",
+      "description": "Understand loro.unmanaged() schema fields: containers that Mirror ignores entirely because external systems (ProseMirror, tldraw) write to them directly.",
+      "level": 3,
+      "obscurity": 4,
+      "prerequisites": ["mirror_schema_dsl", "mirror_concept"]
+    },
+    {
+      "id": "handle_hierarchy",
+      "title": "Handle Class Hierarchy",
+      "description": "Understand the four-level inheritance: LoroDocHandle (raw, state machine) -> LoroMirrorHandle (creates Mirror) -> LoroBaseDocHandle (shared getters) -> concrete handles (LoroChat, LoroSpace). Each level adds responsibilities.",
+      "level": 2,
+      "obscurity": 3,
+      "prerequisites": ["mirror_concept"]
+    },
+    {
+      "id": "loro_mirror_handle",
+      "title": "LoroMirrorHandle",
+      "description": "Understand the LoroMirrorHandle class: creates the Mirror in its constructor, provides protected state/mutate() access, implements onChange() with dual subscription, manages the changeVersion counter, and handles dispose().",
+      "level": 3,
+      "obscurity": 3,
+      "prerequisites": ["handle_hierarchy", "mirror_subscribe"]
+    },
+    {
+      "id": "loro_base_doc_handle",
+      "title": "LoroBaseDocHandle",
+      "description": "Understand LoroBaseDocHandle: extends LoroMirrorHandle, adds shared getters (type, title, participants, externalIds), introduces the abstract createMutations() and the change(fn) method.",
+      "level": 3,
+      "obscurity": 3,
+      "prerequisites": ["loro_mirror_handle", "mutations_pattern"]
+    },
+    {
+      "id": "concrete_handles",
+      "title": "Concrete Document Handles",
+      "description": "Understand how LoroChat, LoroSpace, LoroTextDoc each extend LoroBaseDocHandle: pass their schema, define domain getters from this.state, implement createMutations(), and may have static factories.",
+      "level": 3,
+      "obscurity": 3,
+      "prerequisites": ["loro_base_doc_handle"]
+    },
+    {
+      "id": "mutations_pattern",
+      "title": "Collect-Then-Apply Mutations Pattern",
+      "description": "Understand BaseLoroMutations: mutate() queues state transform functions, then _apply(mirror) runs them all inside a single mirror.setState() call, producing one atomic Loro commit.",
+      "level": 2,
+      "obscurity": 3,
+      "prerequisites": ["mirror_set_state"]
+    },
+    {
+      "id": "mutations_return_values",
+      "title": "Mutations Can Return Values",
+      "description": "Know that change(fn) returns whatever the callback returns. This is how addMessage() returns the generated message ID immediately, before the mutation hits the Mirror.",
+      "level": 3,
+      "obscurity": 3,
+      "prerequisites": ["mutations_pattern"]
+    },
+    {
+      "id": "mutations_class_hierarchy",
+      "title": "Mutations Class Hierarchy",
+      "description": "Understand BaseLoroMutations -> LoroBaseDocMutations (setTitle, softDelete) -> concrete mutations (LoroChatMutations with addMessage, etc.). Each level calls this.mutate() to queue transforms.",
+      "level": 3,
+      "obscurity": 3,
+      "prerequisites": ["mutations_pattern", "loro_base_doc_handle"]
+    },
+    {
+      "id": "dual_subscription",
+      "title": "Dual Subscription Problem",
+      "description": "Understand why onChange() subscribes to TWO sources: mirror.subscribe() for local mutations and handle.onChange() for remote sync. Without both, you miss either local or remote updates.",
+      "level": 3,
+      "obscurity": 4,
+      "prerequisites": ["loro_mirror_handle", "mirror_subscribe", "loro_doc_operations"]
+    },
+    {
+      "id": "in_local_mutation_flag",
+      "title": "#inLocalMutation Deduplication Flag",
+      "description": "Understand the flag set before local mutations, checked in the doc-level onChange to skip it (since mirror.subscribe already handled it). Without this, local mutations fire the callback twice.",
+      "level": 3,
+      "obscurity": 4,
+      "prerequisites": ["dual_subscription"]
+    },
+    {
+      "id": "change_version_counter",
+      "title": "changeVersion Counter",
+      "description": "Understand that changeVersion is a monotonic counter incremented on ALL changes (local, remote, bypass). React's getSnapshot returns it so useSyncExternalStore detects that the store changed.",
+      "level": 3,
+      "obscurity": 4,
+      "prerequisites": ["loro_mirror_handle", "use_sync_external_store"]
+    },
+    {
+      "id": "use_loro_doc_selector",
+      "title": "useLoroDocSelector Hook",
+      "description": "Understand the internal hook wiring: useSyncExternalStoreWithSelector with subscribe=onChange, getSnapshot={doc,version}, selector in a ref, replaceEqualDeep for structural sharing, shallowEqual for comparison.",
+      "level": 3,
+      "obscurity": 4,
+      "prerequisites": ["use_sync_external_store_with_selector", "change_version_counter", "structural_sharing", "loro_mirror_handle"]
+    },
+    {
+      "id": "selector_ref_pattern",
+      "title": "Selector Stored in Ref",
+      "description": "Understand why the selector lives in a useRef: keeps the callback identity stable (empty dep array) while always using the latest selector, preventing unnecessary unsubscribe/resubscribe cycles.",
+      "level": 3,
+      "obscurity": 4,
+      "prerequisites": ["use_loro_doc_selector", "react_hooks_basics"]
+    },
+    {
+      "id": "selector_closure_trap",
+      "title": "Selectors Must Not Close Over External State",
+      "description": "Know the critical pitfall: the ref-stored selector only re-evaluates when Loro fires a change. Closing over React state means those changes won't trigger re-evaluation. Fix: separate useMemo.",
+      "level": 4,
+      "obscurity": 4,
+      "prerequisites": ["selector_ref_pattern"]
+    },
+    {
+      "id": "consumer_hook_template",
+      "title": "Consumer Hook Template",
+      "description": "Understand the pattern every consumer hook follows: useDocHandle(uri) + useMemo to create typed handle + useLoroDocSelector(handle, selector) + useCallback wrapping change(). useChat, useSpace all follow this exactly.",
+      "level": 3,
+      "obscurity": 3,
+      "prerequisites": ["use_loro_doc_selector", "concrete_handles"]
+    },
+    {
+      "id": "shared_instance_pattern",
+      "title": "Shared Instance Pattern (getOrCreate + skipDispose)",
+      "description": "Understand why LoroSpace uses getOrCreate() to cache a single instance across components. Multiple Mirror instances for the same doc would double memory and subscriptions. skipDispose prevents any component's unmount from destroying the shared instance.",
+      "level": 3,
+      "obscurity": 4,
+      "prerequisites": ["consumer_hook_template", "concrete_handles"]
+    },
+    {
+      "id": "bypass_prosemirror",
+      "title": "ProseMirror Bypass Path",
+      "description": "Understand that rich text content uses loro-prosemirror to write directly to unmanaged Loro containers, bypassing Mirror entirely. Changes come through handle.onChange() but not mirror.subscribe().",
+      "level": 4,
+      "obscurity": 5,
+      "prerequisites": ["unmanaged_roots", "dual_subscription"]
+    },
+    {
+      "id": "bypass_tldraw",
+      "title": "Canvas (tldraw) Bypass Path",
+      "description": "Understand that useLoroTldrawStore writes directly to nested Loro maps for property-level CRDT merge, bypassing Mirror. Manual commit() is required.",
+      "level": 4,
+      "obscurity": 5,
+      "prerequisites": ["unmanaged_roots", "dual_subscription"]
+    },
+    {
+      "id": "bypass_type_detection",
+      "title": "Type Detection Bypass",
+      "description": "Understand that getLoroDocType() reads data.type directly from the LoroDoc before any handle is created, bootstrapping which handle class to instantiate without creating a full Mirror.",
+      "level": 3,
+      "obscurity": 4,
+      "prerequisites": ["loro_doc_operations", "handle_hierarchy"]
+    },
+    {
+      "id": "full_lifecycle",
+      "title": "Full Request Lifecycle",
+      "description": "Trace the complete flow: change() -> #inLocalMutation=true -> mutations collect -> _apply -> mirror.setState diffs -> Loro ops -> mirror.subscribe fires -> changeVersion++ -> selector + structural sharing -> re-render.",
+      "level": 4,
+      "obscurity": 4,
+      "prerequisites": ["in_local_mutation_flag", "change_version_counter", "use_loro_doc_selector", "mutations_pattern"]
+    },
+    {
+      "id": "five_layer_architecture",
+      "title": "Five-Layer Architecture",
+      "description": "See the complete system as five layers: LoroDoc (storage/sync) -> Mirror (projection) -> Handles (domain wrappers) -> useLoroDocSelector (React) -> Consumer hooks. Data flows bidirectionally through all five.",
+      "level": 2,
+      "obscurity": 3,
+      "prerequisites": ["mirror_concept", "handle_hierarchy", "use_loro_doc_selector"]
+    }
+  ]
+}

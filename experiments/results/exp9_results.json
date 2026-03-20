@@ -1,0 +1,62 @@
+{
+  "experiment": "exp9_reranking",
+  "benchmark": "SciFact (BEIR)",
+  "bi_encoder": "paraphrase-multilingual-MiniLM-L12-v2",
+  "cross_encoder": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+  "corpus_size": 5183,
+  "num_queries": 300,
+  "k": 10,
+  "fetch_k": 50,
+  "methods": {
+    "vector": {
+      "nDCG@10": 0.4836686080108774,
+      "MRR@10": 0.4549537037037037,
+      "Recall@10": 0.6155555555555556
+    },
+    "fts5": {
+      "nDCG@10": 0.0,
+      "MRR@10": 0.0,
+      "Recall@10": 0.0
+    },
+    "hybrid": {
+      "nDCG@10": 0.4836686080108774,
+      "MRR@10": 0.4549537037037037,
+      "Recall@10": 0.6155555555555556
+    },
+    "vector+rerank": {
+      "nDCG@10": 0.6406516328523133,
+      "MRR@10": 0.6136772486772486,
+      "Recall@10": 0.7515555555555555,
+      "rerank_ms_per_query": 1615.6
+    },
+    "fts5+rerank": {
+      "nDCG@10": 0.0,
+      "MRR@10": 0.0,
+      "Recall@10": 0.0,
+      "rerank_ms_per_query": 0.0
+    },
+    "hybrid+rerank": {
+      "nDCG@10": 0.6406516328523133,
+      "MRR@10": 0.6136772486772486,
+      "Recall@10": 0.7515555555555555,
+      "rerank_ms_per_query": 1115.4
+    }
+  },
+  "per_query_impact": {
+    "vector_rerank": {
+      "improved": 109,
+      "degraded": 26,
+      "unchanged": 165
+    },
+    "hybrid_rerank": {
+      "improved": 109,
+      "degraded": 26,
+      "unchanged": 165
+    }
+  },
+  "deltas": {
+    "vector_rerank_nDCG": 0.157,
+    "fts5_rerank_nDCG": 0.0,
+    "hybrid_rerank_nDCG": 0.157
+  }
+}

@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "amygdala"
+version = "0.1.0"
+description = "Embedding, search, novelty, and clustering primitives for personal knowledge systems"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.24",
+    "sentence-transformers>=2.2",
+]
+
+[project.optional-dependencies]
+llm = [
+    "google-genai",
+    "anthropic",
+    "openai",
+]
+dev = [
+    "pytest>=7.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["amygdala*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

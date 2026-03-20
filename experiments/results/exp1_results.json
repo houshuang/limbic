@@ -1,0 +1,194 @@
+[
+  {
+    "model": "MiniLM-L6 (384d)",
+    "dim": 384,
+    "per_type_mean_cosine": {
+      "paraphrase": 0.7288977801799774,
+      "extension": 0.7663220524787903,
+      "contradiction": 0.7312260548273722,
+      "unrelated": -0.0007678584350893895
+    },
+    "discrimination_gap": 0.7296656386150668,
+    "optimal_threshold": 0.3351980447769165,
+    "threshold_accuracy": 0.75,
+    "latency_s": 0.4029986250025104,
+    "norwegian_pairs": [
+      {
+        "no": "Utdanning er viktig for demokratiet",
+        "en": "Education is important for democracy",
+        "cosine": 0.20000684261322021
+      },
+      {
+        "no": "Fagfornyelsen vektlegger dybdel\u00e6ring",
+        "en": "The curriculum reform emphasizes deep learning",
+        "cosine": 0.07370877265930176
+      },
+      {
+        "no": "Kommunen b\u00f8r satse p\u00e5 kollektivtransport",
+        "en": "The municipality should invest in public transport",
+        "cosine": 0.2026180773973465
+      }
+    ],
+    "norwegian_mean": 0.15877789755662283
+  },
+  {
+    "model": "Nomic-v1.5 (768d)",
+    "dim": 768,
+    "per_type_mean_cosine": {
+      "paraphrase": 0.8221959292888641,
+      "extension": 0.8410298923651377,
+      "contradiction": 0.8406477312246958,
+      "unrelated": 0.5371441940466563
+    },
+    "discrimination_gap": 0.28505173524220784,
+    "optimal_threshold": 0.5961397886276245,
+    "threshold_accuracy": 0.7333333333333333,
+    "latency_s": 1.207437666998885,
+    "norwegian_pairs": [
+      {
+        "no": "Utdanning er viktig for demokratiet",
+        "en": "Education is important for democracy",
+        "cosine": 0.5726382732391357
+      },
+      {
+        "no": "Fagfornyelsen vektlegger dybdel\u00e6ring",
+        "en": "The curriculum reform emphasizes deep learning",
+        "cosine": 0.41471537947654724
+      },
+      {
+        "no": "Kommunen b\u00f8r satse p\u00e5 kollektivtransport",
+        "en": "The municipality should invest in public transport",
+        "cosine": 0.4813538193702698
+      }
+    ],
+    "norwegian_mean": 0.48956915736198425
+  },
+  {
+    "model": "Nomic-v1.5 (384d)",
+    "dim": 384,
+    "per_type_mean_cosine": {
+      "paraphrase": 0.8281105478604635,
+      "extension": 0.8460645298163096,
+      "contradiction": 0.8475538233915965,
+      "unrelated": 0.5400664508342743
+    },
+    "discrimination_gap": 0.28804409702618916,
+    "optimal_threshold": 0.6236089468002319,
+    "threshold_accuracy": 0.7333333333333333,
+    "latency_s": 1.207437666998885,
+    "norwegian_pairs": [
+      {
+        "no": "Utdanning er viktig for demokratiet",
+        "en": "Education is important for democracy",
+        "cosine": 0.5531782507896423
+      },
+      {
+        "no": "Fagfornyelsen vektlegger dybdel\u00e6ring",
+        "en": "The curriculum reform emphasizes deep learning",
+        "cosine": 0.35288769006729126
+      },
+      {
+        "no": "Kommunen b\u00f8r satse p\u00e5 kollektivtransport",
+        "en": "The municipality should invest in public transport",
+        "cosine": 0.46730202436447144
+      }
+    ],
+    "norwegian_mean": 0.4577893217404683
+  },
+  {
+    "model": "Nomic-v1.5 (256d)",
+    "dim": 256,
+    "per_type_mean_cosine": {
+      "paraphrase": 0.8403608401616415,
+      "extension": 0.854659750064214,
+      "contradiction": 0.8563763002554575,
+      "unrelated": 0.5536499698956807
+    },
+    "discrimination_gap": 0.28671087026596076,
+    "optimal_threshold": 0.6524879932403564,
+    "threshold_accuracy": 0.7416666666666667,
+    "latency_s": 1.207437666998885,
+    "norwegian_pairs": [
+      {
+        "no": "Utdanning er viktig for demokratiet",
+        "en": "Education is important for democracy",
+        "cosine": 0.5601869225502014
+      },
+      {
+        "no": "Fagfornyelsen vektlegger dybdel\u00e6ring",
+        "en": "The curriculum reform emphasizes deep learning",
+        "cosine": 0.3772500157356262
+      },
+      {
+        "no": "Kommunen b\u00f8r satse p\u00e5 kollektivtransport",
+        "en": "The municipality should invest in public transport",
+        "cosine": 0.4665188193321228
+      }
+    ],
+    "norwegian_mean": 0.46798525253931683
+  },
+  {
+    "model": "MPNet-base (768d)",
+    "dim": 768,
+    "per_type_mean_cosine": {
+      "paraphrase": 0.7320570111274719,
+      "extension": 0.7826845983664195,
+      "contradiction": 0.6969257444143295,
+      "unrelated": 0.017626265157014133
+    },
+    "discrimination_gap": 0.7144307459704577,
+    "optimal_threshold": 0.2376725971698761,
+    "threshold_accuracy": 0.75,
+    "latency_s": 0.704727999996976,
+    "norwegian_pairs": [
+      {
+        "no": "Utdanning er viktig for demokratiet",
+        "en": "Education is important for democracy",
+        "cosine": 0.3782573342323303
+      },
+      {
+        "no": "Fagfornyelsen vektlegger dybdel\u00e6ring",
+        "en": "The curriculum reform emphasizes deep learning",
+        "cosine": 0.0018542595207691193
+      },
+      {
+        "no": "Kommunen b\u00f8r satse p\u00e5 kollektivtransport",
+        "en": "The municipality should invest in public transport",
+        "cosine": 0.18611660599708557
+      }
+    ],
+    "norwegian_mean": 0.18874273325006166
+  },
+  {
+    "model": "Multilingual-MiniLM (384d)",
+    "dim": 384,
+    "per_type_mean_cosine": {
+      "paraphrase": 0.7419843435287475,
+      "extension": 0.7727037717898687,
+      "contradiction": 0.5909711112578709,
+      "unrelated": 0.013573204105099042
+    },
+    "discrimination_gap": 0.7284111394236485,
+    "optimal_threshold": 0.5496480464935303,
+    "threshold_accuracy": 0.8,
+    "latency_s": 0.30254954200063366,
+    "norwegian_pairs": [
+      {
+        "no": "Utdanning er viktig for demokratiet",
+        "en": "Education is important for democracy",
+        "cosine": 0.9923900365829468
+      },
+      {
+        "no": "Fagfornyelsen vektlegger dybdel\u00e6ring",
+        "en": "The curriculum reform emphasizes deep learning",
+        "cosine": 0.7781826853752136
+      },
+      {
+        "no": "Kommunen b\u00f8r satse p\u00e5 kollektivtransport",
+        "en": "The municipality should invest in public transport",
+        "cosine": 0.7379581332206726
+      }
+    ],
+    "norwegian_mean": 0.8361769517262777
+  }
+]

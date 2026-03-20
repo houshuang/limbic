@@ -1,0 +1,35 @@
+{
+  "benchmark": "SciFact (BEIR)",
+  "model": "paraphrase-multilingual-MiniLM-L12-v2",
+  "corpus_size": 5183,
+  "num_queries": 300,
+  "k": 10,
+  "embedding_dim": 384,
+  "embed_time_s": 20.0,
+  "methods": {
+    "vector": {
+      "nDCG@10": 0.4836686080108774,
+      "MRR@10": 0.4549537037037037,
+      "Recall@10": 0.6155555555555556,
+      "avg_query_ms": 0.17405749999549397
+    },
+    "fts5": {
+      "nDCG@10": 0.6384383605663717,
+      "MRR@10": 0.6057103174603174,
+      "Recall@10": 0.7655,
+      "avg_query_ms": 9.763614166658954,
+      "empty_results": 0
+    },
+    "hybrid": {
+      "nDCG@10": 0.6190430636708419,
+      "MRR@10": 0.5698994708994708,
+      "Recall@10": 0.796,
+      "avg_query_ms": 23.096989860011185
+    }
+  },
+  "per_query_comparison": {
+    "hybrid_wins": 117,
+    "vector_wins": 17,
+    "ties": 166
+  }
+}

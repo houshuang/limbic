@@ -1,0 +1,319 @@
+{
+  "experiment": "exp12_soft_zca",
+  "model": "paraphrase-multilingual-MiniLM-L12-v2",
+  "corpus_size": 5000,
+  "calibration_size": 120,
+  "domain_eval_size": 2000,
+  "elapsed_seconds": 232.14855194091797,
+  "eigenvalue_spectrum": {
+    "top_10": [
+      0.04201962426304817,
+      0.03204105794429779,
+      0.028984278440475464,
+      0.027944670990109444,
+      0.021872077137231827,
+      0.020039621740579605,
+      0.01881163753569126,
+      0.01600029319524765,
+      0.014438463374972343,
+      0.014221367426216602
+    ],
+    "range_ratio": 220578992.0,
+    "explained_variance": {
+      "10": 0.32066282629966736,
+      "50": 0.6994162797927856,
+      "100": 0.8733955025672913,
+      "200": 0.9798073768615723,
+      "300": 0.9968384504318237,
+      "384": 1.0
+    }
+  },
+  "results": [
+    {
+      "method": "raw",
+      "params": {},
+      "calibration": {
+        "mean_related_cosine": 0.7573440576593081,
+        "mean_unrelated_cosine": 0.013573204105099042,
+        "mean_contradiction_cosine": 0.5909711112578709,
+        "discrimination_gap": 0.7437708535542091,
+        "classification_accuracy": 0.8,
+        "optimal_threshold": 0.5496480464935303
+      },
+      "domain_homogeneous": {
+        "mean_nn_cosine": 0.6593514680862427,
+        "mean_random_cosine": 0.2615245586577803,
+        "nn_random_gap": 0.3978269094284624,
+        "mean_pairwise_cosine": 0.2622024416923523
+      }
+    },
+    {
+      "method": "pca",
+      "params": {
+        "dims": 128
+      },
+      "calibration": {
+        "mean_related_cosine": 0.7073502168059349,
+        "mean_unrelated_cosine": 0.06892883634815614,
+        "mean_contradiction_cosine": 0.606762186686198,
+        "discrimination_gap": 0.6384213804577787,
+        "classification_accuracy": 0.7583333333333333,
+        "optimal_threshold": 0.7144869565963745
+      },
+      "domain_homogeneous": {
+        "mean_nn_cosine": 0.4465393126010895,
+        "mean_random_cosine": -0.007287603008560836,
+        "nn_random_gap": 0.4538269156096503,
+        "mean_pairwise_cosine": 0.0003337096131872386
+      }
+    },
+    {
+      "method": "pca",
+      "params": {
+        "dims": 256
+      },
+      "calibration": {
+        "mean_related_cosine": 0.6763605629404386,
+        "mean_unrelated_cosine": 0.009911823645234108,
+        "mean_contradiction_cosine": 0.5703553656737009,
+        "discrimination_gap": 0.6664487392952044,
+        "classification_accuracy": 0.75,
+        "optimal_threshold": 0.6370305418968201
+      },
+      "domain_homogeneous": {
+        "mean_nn_cosine": 0.37070605158805847,
+        "mean_random_cosine": -0.004765738639980555,
+        "nn_random_gap": 0.375471790228039,
+        "mean_pairwise_cosine": 0.0001921148068504408
+      }
+    },
+    {
+      "method": "pca",
+      "params": {
+        "dims": 384
+      },
+      "calibration": {
+        "mean_related_cosine": 0.651763429492712,
+        "mean_unrelated_cosine": 0.0009025011832515399,
+        "mean_contradiction_cosine": 0.5329792082309723,
+        "discrimination_gap": 0.6508609283094605,
+        "classification_accuracy": 0.7583333333333333,
+        "optimal_threshold": 0.6436600685119629
+      },
+      "domain_homogeneous": {
+        "mean_nn_cosine": 0.32194435596466064,
+        "mean_random_cosine": -0.005127021770924329,
+        "nn_random_gap": 0.327071377735585,
+        "mean_pairwise_cosine": 0.00017546230810694396
+      }
+    },
+    {
+      "method": "soft_zca",
+      "params": {
+        "epsilon": 0.001
+      },
+      "calibration": {
+        "mean_related_cosine": 0.6952946071823438,
+        "mean_unrelated_cosine": 0.0370833035868903,
+        "mean_contradiction_cosine": 0.5876396765311559,
+        "discrimination_gap": 0.6582113035954535,
+        "classification_accuracy": 0.75,
+        "optimal_threshold": 0.6750516891479492
+      },
+      "domain_homogeneous": {
+        "mean_nn_cosine": 0.4005648195743561,
+        "mean_random_cosine": -0.005518426299095154,
+        "nn_random_gap": 0.40608324587345124,
+        "mean_pairwise_cosine": 0.00025644811103120446
+      }
+    },
+    {
+      "method": "soft_zca",
+      "params": {
+        "epsilon": 0.01
+      },
+      "calibration": {
+        "mean_related_cosine": 0.7295693397521973,
+        "mean_unrelated_cosine": 0.08555608539221188,
+        "mean_contradiction_cosine": 0.6072363744179408,
+        "discrimination_gap": 0.6440132543599855,
+        "classification_accuracy": 0.775,
+        "optimal_threshold": 0.591191291809082
+      },
+      "domain_homogeneous": {
+        "mean_nn_cosine": 0.46088892221450806,
+        "mean_random_cosine": -0.0028319638054817914,
+        "nn_random_gap": 0.46372088601998984,
+        "mean_pairwise_cosine": 0.00029485643608495593
+      }
+    },
+    {
+      "method": "soft_zca",
+      "params": {
+        "epsilon": 0.05
+      },
+      "calibration": {
+        "mean_related_cosine": 0.7508450557788213,
+        "mean_unrelated_cosine": 0.11972762808824579,
+        "mean_contradiction_cosine": 0.6105774084726969,
+        "discrimination_gap": 0.6311174276905755,
+        "classification_accuracy": 0.7916666666666666,
+        "optimal_threshold": 0.6036192178726196
+      },
+      "domain_homogeneous": {
+        "mean_nn_cosine": 0.5012965202331543,
+        "mean_random_cosine": -0.0004254761664196849,
+        "nn_random_gap": 0.5017219963995739,
+        "mean_pairwise_cosine": 0.00031377666164189577
+      }
+    },
+    {
+      "method": "soft_zca",
+      "params": {
+        "epsilon": 0.1
+      },
+      "calibration": {
+        "mean_related_cosine": 0.7563029661774635,
+        "mean_unrelated_cosine": 0.12896110725899537,
+        "mean_contradiction_cosine": 0.6097354720036189,
+        "discrimination_gap": 0.6273418589184682,
+        "classification_accuracy": 0.8,
+        "optimal_threshold": 0.6022778153419495
+      },
+      "domain_homogeneous": {
+        "mean_nn_cosine": 0.5128267407417297,
+        "mean_random_cosine": 0.00020938822068274022,
+        "nn_random_gap": 0.512617352521047,
+        "mean_pairwise_cosine": 0.0003203529922757298
+      }
+    },
+    {
+      "method": "soft_zca",
+      "params": {
+        "epsilon": 0.5
+      },
+      "calibration": {
+        "mean_related_cosine": 0.7619431187709172,
+        "mean_unrelated_cosine": 0.13871490530048808,
+        "mean_contradiction_cosine": 0.6077328582604726,
+        "discrimination_gap": 0.6232282134704292,
+        "classification_accuracy": 0.8083333333333333,
+        "optimal_threshold": 0.6154698133468628
+      },
+      "domain_homogeneous": {
+        "mean_nn_cosine": 0.5254112482070923,
+        "mean_random_cosine": 0.0008663412444293499,
+        "nn_random_gap": 0.524544906962663,
+        "mean_pairwise_cosine": 0.0003270524903200567
+      }
+    },
+    {
+      "method": "all_but_top",
+      "params": {
+        "D": 1
+      },
+      "calibration": {
+        "mean_related_cosine": 0.7623631318410238,
+        "mean_unrelated_cosine": 0.1445900388682882,
+        "mean_contradiction_cosine": 0.6445085982481639,
+        "discrimination_gap": 0.6177730929727356,
+        "classification_accuracy": 0.775,
+        "optimal_threshold": 0.745762825012207
+      },
+      "domain_homogeneous": {
+        "mean_nn_cosine": 0.5173107385635376,
+        "mean_random_cosine": 0.0016019211141392589,
+        "nn_random_gap": 0.5157088174493983,
+        "mean_pairwise_cosine": 0.00036739278584718704
+      }
+    },
+    {
+      "method": "all_but_top",
+      "params": {
+        "D": 2
+      },
+      "calibration": {
+        "mean_related_cosine": 0.7437405919035276,
+        "mean_unrelated_cosine": 0.09134808309997121,
+        "mean_contradiction_cosine": 0.6211789568265279,
+        "discrimination_gap": 0.6523925088035564,
+        "classification_accuracy": 0.775,
+        "optimal_threshold": 0.6494112014770508
+      },
+      "domain_homogeneous": {
+        "mean_nn_cosine": 0.5097532272338867,
+        "mean_random_cosine": 0.0002849031034857035,
+        "nn_random_gap": 0.509468324130401,
+        "mean_pairwise_cosine": 0.0002626582863740623
+      }
+    },
+    {
+      "method": "all_but_top",
+      "params": {
+        "D": 3
+      },
+      "calibration": {
+        "mean_related_cosine": 0.7398640140891075,
+        "mean_unrelated_cosine": 0.09767530380437771,
+        "mean_contradiction_cosine": 0.6191034485896428,
+        "discrimination_gap": 0.6421887102847298,
+        "classification_accuracy": 0.7666666666666667,
+        "optimal_threshold": 0.6219279766082764
+      },
+      "domain_homogeneous": {
+        "mean_nn_cosine": 0.5000048279762268,
+        "mean_random_cosine": -0.003906815342605114,
+        "nn_random_gap": 0.5039116433188319,
+        "mean_pairwise_cosine": 0.0002687002706807107
+      }
+    },
+    {
+      "method": "all_but_top",
+      "params": {
+        "D": 5
+      },
+      "calibration": {
+        "mean_related_cosine": 0.734746873875459,
+        "mean_unrelated_cosine": 0.10579358621810873,
+        "mean_contradiction_cosine": 0.6260548373063405,
+        "discrimination_gap": 0.6289532876573503,
+        "classification_accuracy": 0.7666666666666667,
+        "optimal_threshold": 0.7570049166679382
+      },
+      "domain_homogeneous": {
+        "mean_nn_cosine": 0.4832402467727661,
+        "mean_random_cosine": -0.0026346250921487806,
+        "nn_random_gap": 0.4858748718649149,
+        "mean_pairwise_cosine": 0.00030113119282759726
+      }
+    }
+  ],
+  "best": {
+    "calibration_gap": {
+      "method": "raw",
+      "params": {},
+      "value": 0.7437708535542091
+    },
+    "calibration_accuracy": {
+      "method": "soft_zca",
+      "params": {
+        "epsilon": 0.5
+      },
+      "value": 0.8083333333333333
+    },
+    "domain_nn_gap": {
+      "method": "soft_zca",
+      "params": {
+        "epsilon": 0.5
+      },
+      "value": 0.524544906962663
+    },
+    "domain_isotropy": {
+      "method": "pca",
+      "params": {
+        "dims": 384
+      },
+      "value": 0.00017546230810694396
+    }
+  }
+}

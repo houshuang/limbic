@@ -1,0 +1,536 @@
+{
+  "part1_similarity": {
+    "match_mean": 0.8593770583470662,
+    "match_min": 0.6786436438560486,
+    "match_max": 0.9835642576217651,
+    "match_std": 0.08566165345574829,
+    "translation_mean": 0.8674411882053722,
+    "paraphrase_mean": 0.8372007012367249,
+    "nonmatch_mean": 0.19059616170412774,
+    "nonmatch_std": 0.13677902904127207,
+    "nonmatch_p95": 0.4497000217437744,
+    "discrimination_gap": 0.6687808966429385,
+    "all_match_sims": [
+      0.943175733089447,
+      0.9185035228729248,
+      0.9217100143432617,
+      0.9737246036529541,
+      0.7213454246520996,
+      0.8636751770973206,
+      0.9835642576217651,
+      0.6786436438560486,
+      0.9074587821960449,
+      0.8165358304977417,
+      0.9490866661071777,
+      0.9561378359794617,
+      0.8822836875915527,
+      0.771975040435791,
+      0.8980240821838379,
+      0.8512850403785706,
+      0.8977857232093811,
+      0.864925742149353,
+      0.7463358044624329,
+      0.8475200533866882,
+      0.9351589679718018,
+      0.7865618467330933,
+      0.9224696159362793,
+      0.8305172324180603,
+      0.9170972108840942,
+      0.7386471629142761,
+      0.8357459306716919,
+      0.7107738852500916,
+      0.9633837342262268,
+      0.7472594976425171
+    ]
+  },
+  "part2_retrieval": {
+    "recall_at_1": 1.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "mrr": 1.0,
+    "n_queries": 30,
+    "n_failures": 0
+  },
+  "part3_translation_baseline": {
+    "direct_mean_sim": 0.8700908243656158,
+    "translated_mean_sim": 0.9577668190002442,
+    "direct_mrr": 1.0,
+    "translated_mrr": 1.0,
+    "sim_delta": 0.08767599463462838,
+    "mrr_delta": 0.0,
+    "per_pair_direct_sims": [
+      0.943175733089447,
+      0.9217100143432617,
+      0.7213454246520996,
+      0.9490866661071777,
+      0.8822836875915527,
+      0.8512850403785706,
+      0.9351589679718018,
+      0.9224696159362793,
+      0.7386471629142761,
+      0.8357459306716919
+    ],
+    "per_pair_translated_sims": [
+      0.9984787702560425,
+      0.9487378597259521,
+      0.8432981967926025,
+      1.0000001192092896,
+      0.9788929224014282,
+      0.8757187128067017,
+      0.9754002094268799,
+      1.0000001192092896,
+      1.0,
+      0.9571412801742554
+    ],
+    "per_pair_direct_ranks": [
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "per_pair_translated_ranks": [
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1
+    ]
+  },
+  "part4_domain": {
+    "n_claims": 2000,
+    "n_queries": 10,
+    "keyword_recall_at_5": 0.9,
+    "mean_keyword_rank": 1.0,
+    "per_query": [
+      {
+        "query": "Formativ vurdering er bedre enn karakterer for elevenes l\u00e6ring",
+        "expected_keywords": [
+          "formative",
+          "feedback",
+          "grades"
+        ],
+        "keyword_found_at_rank": 1,
+        "top_hits": [
+          {
+            "rank": 1,
+            "score": 0.7298763394355774,
+            "claim": "Formative assessment is significantly more important for student learning than summative assessment like grades.",
+            "keyword_match": true
+          },
+          {
+            "rank": 2,
+            "score": 0.6944602131843567,
+            "claim": "Exams are better at distinguishing the strictness of the examiner than the actual competence of the students.",
+            "keyword_match": false
+          },
+          {
+            "rank": 3,
+            "score": 0.6747317314147949,
+            "claim": "Instructional quality and student engagement are more important for learning than the specific number of hours allocated to a subject.",
+            "keyword_match": false
+          },
+          {
+            "rank": 4,
+            "score": 0.6711941361427307,
+            "claim": "Teachers at lower grade levels assess collective efficacy more positively than teachers at higher grade levels.",
+            "keyword_match": false
+          },
+          {
+            "rank": 5,
+            "score": 0.643412709236145,
+            "claim": "While schools use surveys to show satisfaction, teachers are often excluded from fundamental decisions about whether learning materials should be digital or paper-based.",
+            "keyword_match": false
+          }
+        ]
+      },
+      {
+        "query": "Lekbasert l\u00e6ring i barnehagen fremmer utvikling",
+        "expected_keywords": [
+          "play",
+          "early childhood",
+          "learning"
+        ],
+        "keyword_found_at_rank": 1,
+        "top_hits": [
+          {
+            "rank": 1,
+            "score": 0.7550854682922363,
+            "claim": "For the youngest children, the new curriculum emphasizes play and learning through play as a central component.",
+            "keyword_match": true
+          },
+          {
+            "rank": 2,
+            "score": 0.7483623623847961,
+            "claim": "Play creates interactions between children and their surroundings that generate learning in a broad sense.",
+            "keyword_match": true
+          },
+          {
+            "rank": 3,
+            "score": 0.7338510751724243,
+            "claim": "A significant portion of the everyday life of children in kindergarten revolves around play.",
+            "keyword_match": true
+          },
+          {
+            "rank": 4,
+            "score": 0.707521915435791,
+            "claim": "The most important arena for 'danning' in kindergarten is relationships and activities that children perceive as meaningful.",
+            "keyword_match": false
+          },
+          {
+            "rank": 5,
+            "score": 0.7071769833564758,
+            "claim": "High quality in preschool environments promotes children\u2019s learning across curriculum goal areas.",
+            "keyword_match": true
+          }
+        ]
+      },
+      {
+        "query": "L\u00e6rere trenger mer tid til faglig samarbeid og utvikling",
+        "expected_keywords": [
+          "teacher",
+          "professional development",
+          "collaboration"
+        ],
+        "keyword_found_at_rank": 1,
+        "top_hits": [
+          {
+            "rank": 1,
+            "score": 0.7603859305381775,
+            "claim": "High-quality teaching requires educated teachers who have time for professional development.",
+            "keyword_match": true
+          },
+          {
+            "rank": 2,
+            "score": 0.7091338634490967,
+            "claim": "The most important form of 'co-creation' in schools is the time teachers spend for and with their students.",
+            "keyword_match": true
+          },
+          {
+            "rank": 3,
+            "score": 0.689191460609436,
+            "claim": "The school staff should be strengthened with other professional groups to allow teachers to focus on teaching.",
+            "keyword_match": true
+          },
+          {
+            "rank": 4,
+            "score": 0.6883435249328613,
+            "claim": "A culture of sharing teaching materials allows teachers to save time and improve instruction.",
+            "keyword_match": true
+          },
+          {
+            "rank": 5,
+            "score": 0.6854763031005859,
+            "claim": "There is a need for teacher education to proactively adapt content and methods to meet the challenges of future teaching generations.",
+            "keyword_match": true
+          }
+        ]
+      },
+      {
+        "query": "Standardiserte tester f\u00f8rer til at l\u00e6rere underviser mot pr\u00f8ven",
+        "expected_keywords": [
+          "test",
+          "exam",
+          "teaching to the test"
+        ],
+        "keyword_found_at_rank": 1,
+        "top_hits": [
+          {
+            "rank": 1,
+            "score": 0.7254184484481812,
+            "claim": "Focus on national tests has led to a prioritisation of teachers with competency in tested subjects over practical subjects.",
+            "keyword_match": true
+          },
+          {
+            "rank": 2,
+            "score": 0.7152722477912903,
+            "claim": "Standardized reading tests are essentially knowledge tests in disguise, which makes them unfair to students who haven't been taught the specific content assumed by the test passages.",
+            "keyword_match": true
+          },
+          {
+            "rank": 3,
+            "score": 0.7144736051559448,
+            "claim": "Unfair grading in PE occurs when teachers rely on outdated practices like physical tests and purely instrumental measurements.",
+            "keyword_match": true
+          },
+          {
+            "rank": 4,
+            "score": 0.7139085531234741,
+            "claim": "National tests are controversial because they attempt to serve both as a teacher tool and a management tool for authorities.",
+            "keyword_match": true
+          },
+          {
+            "rank": 5,
+            "score": 0.6919087171554565,
+            "claim": "The absence of national tests in Finland allows teachers to focus more on subject teaching rather than 'teaching to the test'.",
+            "keyword_match": true
+          }
+        ]
+      },
+      {
+        "query": "Uteskole er bra for barns fysiske helse",
+        "expected_keywords": [
+          "outdoor",
+          "physical",
+          "health",
+          "nature"
+        ],
+        "keyword_found_at_rank": 1,
+        "top_hits": [
+          {
+            "rank": 1,
+            "score": 0.6613564491271973,
+            "claim": "A child's physical fitness serves as an indicator of health and influences their social skills, self-perception, and learning outcomes.",
+            "keyword_match": true
+          },
+          {
+            "rank": 2,
+            "score": 0.636008620262146,
+            "claim": "High quality in preschool environments promotes children\u2019s learning across curriculum goal areas.",
+            "keyword_match": false
+          },
+          {
+            "rank": 3,
+            "score": 0.6065393686294556,
+            "claim": "Students with high physical fitness enjoy training and sports in their free time more than those with low physical fitness.",
+            "keyword_match": true
+          },
+          {
+            "rank": 4,
+            "score": 0.60020512342453,
+            "claim": "Physically active learning helps break down social barriers and improves relationships between students and teachers.",
+            "keyword_match": true
+          },
+          {
+            "rank": 5,
+            "score": 0.5995575785636902,
+            "claim": "Increasing the availability of physical books is beneficial for teachers' professional choices and for students' classroom environments.",
+            "keyword_match": true
+          }
+        ]
+      },
+      {
+        "query": "Tidlig innsats for lesevansker hjelper barn p\u00e5 lang sikt",
+        "expected_keywords": [
+          "reading",
+          "early",
+          "intervention",
+          "phonological"
+        ],
+        "keyword_found_at_rank": 1,
+        "top_hits": [
+          {
+            "rank": 1,
+            "score": 0.7755359411239624,
+            "claim": "Dialogical and creative reading activities based on relevant children\u2019s literature serve as gateways to developing young children\u2019s agency regarding sustainability concerns.",
+            "keyword_match": true
+          },
+          {
+            "rank": 2,
+            "score": 0.762604832649231,
+            "claim": "Maternal reading activities and household literacy resources predict children's word reading independently of parental reading ability and early reading growth.",
+            "keyword_match": true
+          },
+          {
+            "rank": 3,
+            "score": 0.7229071855545044,
+            "claim": "Preschool class students can discover their own ability to read during the process of literacy assessment.",
+            "keyword_match": false
+          },
+          {
+            "rank": 4,
+            "score": 0.6738879680633545,
+            "claim": "Effective literacy tools for toddlers can be produced through collaboration between kindergarten staff and children's families.",
+            "keyword_match": false
+          },
+          {
+            "rank": 5,
+            "score": 0.668502688407898,
+            "claim": "Pre-primary teachers perceive reading aloud as a multifaceted tool that supports language development, social skills, and curriculum integration.",
+            "keyword_match": true
+          }
+        ]
+      },
+      {
+        "query": "Klassest\u00f8rrelse p\u00e5virker kvaliteten p\u00e5 undervisningen",
+        "expected_keywords": [
+          "class size",
+          "teaching quality"
+        ],
+        "keyword_found_at_rank": null,
+        "top_hits": [
+          {
+            "rank": 1,
+            "score": 0.6804176568984985,
+            "claim": "Larger schools are better able to utilize specialized teacher competence, while smaller schools require teachers with a broader range of subject qualifications.",
+            "keyword_match": false
+          },
+          {
+            "rank": 2,
+            "score": 0.6594655513763428,
+            "claim": "Educational authorities argue that master's level education and effective organization can compensate for high student-to-teacher ratios.",
+            "keyword_match": false
+          },
+          {
+            "rank": 3,
+            "score": 0.6564807891845703,
+            "claim": "Instructional quality and student engagement are more important for learning than the specific number of hours allocated to a subject.",
+            "keyword_match": false
+          },
+          {
+            "rank": 4,
+            "score": 0.6537696123123169,
+            "claim": "The implementation of the teacher density norm (l\u00e6rernormen) has increased the need for qualified teachers, making decertification problematic.",
+            "keyword_match": false
+          },
+          {
+            "rank": 5,
+            "score": 0.6341296434402466,
+            "claim": "Increased academization of teacher education risks prioritizing research competence over practical school experience in faculty hiring.",
+            "keyword_match": false
+          }
+        ]
+      },
+      {
+        "query": "Digitale verkt\u00f8y i skolen m\u00e5 brukes med omtanke",
+        "expected_keywords": [
+          "digital",
+          "school",
+          "analog"
+        ],
+        "keyword_found_at_rank": 1,
+        "top_hits": [
+          {
+            "rank": 1,
+            "score": 0.7839657068252563,
+            "claim": "Schools have previously been able to monitor students' use of digital school tools while they are at home.",
+            "keyword_match": true
+          },
+          {
+            "rank": 2,
+            "score": 0.7808602452278137,
+            "claim": "Schools must communicate more clearly with parents about how digital learning tools are used and the value they add to education.",
+            "keyword_match": true
+          },
+          {
+            "rank": 3,
+            "score": 0.735436201095581,
+            "claim": "Many teachers are uncertain about what constitutes appropriate digital use in the classroom.",
+            "keyword_match": true
+          },
+          {
+            "rank": 4,
+            "score": 0.7275063395500183,
+            "claim": "A new balance is required between digital and paper-based learning materials in the classroom.",
+            "keyword_match": true
+          },
+          {
+            "rank": 5,
+            "score": 0.7097221612930298,
+            "claim": "Digitalization in schools creates specific challenges for students using the official but lesser-used Nynorsk written form.",
+            "keyword_match": true
+          }
+        ]
+      },
+      {
+        "query": "Barns nysgjerrighet b\u00f8r styrkes i barnehagen",
+        "expected_keywords": [
+          "curiosity",
+          "children",
+          "ECEC",
+          "kindergarten"
+        ],
+        "keyword_found_at_rank": 1,
+        "top_hits": [
+          {
+            "rank": 1,
+            "score": 0.7005401253700256,
+            "claim": "The thesis adopts a hermeneutic and phenomenological approach to studying children's wonder in kindergarten settings.",
+            "keyword_match": true
+          },
+          {
+            "rank": 2,
+            "score": 0.6797358989715576,
+            "claim": "Pedagogical activities in kindergartens should be adapted to match the diverse levels of children's number sense.",
+            "keyword_match": true
+          },
+          {
+            "rank": 3,
+            "score": 0.6757018566131592,
+            "claim": "The most important arena for 'danning' in kindergarten is relationships and activities that children perceive as meaningful.",
+            "keyword_match": true
+          },
+          {
+            "rank": 4,
+            "score": 0.6699904799461365,
+            "claim": "High quality in preschool environments promotes children\u2019s learning across curriculum goal areas.",
+            "keyword_match": true
+          },
+          {
+            "rank": 5,
+            "score": 0.6543543338775635,
+            "claim": "In the context of early childhood education research, the 'child's world' can be effectively delimited to the kindergarten setting for analytical purposes.",
+            "keyword_match": true
+          }
+        ]
+      },
+      {
+        "query": "Skjermtid for sm\u00e5 barn b\u00f8r begrenses",
+        "expected_keywords": [
+          "screen time",
+          "children",
+          "limit"
+        ],
+        "keyword_found_at_rank": 1,
+        "top_hits": [
+          {
+            "rank": 1,
+            "score": 0.6948903799057007,
+            "claim": "General screen time for children during their leisure time should be limited.",
+            "keyword_match": true
+          },
+          {
+            "rank": 2,
+            "score": 0.6032713651657104,
+            "claim": "Kindergarten and after-school program (SFO) hours in Lillestr\u00f8m must be reduced to ensure safe operations.",
+            "keyword_match": false
+          },
+          {
+            "rank": 3,
+            "score": 0.5878527760505676,
+            "claim": "Children aged one to two are provided with fewer challenges in the outdoor environment compared to children aged two to three.",
+            "keyword_match": true
+          },
+          {
+            "rank": 4,
+            "score": 0.5854430198669434,
+            "claim": "Reducing opening hours in kindergartens and the primary school offering would allow better adherence to infection control advice.",
+            "keyword_match": false
+          },
+          {
+            "rank": 5,
+            "score": 0.5684407949447632,
+            "claim": "Preschools lack sufficient resources to handle the increasing number of tasks and children struggling with behavior.",
+            "keyword_match": true
+          }
+        ]
+      }
+    ]
+  },
+  "metadata": {
+    "model": "paraphrase-multilingual-MiniLM-L12-v2",
+    "n_concept_pairs": 30,
+    "n_translation_baseline": 10,
+    "total_time_s": 91.09041500091553
+  }
+}

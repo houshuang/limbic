@@ -1,0 +1,102 @@
+{
+  "experiment": "eval_qqp_novelty",
+  "dataset": "sentence-transformers/quora-duplicates (pair-class)",
+  "pairwise_n": 4000,
+  "corpus_index_size": 500,
+  "corpus_query_dup": 500,
+  "corpus_query_nondup": 221,
+  "models": {
+    "paraphrase-multilingual-MiniLM-L12-v2": {
+      "description": "multilingual (new default)",
+      "pairwise": {
+        "n_pairs": 4000,
+        "mean_novelty_duplicates": 0.1259,
+        "std_novelty_duplicates": 0.093,
+        "mean_novelty_nondups": 0.4018,
+        "std_novelty_nondups": 0.2603,
+        "separation": 0.2759,
+        "auc_roc": 0.8553,
+        "best_f1": {
+          "f1": 0.7722,
+          "threshold": 0.205,
+          "precision": 0.7986,
+          "recall": 0.7475
+        }
+      },
+      "corpus_no_centroid": {
+        "index_size": 500,
+        "n_queries": 721,
+        "mean_novelty_duplicates": 0.4428,
+        "mean_novelty_nondups": 0.5346,
+        "separation": 0.0919,
+        "auc_roc": 0.7951,
+        "best_f1": {
+          "f1": 0.6205,
+          "threshold": 0.517,
+          "precision": 0.5781,
+          "recall": 0.6697
+        }
+      },
+      "corpus_with_centroid": {
+        "index_size": 500,
+        "n_queries": 721,
+        "mean_novelty_duplicates": 0.5611,
+        "mean_novelty_nondups": 0.6165,
+        "separation": 0.0553,
+        "auc_roc": 0.7301,
+        "best_f1": {
+          "f1": 0.5782,
+          "threshold": 0.5817,
+          "precision": 0.4632,
+          "recall": 0.7692
+        }
+      }
+    },
+    "all-MiniLM-L6-v2": {
+      "description": "MiniLM-L6 (old default)",
+      "pairwise": {
+        "n_pairs": 4000,
+        "mean_novelty_duplicates": 0.1391,
+        "std_novelty_duplicates": 0.0958,
+        "mean_novelty_nondups": 0.4277,
+        "std_novelty_nondups": 0.2635,
+        "separation": 0.2886,
+        "auc_roc": 0.8584,
+        "best_f1": {
+          "f1": 0.7748,
+          "threshold": 0.19,
+          "precision": 0.7512,
+          "recall": 0.8
+        }
+      },
+      "corpus_no_centroid": {
+        "index_size": 500,
+        "n_queries": 721,
+        "mean_novelty_duplicates": 0.4462,
+        "mean_novelty_nondups": 0.5811,
+        "separation": 0.135,
+        "auc_roc": 0.8506,
+        "best_f1": {
+          "f1": 0.7024,
+          "threshold": 0.5404,
+          "precision": 0.6667,
+          "recall": 0.7421
+        }
+      },
+      "corpus_with_centroid": {
+        "index_size": 500,
+        "n_queries": 721,
+        "mean_novelty_duplicates": 0.5387,
+        "mean_novelty_nondups": 0.6432,
+        "separation": 0.1045,
+        "auc_roc": 0.8285,
+        "best_f1": {
+          "f1": 0.6708,
+          "threshold": 0.6034,
+          "precision": 0.6183,
+          "recall": 0.733
+        }
+      }
+    }
+  }
+}

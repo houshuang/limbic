@@ -1,0 +1,162 @@
+{
+  "experiment": "exp10_temporal_decay",
+  "description": "Test temporal decay (exp(-lambda*age_days)) for novelty scoring",
+  "data_source": "conversation-search chunks",
+  "n_items": 500,
+  "n_eval_items": 480,
+  "n_known": 25,
+  "n_novel": 138,
+  "n_ambiguous": 317,
+  "time_span_days": 35.9,
+  "recency_window_days": 7.0,
+  "known_threshold": 0.7,
+  "novel_threshold": 0.45,
+  "embedding_model": "paraphrase-multilingual-MiniLM-L12-v2",
+  "lambda_sweep": {
+    "0.0": {
+      "lambda": 0.0,
+      "half_life_days": Infinity,
+      "mean_known": 0.4082,
+      "mean_novel": 0.63,
+      "separation": 0.2218,
+      "spearman_r": 0.7509,
+      "spearman_p": 0.0,
+      "auc": 0.9843,
+      "best_f1": 0.9856,
+      "best_threshold": 0.51,
+      "n_known": 25,
+      "n_novel": 138
+    },
+    "0.001": {
+      "lambda": 0.001,
+      "half_life_days": 693.1,
+      "mean_known": 0.4137,
+      "mean_novel": 0.634,
+      "separation": 0.2203,
+      "spearman_r": 0.7637,
+      "spearman_p": 0.0,
+      "auc": 0.9864,
+      "best_f1": 0.9892,
+      "best_threshold": 0.52,
+      "n_known": 25,
+      "n_novel": 138
+    },
+    "0.005": {
+      "lambda": 0.005,
+      "half_life_days": 138.6,
+      "mean_known": 0.4338,
+      "mean_novel": 0.6481,
+      "separation": 0.2144,
+      "spearman_r": 0.7998,
+      "spearman_p": 0.0,
+      "auc": 0.993,
+      "best_f1": 0.9892,
+      "best_threshold": 0.54,
+      "n_known": 25,
+      "n_novel": 138
+    },
+    "0.01": {
+      "lambda": 0.01,
+      "half_life_days": 69.3,
+      "mean_known": 0.4546,
+      "mean_novel": 0.662,
+      "separation": 0.2074,
+      "spearman_r": 0.8264,
+      "spearman_p": 0.0,
+      "auc": 0.9974,
+      "best_f1": 0.9928,
+      "best_threshold": 0.575,
+      "n_known": 25,
+      "n_novel": 138
+    },
+    "0.02": {
+      "lambda": 0.02,
+      "half_life_days": 34.7,
+      "mean_known": 0.4869,
+      "mean_novel": 0.6819,
+      "separation": 0.195,
+      "spearman_r": 0.8442,
+      "spearman_p": 0.0,
+      "auc": 0.9997,
+      "best_f1": 0.9964,
+      "best_threshold": 0.595,
+      "n_known": 25,
+      "n_novel": 138
+    },
+    "0.05": {
+      "lambda": 0.05,
+      "half_life_days": 13.9,
+      "mean_known": 0.5485,
+      "mean_novel": 0.7139,
+      "separation": 0.1655,
+      "spearman_r": 0.8241,
+      "spearman_p": 0.0,
+      "auc": 0.9994,
+      "best_f1": 0.9964,
+      "best_threshold": 0.64,
+      "n_known": 25,
+      "n_novel": 138
+    },
+    "0.1": {
+      "lambda": 0.1,
+      "half_life_days": 6.9,
+      "mean_known": 0.6038,
+      "mean_novel": 0.7413,
+      "separation": 0.1374,
+      "spearman_r": 0.761,
+      "spearman_p": 0.0,
+      "auc": 0.9907,
+      "best_f1": 0.9821,
+      "best_threshold": 0.655,
+      "n_known": 25,
+      "n_novel": 138
+    },
+    "0.2": {
+      "lambda": 0.2,
+      "half_life_days": 3.5,
+      "mean_known": 0.6635,
+      "mean_novel": 0.7723,
+      "separation": 0.1088,
+      "spearman_r": 0.6633,
+      "spearman_p": 0.0,
+      "auc": 0.9586,
+      "best_f1": 0.9574,
+      "best_threshold": 0.695,
+      "n_known": 25,
+      "n_novel": 138
+    }
+  },
+  "best_lambda": 0.02,
+  "best_lambda_key": "0.02",
+  "k_sensitivity": {
+    "1": {
+      "separation": 0.3939,
+      "auc": 0.9948,
+      "f1": 0.9964
+    },
+    "3": {
+      "separation": 0.2962,
+      "auc": 1.0,
+      "f1": 1.0
+    },
+    "5": {
+      "separation": 0.2507,
+      "auc": 1.0,
+      "f1": 1.0
+    },
+    "10": {
+      "separation": 0.195,
+      "auc": 0.9997,
+      "f1": 0.9964
+    }
+  },
+  "topic_return_count": 3,
+  "recommendation": "OPTIONAL: add as opt-in parameter",
+  "reason": "Small but positive AUC improvement (+0.0154)",
+  "deltas": {
+    "auc": 0.0154,
+    "f1": 0.0108,
+    "separation": -0.0268,
+    "spearman": 0.0933
+  }
+}

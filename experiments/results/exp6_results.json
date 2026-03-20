@@ -1,0 +1,191 @@
+{
+  "experiment": "exp6_nli_eval",
+  "dataset": "SICK test split (yangwang825/sick)",
+  "n_pairs": 4906,
+  "label_distribution": {
+    "neutral": 2790,
+    "entailment": 1404,
+    "contradiction": 712
+  },
+  "embedding_model": "paraphrase-multilingual-MiniLM-L12-v2",
+  "cosine_distribution_by_label": {
+    "entailment": {
+      "mean": 0.9048970460552096,
+      "std": 0.09696709890138204,
+      "median": 0.9367100596427917,
+      "min": 0.23391112685203552,
+      "max": 0.9994716644287109,
+      "n": 1404
+    },
+    "neutral": {
+      "mean": 0.5811949056089192,
+      "std": 0.2620685484981772,
+      "median": 0.6442647576332092,
+      "min": -0.21239891648292542,
+      "max": 0.9961928725242615,
+      "n": 2790
+    },
+    "contradiction": {
+      "mean": 0.6813721332824632,
+      "std": 0.1452312981457457,
+      "median": 0.6779575645923615,
+      "min": 0.12139931321144104,
+      "max": 0.9927059412002563,
+      "n": 712
+    }
+  },
+  "cosine_novelty_analysis": {
+    "entailment_mean_cosine": 0.9048970460552096,
+    "contradiction_mean_cosine": 0.6813721332824632,
+    "neutral_mean_cosine": 0.5811949056089192,
+    "cosine_gap_ent_vs_con": 0.22352491277274644,
+    "contradiction_above_ent_mean_frac": 0.06179775280898876,
+    "cosine_auc_ent_vs_con": 0.901468
+  },
+  "nli_model_results": [
+    {
+      "model_name": "nli-deberta-base",
+      "model_full_name": "cross-encoder/nli-deberta-v3-base",
+      "metrics": {
+        "accuracy": 0.5862209539339585,
+        "n": 4906,
+        "correct": 2876,
+        "per_class": {
+          "entailment": {
+            "precision": 0.8362235067437379,
+            "recall": 0.9273504273504274,
+            "f1": 0.8794326241134752,
+            "support": 1404,
+            "tp": 1302,
+            "fp": 255,
+            "fn": 102
+          },
+          "neutral": {
+            "precision": 0.8947368421052632,
+            "recall": 0.31684587813620074,
+            "f1": 0.4679724722075172,
+            "support": 2790,
+            "tp": 884,
+            "fp": 104,
+            "fn": 1906
+          },
+          "contradiction": {
+            "precision": 0.29224904701397714,
+            "recall": 0.9691011235955056,
+            "f1": 0.4490725675235926,
+            "support": 712,
+            "tp": 690,
+            "fp": 1671,
+            "fn": 22
+          }
+        },
+        "macro_f1": 0.598825887948195
+      },
+      "confusion_matrix": {
+        "entailment": {
+          "entailment": 1302,
+          "neutral": 91,
+          "contradiction": 11
+        },
+        "neutral": {
+          "entailment": 246,
+          "neutral": 884,
+          "contradiction": 1660
+        },
+        "contradiction": {
+          "entailment": 9,
+          "neutral": 13,
+          "contradiction": 690
+        }
+      },
+      "inference_time": 34.98326833300234,
+      "ms_per_pair": 7.130711034040429,
+      "nli_informed_novelty": {
+        "high_cosine_contradictions": {
+          "count": 54,
+          "cosine_threshold": 0.8912821859121323,
+          "nli_correctly_identified": 51,
+          "nli_accuracy_on_these": 0.9444444444444444
+        },
+        "low_cosine_entailments": {
+          "count": 11,
+          "cosine_threshold": 0.5677136033773422,
+          "nli_correctly_identified": 9,
+          "nli_accuracy_on_these": 0.8181818181818182
+        }
+      }
+    },
+    {
+      "model_name": "deberta-large-mnli",
+      "model_full_name": "MoritzLaurer/DeBERTa-v3-large-mnli-fever-anli-ling-wanli",
+      "metrics": {
+        "accuracy": 0.6461475743986955,
+        "n": 4906,
+        "correct": 3170,
+        "per_class": {
+          "entailment": {
+            "precision": 0.8885793871866295,
+            "recall": 0.9088319088319088,
+            "f1": 0.8985915492957746,
+            "support": 1404,
+            "tp": 1276,
+            "fp": 160,
+            "fn": 128
+          },
+          "neutral": {
+            "precision": 0.9110942249240122,
+            "recall": 0.4297491039426523,
+            "f1": 0.5840233804188991,
+            "support": 2790,
+            "tp": 1199,
+            "fp": 117,
+            "fn": 1591
+          },
+          "contradiction": {
+            "precision": 0.3226555246053853,
+            "recall": 0.976123595505618,
+            "f1": 0.484996510816469,
+            "support": 712,
+            "tp": 695,
+            "fp": 1459,
+            "fn": 17
+          }
+        },
+        "macro_f1": 0.6558704801770475
+      },
+      "confusion_matrix": {
+        "entailment": {
+          "entailment": 1276,
+          "neutral": 101,
+          "contradiction": 27
+        },
+        "neutral": {
+          "entailment": 159,
+          "neutral": 1199,
+          "contradiction": 1432
+        },
+        "contradiction": {
+          "entailment": 1,
+          "neutral": 16,
+          "contradiction": 695
+        }
+      },
+      "inference_time": 91.23625629199523,
+      "ms_per_pair": 18.596872460659444,
+      "nli_informed_novelty": {
+        "high_cosine_contradictions": {
+          "count": 54,
+          "cosine_threshold": 0.8912821859121323,
+          "nli_correctly_identified": 51,
+          "nli_accuracy_on_these": 0.9444444444444444
+        },
+        "low_cosine_entailments": {
+          "count": 11,
+          "cosine_threshold": 0.5677136033773422,
+          "nli_correctly_identified": 10,
+          "nli_accuracy_on_these": 0.9090909090909091
+        }
+      }
+    }
+  ]
+}

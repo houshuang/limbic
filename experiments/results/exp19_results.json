@@ -1,0 +1,125 @@
+{
+  "experiment": 19,
+  "benchmark": "NFCorpus (BEIR)",
+  "model": "paraphrase-multilingual-MiniLM-L12-v2",
+  "corpus_size": 3633,
+  "num_queries": 323,
+  "k": 10,
+  "embedding_dim": 384,
+  "embed_time_s": 23.4,
+  "relevance_scale": "0/1/2 (graded; binary threshold >= 1 for MRR/Recall)",
+  "methods": {
+    "vector": {
+      "nDCG@10": 0.23449403799445842,
+      "MRR@10": 0.4057005258243647,
+      "Recall@10": 0.10249412739258781,
+      "avg_query_ms": 0.5189498204333737
+    },
+    "fts5": {
+      "nDCG@10": 0.12568665282551586,
+      "MRR@10": 0.18878568971448229,
+      "Recall@10": 0.056279160893350076,
+      "avg_query_ms": 0.0817136222918499,
+      "empty_results": 234
+    },
+    "hybrid": {
+      "nDCG@10": 0.2795512252897855,
+      "MRR@10": 0.46389626025848923,
+      "Recall@10": 0.13030957965070994,
+      "avg_query_ms": 0.974348684211474
+    },
+    "vector+rerank": {
+      "nDCG@10": 0.3019875262190994,
+      "MRR@10": 0.5246019460415745,
+      "Recall@10": 0.12592012079532414,
+      "avg_query_ms": 570.541669377708
+    },
+    "hybrid+rerank": {
+      "nDCG@10": 0.3324505261655409,
+      "MRR@10": 0.5669136075482825,
+      "Recall@10": 0.14903630462960835,
+      "avg_query_ms": 495.8580046439621
+    }
+  },
+  "analysis": {
+    "vector_vs_fts5": {
+      "vector_wins": 149,
+      "fts5_wins": 57,
+      "ties": 117,
+      "avg_query_len_vector_wins": 4.4,
+      "avg_query_len_fts5_wins": 1.0,
+      "top5_vector_wins": [
+        {
+          "qid": "PLAIN-1805",
+          "query": "Parkinson's disease",
+          "vec_ndcg": 1.0,
+          "fts_ndcg": 0.0
+        },
+        {
+          "qid": "PLAIN-3074",
+          "query": "How to Help Prevent Abdominal Aortic Aneurysms",
+          "vec_ndcg": 1.0,
+          "fts_ndcg": 0.0
+        },
+        {
+          "qid": "PLAIN-2530",
+          "query": "Infectobesity: Adenovirus 36 and Childhood Obesity",
+          "vec_ndcg": 0.9653,
+          "fts_ndcg": 0.0
+        },
+        {
+          "qid": "PLAIN-1527",
+          "query": "liver disease",
+          "vec_ndcg": 0.9364,
+          "fts_ndcg": 0.0
+        },
+        {
+          "qid": "PLAIN-56",
+          "query": "Foods for Glaucoma",
+          "vec_ndcg": 0.8889,
+          "fts_ndcg": 0.0
+        }
+      ],
+      "top5_fts5_wins": [
+        {
+          "qid": "PLAIN-1473",
+          "query": "kohlrabi",
+          "vec_ndcg": 0.0,
+          "fts_ndcg": 1.0
+        },
+        {
+          "qid": "PLAIN-671",
+          "query": "benzene",
+          "vec_ndcg": 0.0,
+          "fts_ndcg": 1.0
+        },
+        {
+          "qid": "PLAIN-1288",
+          "query": "grapes",
+          "vec_ndcg": 0.0694,
+          "fts_ndcg": 0.9052
+        },
+        {
+          "qid": "PLAIN-741",
+          "query": "BPH",
+          "vec_ndcg": 0.1389,
+          "fts_ndcg": 0.8486
+        },
+        {
+          "qid": "PLAIN-892",
+          "query": "chickpeas",
+          "vec_ndcg": 0.2201,
+          "fts_ndcg": 0.8701
+        }
+      ]
+    },
+    "reranking_lift": {
+      "vector_base_ndcg": 0.2345,
+      "vector_reranked_ndcg": 0.302,
+      "vector_lift_pct": 28.8,
+      "hybrid_base_ndcg": 0.2796,
+      "hybrid_reranked_ndcg": 0.3325,
+      "hybrid_lift_pct": 18.9
+    }
+  }
+}

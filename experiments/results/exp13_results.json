@@ -1,0 +1,519 @@
+{
+  "experiment": "exp13_similarity_graph",
+  "model": "paraphrase-multilingual-MiniLM-L12-v2",
+  "sample_size": 2500,
+  "n_seeds": 20,
+  "thresholds_tested": [
+    0.6,
+    0.7,
+    0.8
+  ],
+  "elapsed_seconds": 26.10967707633972,
+  "n_greedy_clusters": 137,
+  "results_by_threshold": {
+    "0.6": {
+      "threshold": 0.6,
+      "graph_stats": {
+        "n_nodes_with_edges": 2019,
+        "n_isolated": 481,
+        "n_edges": 12794,
+        "mean_degree": 10.2352,
+        "median_degree": 4.0,
+        "max_degree": 132,
+        "pct_connected": 80.76
+      },
+      "build_time_seconds": 2.9002840518951416,
+      "n_connected_components": 36,
+      "component_sizes_top5": [
+        1922,
+        10,
+        5,
+        5,
+        4
+      ],
+      "bridge_claims": [
+        {
+          "rank": 1,
+          "index": 261,
+          "text": "Collaboration with kindergartens and schools inspires changes and enhancements in existing practices within teacher education programs.",
+          "betweenness": 48.45065089112642,
+          "degree": 96
+        },
+        {
+          "rank": 2,
+          "index": 1370,
+          "text": "Small sample size in the teacher-talk analysis reduced statistical power for predicting individual child outcomes. [Thesis response: The study focuses on describing the development of teacher-student interaction patterns as a mechanism for change rather than just outcomes.]",
+          "betweenness": 43.40659950357291,
+          "degree": 41
+        },
+        {
+          "rank": 3,
+          "index": 39,
+          "text": "Norwegian teacher education has serious deficiencies because it lacks solid research on classroom effectiveness in its curriculum.",
+          "betweenness": 42.33629657640878,
+          "degree": 82
+        },
+        {
+          "rank": 4,
+          "index": 875,
+          "text": "Too many students in lower secondary school feel that the teaching is not relevant, varied, or adapted to their needs.",
+          "betweenness": 39.630908922438586,
+          "degree": 132
+        },
+        {
+          "rank": 5,
+          "index": 2104,
+          "text": "Teachers face a conflict between their formative role in supporting students and their summative role in certifying grades.",
+          "betweenness": 39.372625920671794,
+          "degree": 88
+        }
+      ],
+      "bridge_time_seconds": 0.8229770660400391,
+      "lp_n_communities": 51,
+      "lp_community_sizes_top5": [
+        1287,
+        370,
+        88,
+        57,
+        31
+      ],
+      "greedy_clusters_split_by_lp": 9,
+      "trails": [
+        {
+          "source_text": "Students who qualify but cannot be offered a spot this autumn due to capacity will receive a reserve",
+          "target_text": "If employers break the terms of the partnership, the labor movement must prepare for industrial acti",
+          "direct_cosine": -0.08275653421878815,
+          "path_length": null,
+          "reachable": false
+        },
+        {
+          "source_text": "Historical perspectives are essential for understanding the development of children and childhood co",
+          "target_text": "The pursuit of a perfectly neutral and objective student assessment is futile.",
+          "direct_cosine": -0.0670742467045784,
+          "path_length": 6,
+          "min_step_cosine": 0.6014410257339478,
+          "mean_step_cosine": 0.6307201782862345,
+          "reachable": true
+        },
+        {
+          "source_text": "Norway is significantly lagging behind in providing national guidelines and technology for AI in sch",
+          "target_text": "The division of labor and responsibility between the family and the daycare institution is constantl",
+          "direct_cosine": -0.063544861972332,
+          "path_length": null,
+          "reachable": false
+        },
+        {
+          "source_text": "The exam system is normally a lottery due to random subject selection and varying exam formats.",
+          "target_text": "Multilevel interaction is essential for the formation of identity through stories, involving perspec",
+          "direct_cosine": -0.0590190552175045,
+          "path_length": 7,
+          "min_step_cosine": 0.6032251715660095,
+          "mean_step_cosine": 0.6407227601323809,
+          "reachable": true
+        },
+        {
+          "source_text": "The error in trend calculations likely does not affect the internal ranking of schools and students ",
+          "target_text": "Homi K. Bhabha's concepts of the 'unhomely' and the 'in-between' are applicable tools for analyzing ",
+          "direct_cosine": -0.051957208663225174,
+          "path_length": null,
+          "reachable": false
+        },
+        {
+          "source_text": "Expectations for AI in education are driven by the potential for automation to replace teachers in s",
+          "target_text": "The content is published under a Creative Commons Attribution 4.0 International license.",
+          "direct_cosine": -0.0373811312019825,
+          "path_length": null,
+          "reachable": false
+        },
+        {
+          "source_text": "Strategies such as syllable division and word analysis can be useful in the early phases of learning",
+          "target_text": "Infrastructure is invisible until it fails",
+          "direct_cosine": -0.0296022891998291,
+          "path_length": null,
+          "reachable": false
+        },
+        {
+          "source_text": "A new editor-in-chief is being introduced in Volume 15, Issue 2 of the journal.",
+          "target_text": "Students deserve the opportunity to acquire knowledge through practical and tactile methods in addit",
+          "direct_cosine": -0.019794220104813576,
+          "path_length": null,
+          "reachable": false
+        },
+        {
+          "source_text": "Prison officers function as 'gatekeepers' through the Aspirant Board (aspirantnemnda), which selects",
+          "target_text": "Removing extra school hours in Oslo would result in less flexible timetables and potentially less pr",
+          "direct_cosine": -0.01898171380162239,
+          "path_length": null,
+          "reachable": false
+        },
+        {
+          "source_text": "The normative nature of pedagogy means that ethics must take precedence over what is considered 'eff",
+          "target_text": "There is no research evidence that most students are drilled for weeks before the national reading t",
+          "direct_cosine": -0.01850546896457672,
+          "path_length": 6,
+          "min_step_cosine": 0.6038761734962463,
+          "mean_step_cosine": 0.6307123502095541,
+          "reachable": true
+        }
+      ],
+      "trails_reachable": 3,
+      "trails_total": 10,
+      "comparison": {
+        "mean_graph_size": 89.25,
+        "median_graph_size": 42.5,
+        "mean_vec10_size": 10.0,
+        "median_vec10_size": 10.0,
+        "mean_vec50_size": 50.0,
+        "median_vec50_size": 50.0,
+        "mean_graph_diversity": 0.4153757140040398,
+        "median_graph_diversity": 0.4889548420906067,
+        "mean_vec10_diversity": 0.4836666822433472,
+        "median_vec10_diversity": 0.4790867269039154,
+        "mean_graph_coverage": 79.0,
+        "median_graph_coverage": 39.0,
+        "mean_vec10_coverage": 9.5,
+        "median_vec10_coverage": 9.5,
+        "mean_serendipity_count": 57.0,
+        "median_serendipity_count": 17.5,
+        "mean_serendipity_frac": 0.4157377993529847,
+        "median_serendipity_frac": 0.5201887376237624,
+        "mean_graph_only_count": 66.85,
+        "median_graph_only_count": 19.5,
+        "mean_overlap_with_top50": 22.4,
+        "median_overlap_with_top50": 21.5
+      }
+    },
+    "0.7": {
+      "threshold": 0.7,
+      "graph_stats": {
+        "n_nodes_with_edges": 855,
+        "n_isolated": 1645,
+        "n_edges": 1271,
+        "mean_degree": 1.0168,
+        "median_degree": 0.0,
+        "max_degree": 27,
+        "pct_connected": 34.2
+      },
+      "build_time_seconds": 2.964154005050659,
+      "n_connected_components": 144,
+      "component_sizes_top5": [
+        439,
+        11,
+        10,
+        7,
+        7
+      ],
+      "bridge_claims": [
+        {
+          "rank": 1,
+          "index": 1013,
+          "text": "Preschool teachers and teacher educators struggle with interpreting the concept of 'teaching' in the context of the new curriculum.",
+          "betweenness": 33.433429336508866,
+          "degree": 11
+        },
+        {
+          "rank": 2,
+          "index": 1014,
+          "text": "Some preschool class teachers integrate both creative-functional and technical skill-building approaches in their teaching practice.",
+          "betweenness": 32.035225095939495,
+          "degree": 6
+        },
+        {
+          "rank": 3,
+          "index": 1952,
+          "text": "Literacy training projects can help preschool teachers identify ways to stimulate students and help them meet school-wide objectives.",
+          "betweenness": 24.055,
+          "degree": 5
+        },
+        {
+          "rank": 4,
+          "index": 2241,
+          "text": "Reading activities in kindergarten are vital for the development of children's language and literacy.",
+          "betweenness": 22.995,
+          "degree": 4
+        },
+        {
+          "rank": 5,
+          "index": 896,
+          "text": "The use of English literature in Norwegian kindergartens allows bilingual children to display their linguistic competence and support their peers.",
+          "betweenness": 16.39,
+          "degree": 4
+        }
+      ],
+      "bridge_time_seconds": 0.02296304702758789,
+      "lp_n_communities": 185,
+      "lp_community_sizes_top5": [
+        43,
+        37,
+        34,
+        28,
+        24
+      ],
+      "greedy_clusters_split_by_lp": 8,
+      "trails": [
+        {
+          "source_text": "Teaching is a political act and the teacher is a political actor.",
+          "target_text": "Recycled materials resist being named or coded because they originate from diverse industrial 'lefto",
+          "direct_cosine": -0.11600315570831299,
+          "path_length": null,
+          "reachable": false
+        },
+        {
+          "source_text": "Modern understandings of the 'child's best interest' emphasize the child's right to maintain an ever",
+          "target_text": "The exam text contains factual errors, such as incorrectly identifying a long-time professor as a le",
+          "direct_cosine": -0.11495602875947952,
+          "path_length": null,
+          "reachable": false
+        },
+        {
+          "source_text": "Data from Russian learners (Ionin & Wexler 2002) show rare errors in suppletive agreement, and Austr",
+          "target_text": "The state has increasingly authorized itself to intervene in the internal life of families to ensure",
+          "direct_cosine": -0.098870649933815,
+          "path_length": null,
+          "reachable": false
+        },
+        {
+          "source_text": "Visibility of disability, such as in physical activity or entertainment, can provoke public anger be",
+          "target_text": "The government intends to increase the investment framework for the interest compensation scheme to ",
+          "direct_cosine": -0.08604773133993149,
+          "path_length": null,
+          "reachable": false
+        },
+        {
+          "source_text": "The principle of 'freedom of choice' is deeply embedded in Norwegian society regarding childcare pol",
+          "target_text": "PISA results are useless for improving daily classroom instruction for teachers.",
+          "direct_cosine": -0.08108791708946228,
+          "path_length": null,
+          "reachable": false
+        },
+        {
+          "source_text": "The government should initiate the construction of 4,000 new 24-hour nursing home places.",
+          "target_text": "Issues like bullying, school refusal, and behavioral problems are symptoms of student dissatisfactio",
+          "direct_cosine": -0.08091884106397629,
+          "path_length": null,
+          "reachable": false
+        },
+        {
+          "source_text": "Declining application numbers are the primary reason for several study programs being withdrawn.",
+          "target_text": "Oral storytelling based on local history fosters children's sense of belonging and pride in their lo",
+          "direct_cosine": -0.061863187700510025,
+          "path_length": null,
+          "reachable": false
+        },
+        {
+          "source_text": "Rough play is categorized by participants along a continuum consisting of dangerous play, scary play",
+          "target_text": "Home schooling increased parental insight into children's academic levels and their perceived capaci",
+          "direct_cosine": -0.03472459688782692,
+          "path_length": null,
+          "reachable": false
+        },
+        {
+          "source_text": "Good names increase status and hence fundability.",
+          "target_text": "The childhood stories of marginalized youth reveal difficult ethical tensions between different gene",
+          "direct_cosine": -0.03285378962755203,
+          "path_length": null,
+          "reachable": false
+        },
+        {
+          "source_text": "The graduation celebration itself should be moved to June, rather than moving the exams.",
+          "target_text": "Justifying a claim of being bullied based solely on private feelings, without allowing the accused t",
+          "direct_cosine": -0.031349264085292816,
+          "path_length": null,
+          "reachable": false
+        }
+      ],
+      "trails_reachable": 0,
+      "trails_total": 10,
+      "comparison": {
+        "mean_graph_size": 2.05,
+        "median_graph_size": 0.0,
+        "mean_vec10_size": 10.0,
+        "median_vec10_size": 10.0,
+        "mean_vec50_size": 50.0,
+        "median_vec50_size": 50.0,
+        "mean_graph_diversity": 0.07209355235099793,
+        "median_graph_diversity": 0.0,
+        "mean_vec10_diversity": 0.4836666822433472,
+        "median_vec10_diversity": 0.4790867269039154,
+        "mean_graph_coverage": 1.75,
+        "median_graph_coverage": 0.0,
+        "mean_vec10_coverage": 9.5,
+        "median_vec10_coverage": 9.5,
+        "mean_serendipity_count": 0.3,
+        "median_serendipity_count": 0.0,
+        "mean_serendipity_frac": 0.019806763285024155,
+        "median_serendipity_frac": 0.0,
+        "mean_graph_only_count": 0.3,
+        "median_graph_only_count": 0.0,
+        "mean_overlap_with_top50": 1.75,
+        "median_overlap_with_top50": 0.0
+      }
+    },
+    "0.8": {
+      "threshold": 0.8,
+      "graph_stats": {
+        "n_nodes_with_edges": 184,
+        "n_isolated": 2316,
+        "n_edges": 328,
+        "mean_degree": 0.2624,
+        "median_degree": 0.0,
+        "max_degree": 15,
+        "pct_connected": 7.359999999999999
+      },
+      "build_time_seconds": 2.9538660049438477,
+      "n_connected_components": 60,
+      "component_sizes_top5": [
+        20,
+        15,
+        13,
+        10,
+        6
+      ],
+      "bridge_claims": [
+        {
+          "rank": 1,
+          "index": 2028,
+          "text": "Collaboration between preschool teacher students and professional musicians leads to an increased use of musical instruments in teaching children.",
+          "betweenness": 0.005,
+          "degree": 2
+        },
+        {
+          "rank": 2,
+          "index": 1932,
+          "text": "Barn is a peer-reviewed journal that is published quarterly.",
+          "betweenness": 0.005,
+          "degree": 4
+        },
+        {
+          "rank": 3,
+          "index": 2398,
+          "text": "The journal is published as an Open Access publication under the Creative Commons Attribution 4.0 International license.",
+          "betweenness": 0.0030000000000000005,
+          "degree": 8
+        },
+        {
+          "rank": 4,
+          "index": 1347,
+          "text": "The journal is published by Cappelen Damm Forskning under the Creative Commons Attribution 4.0 International (CC BY 4.0) license.",
+          "betweenness": 0.0030000000000000005,
+          "degree": 8
+        },
+        {
+          "rank": 5,
+          "index": 2434,
+          "text": "The journal is published as an Open Access publication under the Creative Commons Attribution 4.0 International license.",
+          "betweenness": 0.0030000000000000005,
+          "degree": 8
+        }
+      ],
+      "bridge_time_seconds": 0.0004780292510986328,
+      "lp_n_communities": 61,
+      "lp_community_sizes_top5": [
+        20,
+        13,
+        10,
+        10,
+        6
+      ],
+      "greedy_clusters_split_by_lp": 96,
+      "trails": [
+        {
+          "source_text": "PISA results are useless for improving daily classroom instruction for teachers.",
+          "target_text": "General family dynamics of care identified in 1930s correspondence remain relevant and significant i",
+          "direct_cosine": -0.10795044898986816,
+          "path_length": null,
+          "reachable": false
+        },
+        {
+          "source_text": "The Directorate for Education and Training (Udir) is sending a very bad signal regarding the handlin",
+          "target_text": "The physical environment is a key determinant for the physical activity levels of children.",
+          "direct_cosine": -0.08128755539655685,
+          "path_length": null,
+          "reachable": false
+        },
+        {
+          "source_text": "During the summer weeks schools were closed, the 'Kors p\u00e5 halsen' service received nearly 4,600 inqu",
+          "target_text": "Other people, particularly those with special needs, can move us so intensely that they exert an eth",
+          "direct_cosine": -0.06841576844453812,
+          "path_length": null,
+          "reachable": false
+        },
+        {
+          "source_text": "The funding consists of 20.1 million NOK in new budget funds and 23.3 million NOK from gambling proc",
+          "target_text": "Modern understandings of children's play must account for the significant influence of contemporary ",
+          "direct_cosine": -0.05908896028995514,
+          "path_length": null,
+          "reachable": false
+        },
+        {
+          "source_text": "Statistics Norway (SSB) has corrected its official statistics and made corrected microdata available",
+          "target_text": "High school contact with parents is characterized as 'on-demand,' occurring mostly when students exp",
+          "direct_cosine": -0.05667963624000549,
+          "path_length": null,
+          "reachable": false
+        },
+        {
+          "source_text": "The primary methods used in school-based youth work involve guiding group formation, managing recess",
+          "target_text": "Statistics Norway (SSB) has corrected its official statistics and made corrected microdata available",
+          "direct_cosine": -0.05323941633105278,
+          "path_length": null,
+          "reachable": false
+        },
+        {
+          "source_text": "Adults should limit their own screen use when they are with children under the age of two.",
+          "target_text": "Articles in 'Barn' are primarily published in Scandinavian languages, while English is used for cont",
+          "direct_cosine": -0.05064341425895691,
+          "path_length": null,
+          "reachable": false
+        },
+        {
+          "source_text": "High school standpoint and term grades have remained slightly higher than pre-pandemic levels.",
+          "target_text": "The output of a language model is entirely dependent on the specific texts it was trained on.",
+          "direct_cosine": -0.049859896302223206,
+          "path_length": null,
+          "reachable": false
+        },
+        {
+          "source_text": "Household screen use is best understood through the 'moral economy' of the home and the 'social imag",
+          "target_text": "All students in Norway are considered multilingual because the term encompasses all languages and la",
+          "direct_cosine": -0.04567865654826164,
+          "path_length": null,
+          "reachable": false
+        },
+        {
+          "source_text": "Many kindergartens currently have too few staff present when the children need it.",
+          "target_text": "Every level of education completed contributes incrementally to future success.",
+          "direct_cosine": -0.03662627935409546,
+          "path_length": null,
+          "reachable": false
+        }
+      ],
+      "trails_reachable": 0,
+      "trails_total": 10,
+      "comparison": {
+        "mean_graph_size": 0.1,
+        "median_graph_size": 0.0,
+        "mean_vec10_size": 10.0,
+        "median_vec10_size": 10.0,
+        "mean_vec50_size": 50.0,
+        "median_vec50_size": 50.0,
+        "mean_graph_diversity": 0.0,
+        "median_graph_diversity": 0.0,
+        "mean_vec10_diversity": 0.4836666822433472,
+        "median_vec10_diversity": 0.4790867269039154,
+        "mean_graph_coverage": 0.1,
+        "median_graph_coverage": 0.0,
+        "mean_vec10_coverage": 9.5,
+        "median_vec10_coverage": 9.5,
+        "mean_serendipity_count": 0.0,
+        "median_serendipity_count": 0.0,
+        "mean_serendipity_frac": 0.0,
+        "median_serendipity_frac": 0.0,
+        "mean_graph_only_count": 0.0,
+        "median_graph_only_count": 0.0,
+        "mean_overlap_with_top50": 0.1,
+        "median_overlap_with_top50": 0.0
+      }
+    }
+  }
+}

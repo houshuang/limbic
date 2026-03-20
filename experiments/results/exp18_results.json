@@ -1,0 +1,87 @@
+{
+  "experiment": "exp18_incremental_clustering",
+  "date": "2026-03-19 20:03",
+  "threshold": 0.85,
+  "dataset_newsgroups": {
+    "n_samples": 2000,
+    "embedding_model": "paraphrase-multilingual-MiniLM-L12-v2",
+    "embedding_dim": 384
+  },
+  "results": {
+    "newsgroups_batch": {
+      "v_measure": 0.5558,
+      "homogeneity": 0.9689,
+      "completeness": 0.3897,
+      "n_clusters": 16,
+      "n_clustered": 98,
+      "n_singletons": 1902,
+      "singleton_rate": 0.951,
+      "mean_size": 6.1,
+      "median_size": 2.0,
+      "max_size": 67,
+      "min_size": 2,
+      "size_p90": 2.5,
+      "time_s": 3.92,
+      "n_co_cluster_pairs": 2228
+    },
+    "newsgroups_incremental_original": {
+      "v_measure": 0.5558,
+      "homogeneity": 0.9689,
+      "completeness": 0.3897,
+      "n_clusters": 16,
+      "n_clustered": 98,
+      "n_singletons": 1902,
+      "singleton_rate": 0.951,
+      "mean_size": 6.1,
+      "median_size": 2.0,
+      "max_size": 67,
+      "min_size": 2,
+      "size_p90": 2.5,
+      "time_s": 5.79,
+      "total_clusters_incl_singletons": 1918,
+      "n_co_cluster_pairs": 2228,
+      "agreement_batch_in_inc": 1.0,
+      "agreement_inc_in_batch": 1.0
+    },
+    "newsgroups_incremental_shuffled": {
+      "v_measure_mean": 0.5558,
+      "v_measure_std": 0.0,
+      "v_measure_min": 0.5558,
+      "v_measure_max": 0.5558,
+      "n_clusters_mean": 16.0,
+      "n_clusters_std": 0.0,
+      "n_clusters_min": 16,
+      "n_clusters_max": 16,
+      "agreement_batch_in_inc_mean": 1.0,
+      "agreement_batch_in_inc_std": 0.0,
+      "agreement_inc_in_batch_mean": 1.0,
+      "agreement_inc_in_batch_std": 0.0,
+      "time_mean_s": 2.24,
+      "runs": 5
+    },
+    "domain_incremental": {
+      "n_clusters": 207,
+      "n_clustered": 524,
+      "n_singletons": 4476,
+      "singleton_rate": 0.8952,
+      "mean_size": 2.5,
+      "median_size": 2.0,
+      "max_size": 19,
+      "min_size": 2,
+      "size_p90": 2.0,
+      "n_claims": 5000,
+      "embed_time_s": 25.02,
+      "cluster_time_s": 24.19,
+      "total_clusters_incl_singletons": 4683
+    },
+    "domain_order_sensitivity": {
+      "runs": 3,
+      "n_clusters_mean": 208.7,
+      "n_clusters_std": 1.2,
+      "n_clusters_min": 207,
+      "n_clusters_max": 210,
+      "coefficient_of_variation": 0.006,
+      "time_mean_s": 36.28
+    }
+  }
+}
