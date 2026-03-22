@@ -3,7 +3,9 @@
 import numpy as np
 import pytest
 
-from amygdala.cluster import (
+from limbic.amygdala.cluster import (
+    classify_pairs_with_confidence,
+    format_for_eval_harness,
     greedy_centroid_cluster,
     IncrementalCentroidCluster,
     pairwise_cosine,
@@ -137,3 +139,202 @@ class TestIncrementalCentroidCluster:
         vec = np.random.default_rng(0).standard_normal(10).astype(np.float32)
         inc.add(0, vec)
         assert inc.n_clusters == 1
+
+
+class TestClassifyPairsWithConfidence:
+    """Tests for classify_pairs_with_confidence."""
+
+    @pytest.fixture
+    def sample_texts(self):
+        return [
+            "Deep learning improves NLP tasks",
+            "Neural networks enhance language processing",
+            "Cats are popular pets worldwide",
+            "The stock market rose 2% today",
+            "Machine learning transforms text analysis",
+        ]
+
+    def test_high_score_classified_as_duplicate(self, sample_texts):
+        pairs = [(0, 1, 0.92)]
+        confident, uncertain = classify_pairs_with_confidence(pairs, sample_texts)
+        assert len(confident) == 1
+        assert len(uncertain) == 0
+        assert confident[0]["classification"] == "duplicate"
+        assert confident[0]["confidence"] == 0.92
+
+    def test_low_score_classified_as_different(self, sample_texts):
+        pairs = [(0, 3, 0.15)]
+        confident, uncertain = classify_pairs_with_confidence(pairs, sample_texts)
+        assert len(confident) == 1
+        assert len(uncertain) == 0
+        assert confident[0]["classification"] == "different"
+        assert confident[0]["confidence"] == pytest.approx(0.85)
+
+    def test_mid_score_is_uncertain(self, sample_texts):
+        pairs = [(0, 4, 0.55)]
+        confident, uncertain = classify_pairs_with_confidence(pairs, sample_texts)
+        assert len(confident) == 0
+        assert len(uncertain) == 1
+        item = uncertain[0]
+        assert item["classification"] is None
+        assert item["i"] == 0
+        assert item["j"] == 4
+        assert item["score"] == 0.55
+        assert "reason" in item
+        assert "ambiguous zone" in item["reason"]
+
+    def test_mixed_pairs(self, sample_texts):
+        pairs = [
+            (0, 1, 0.92),  # high -> duplicate
+            (0, 4, 0.55),  # mid -> uncertain
+            (0, 3, 0.15),  # low -> different
+            (1, 4, 0.80),  # high -> duplicate
+            (2, 3, 0.40),  # mid -> uncertain
+        ]
+        confident, uncertain = classify_pairs_with_confidence(pairs, sample_texts)
+        assert len(confident) == 3
+        assert len(uncertain) == 2
+        classifications = [c["classification"] for c in confident]
+        assert classifications.count("duplicate") == 2
+        assert classifications.count("different") == 1
+
+    def test_custom_labels(self, sample_texts):
+        pairs = [(0, 1, 0.90), (0, 3, 0.10)]
+        confident, uncertain = classify_pairs_with_confidence(
+            pairs, sample_texts, labels=["same_claim", "unrelated"]
+        )
+        assert confident[0]["classification"] == "same_claim"
+        assert confident[1]["classification"] == "unrelated"
+
+    def test_custom_thresholds(self, sample_texts):
+        pairs = [(0, 1, 0.55)]
+        # With default thresholds (0.75/0.30), 0.55 is uncertain
+        _, uncertain = classify_pairs_with_confidence(pairs, sample_texts)
+        assert len(uncertain) == 1
+
+        # With lower confident threshold, 0.55 becomes confident
+        confident, uncertain = classify_pairs_with_confidence(
+            pairs, sample_texts, confident_threshold=0.50
+        )
+        assert len(confident) == 1
+        assert len(uncertain) == 0
+        assert confident[0]["classification"] == "duplicate"
+
+    def test_empty_pairs(self, sample_texts):
+        confident, uncertain = classify_pairs_with_confidence([], sample_texts)
+        assert confident == []
+        assert uncertain == []
+
+    def test_boundary_at_confident_threshold(self, sample_texts):
+        # Exactly at confident_threshold should be classified as duplicate
+        pairs = [(0, 1, 0.75)]
+        confident, uncertain = classify_pairs_with_confidence(pairs, sample_texts)
+        assert len(confident) == 1
+        assert confident[0]["classification"] == "duplicate"
+
+    def test_boundary_at_reject_threshold(self, sample_texts):
+        # Exactly at reject_threshold should be uncertain (not rejected)
+        pairs = [(0, 1, 0.30)]
+        confident, uncertain = classify_pairs_with_confidence(pairs, sample_texts)
+        assert len(uncertain) == 1
+        assert uncertain[0]["classification"] is None
+
+    def test_just_below_reject_threshold(self, sample_texts):
+        pairs = [(0, 1, 0.29)]
+        confident, uncertain = classify_pairs_with_confidence(pairs, sample_texts)
+        assert len(confident) == 1
+        assert confident[0]["classification"] == "different"
+
+    def test_labels_too_few_raises(self, sample_texts):
+        with pytest.raises(ValueError, match="at least 2"):
+            classify_pairs_with_confidence(
+                [(0, 1, 0.5)], sample_texts, labels=["only_one"]
+            )
+
+    def test_uncertain_confidence_at_midpoint_is_zero(self, sample_texts):
+        # Midpoint of [0.30, 0.75) is 0.525
+        pairs = [(0, 1, 0.525)]
+        _, uncertain = classify_pairs_with_confidence(pairs, sample_texts)
+        assert len(uncertain) == 1
+        assert uncertain[0]["confidence"] == pytest.approx(0.0, abs=1e-6)
+
+    def test_uncertain_confidence_near_edges(self, sample_texts):
+        # Near confident_threshold: should have high confidence
+        pairs = [(0, 1, 0.74)]
+        _, uncertain = classify_pairs_with_confidence(pairs, sample_texts)
+        assert uncertain[0]["confidence"] > 0.9
+
+        # Near reject_threshold: should also have high confidence
+        pairs = [(0, 1, 0.31)]
+        _, uncertain = classify_pairs_with_confidence(pairs, sample_texts)
+        assert uncertain[0]["confidence"] > 0.9
+
+
+class TestFormatForEvalHarness:
+    """Tests for format_for_eval_harness."""
+
+    @pytest.fixture
+    def sample_texts(self):
+        return [
+            "Deep learning improves NLP tasks",
+            "Neural networks enhance language processing",
+            "Cats are popular pets worldwide",
+            "The stock market rose 2% today",
+            "Machine learning transforms text analysis",
+        ]
+
+    def test_basic_format(self, sample_texts):
+        uncertain = [
+            {"i": 0, "j": 4, "score": 0.55, "classification": None,
+             "confidence": 0.1, "reason": "ambiguous"},
+        ]
+        result = format_for_eval_harness(uncertain, sample_texts)
+        assert len(result) == 1
+        item = result[0]
+        assert item["id"] == "pair_0_4"
+        assert item["content"] == sample_texts[0]
+        assert item["output"] == sample_texts[4]
+        assert item["meta"] == "cosine=0.550"
+        assert item["output_label"] == "Compared text"
+
+    def test_multiple_pairs(self, sample_texts):
+        uncertain = [
+            {"i": 0, "j": 4, "score": 0.55, "classification": None,
+             "confidence": 0.1, "reason": "ambiguous"},
+            {"i": 2, "j": 3, "score": 0.40, "classification": None,
+             "confidence": 0.3, "reason": "ambiguous"},
+        ]
+        result = format_for_eval_harness(uncertain, sample_texts)
+        assert len(result) == 2
+        assert result[0]["id"] == "pair_0_4"
+        assert result[1]["id"] == "pair_2_3"
+        assert result[1]["content"] == sample_texts[2]
+        assert result[1]["output"] == sample_texts[3]
+
+    def test_empty_uncertain(self, sample_texts):
+        result = format_for_eval_harness([], sample_texts)
+        assert result == []
+
+    def test_score_formatting_precision(self, sample_texts):
+        uncertain = [
+            {"i": 0, "j": 1, "score": 0.123456789, "classification": None,
+             "confidence": 0.0, "reason": "ambiguous"},
+        ]
+        result = format_for_eval_harness(uncertain, sample_texts)
+        assert result[0]["meta"] == "cosine=0.123"
+
+    def test_roundtrip_with_classify(self, sample_texts):
+        """End-to-end: extract_pairs -> classify -> format."""
+        pairs = [
+            (0, 1, 0.92),
+            (0, 4, 0.55),
+            (0, 3, 0.15),
+            (2, 3, 0.40),
+        ]
+        confident, uncertain = classify_pairs_with_confidence(pairs, sample_texts)
+        harness_items = format_for_eval_harness(uncertain, sample_texts)
+        # Two uncertain pairs: (0,4) at 0.55 and (2,3) at 0.40
+        assert len(harness_items) == 2
+        ids = {item["id"] for item in harness_items}
+        assert "pair_0_4" in ids
+        assert "pair_2_3" in ids

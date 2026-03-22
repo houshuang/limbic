@@ -4,6 +4,8 @@ Includes:
 - pairwise_cosine: cosine similarity matrix
 - extract_pairs: find similar pairs above threshold, with optional group filtering
 - greedy_centroid_cluster / complete_linkage_cluster: two clustering strategies
+- classify_pairs_with_confidence: triage pairs into confident/uncertain buckets
+- format_for_eval_harness: convert uncertain pairs to eval harness format
 """
 
 import numpy as np
@@ -245,3 +247,124 @@ def complete_linkage_cluster(
             clusters.append(cluster)
 
     return clusters
+
+
+def classify_pairs_with_confidence(
+    pairs: list[tuple[int, int, float]],
+    texts: list[str],
+    labels: list[str] | None = None,
+    confident_threshold: float = 0.75,
+    reject_threshold: float = 0.30,
+) -> tuple[list[dict], list[dict]]:
+    """Classify pairs and separate confident from uncertain results.
+
+    Uses cosine similarity score to triage pairs into three zones:
+    - score >= confident_threshold: auto-classified as "duplicate"
+    - score < reject_threshold: auto-classified as "different"
+    - score in between: marked as uncertain, needing human review
+
+    This is designed to feed into a calibration-eval harness where a
+    human reviewer resolves the uncertain pairs, producing labeled data
+    that can be used to tune thresholds.
+
+    Args:
+        pairs: List of (i, j, score) tuples from extract_pairs().
+        texts: The original text list (indexed by i, j).
+        labels: Relationship labels to classify into. Defaults to
+            ["duplicate", "different"]. Only the first two are used
+            for confident/rejected; uncertain items get None.
+        confident_threshold: Pairs with score >= this are auto-accepted
+            as the first label (default "duplicate").
+        reject_threshold: Pairs with score < this are auto-classified
+            as the second label (default "different").
+
+    Returns:
+        (confident, uncertain) tuple.
+        confident: items with clear classifications. Each dict has keys:
+            i, j, score, classification, confidence.
+        uncertain: items needing human review. Each dict has keys:
+            i, j, score, classification (None), confidence, reason.
+    """
+    if labels is None:
+        labels = ["duplicate", "different"]
+    if len(labels) < 2:
+        raise ValueError("labels must have at least 2 entries")
+
+    accept_label = labels[0]
+    reject_label = labels[1]
+
+    confident: list[dict] = []
+    uncertain: list[dict] = []
+
+    for i, j, score in pairs:
+        if score >= confident_threshold:
+            confident.append({
+                "i": i,
+                "j": j,
+                "score": score,
+                "classification": accept_label,
+                "confidence": score,
+            })
+        elif score < reject_threshold:
+            confident.append({
+                "i": i,
+                "j": j,
+                "score": score,
+                "classification": reject_label,
+                "confidence": 1.0 - score,
+            })
+        else:
+            # Ambiguous zone: confidence is low, proportional to distance
+            # from the midpoint of the ambiguous range
+            midpoint = (confident_threshold + reject_threshold) / 2
+            distance_from_mid = abs(score - midpoint)
+            range_half = (confident_threshold - reject_threshold) / 2
+            amb_confidence = distance_from_mid / range_half if range_half > 0 else 0.0
+
+            uncertain.append({
+                "i": i,
+                "j": j,
+                "score": score,
+                "classification": None,
+                "confidence": amb_confidence,
+                "reason": (
+                    f"Cosine similarity {score:.3f} is in the ambiguous zone "
+                    f"[{reject_threshold:.2f}, {confident_threshold:.2f}). "
+                    f"Too similar to auto-reject, too dissimilar to auto-accept."
+                ),
+            })
+
+    return confident, uncertain
+
+
+def format_for_eval_harness(
+    uncertain: list[dict],
+    texts: list[str],
+) -> list[dict]:
+    """Convert uncertain pairs into the eval harness data format.
+
+    Produces a list of dicts suitable for a human-evaluation or
+    LLM-as-judge calibration harness, where each item presents
+    two texts for comparison.
+
+    Args:
+        uncertain: List of uncertain pair dicts from
+            classify_pairs_with_confidence().
+        texts: The original text list (indexed by i, j in each pair).
+
+    Returns:
+        List of dicts with keys: id, content, output, meta, output_label.
+    """
+    results = []
+    for item in uncertain:
+        i = item["i"]
+        j = item["j"]
+        score = item["score"]
+        results.append({
+            "id": f"pair_{i}_{j}",
+            "content": texts[i],
+            "output": texts[j],
+            "meta": f"cosine={score:.3f}",
+            "output_label": "Compared text",
+        })
+    return results
