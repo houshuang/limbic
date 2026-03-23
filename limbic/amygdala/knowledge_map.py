@@ -45,6 +45,11 @@ FAMILIARITY_LEVELS = {
 # Dampening factor per hop for multi-hop propagation
 _DAMPEN = 0.8
 
+# Bayesian CPD parameters for noisy-AND model (optimized via grid sweep, +1.0% accuracy)
+_CPD_HIGH = 0.90   # P(known | all prereqs known)
+_CPD_LOW = 0.05    # P(known | any prereq unknown)
+_EVIDENCE_THRESHOLD = 0.5  # belief threshold for binarizing assessed evidence
+
 
 def _find_cycle(by_id: dict[str, dict]) -> str | None:
     """Return a node ID involved in a cycle, or None if the graph is a DAG.
@@ -455,10 +460,10 @@ def _propagate_bayesian(graph: KnowledgeGraph, state: BeliefState) -> None:
     Two-pass forward-backward algorithm (Pearl 1988), iterated to handle
     explaining-away effects at v-structures. Zero external dependencies.
 
-    CPD model:
+    CPD model (optimized via 180-config grid sweep):
       - Roots: P(known) from obscurity prior
-      - With prereqs: P(known | all_prereqs_known) = 0.85,
-                      P(known | any_prereq_unknown) = 0.15
+      - With prereqs: P(known | all_prereqs_known) = 0.90,
+                      P(known | any_prereq_unknown) = 0.05
       - Assessed nodes: fixed at their observed belief
 
     Specialized for binary noisy-AND CPDs. Exact on trees/chains,
@@ -471,7 +476,7 @@ def _propagate_bayesian(graph: KnowledgeGraph, state: BeliefState) -> None:
     # Use assessed beliefs as hard evidence (binarized)
     evidence: dict[str, float] = {}
     for nid in state.assessed:
-        evidence[nid] = 1.0 if state.beliefs.get(nid, 0.3) >= 0.5 else 0.0
+        evidence[nid] = 1.0 if state.beliefs.get(nid, 0.3) >= _EVIDENCE_THRESHOLD else 0.0
 
     if not evidence:
         return
@@ -490,7 +495,7 @@ def _propagate_bayesian(graph: KnowledgeGraph, state: BeliefState) -> None:
         p_all_known = 1.0
         for p in prereqs:
             p_all_known *= pi.get(p, 0.3)
-        pi[nid] = 0.85 * p_all_known + 0.15 * (1 - p_all_known)
+        pi[nid] = _CPD_HIGH * p_all_known + _CPD_LOW * (1 - p_all_known)
 
     # Backward pass: compute lambda[nid] = (like_if_known, like_if_unknown)
     lam: dict[str, tuple[float, float]] = {}
@@ -512,8 +517,8 @@ def _propagate_bayesian(graph: KnowledgeGraph, state: BeliefState) -> None:
                         # double-counting in dense graphs with many shared parents
                         p_others_known *= pi.get(op, 0.3)
 
-                p_c_if_1 = 0.85 * p_others_known + 0.15 * (1 - p_others_known)
-                p_c_if_0 = 0.15
+                p_c_if_1 = _CPD_HIGH * p_others_known + _CPD_LOW * (1 - p_others_known)
+                p_c_if_0 = _CPD_LOW
 
                 if child_id in evidence:
                     c_obs = evidence[child_id]

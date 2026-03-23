@@ -4,6 +4,26 @@ All notable changes to the limbic monorepo (formerly amygdala) are documented he
 
 ---
 
+## 2026-03-23 -- Bayesian CPD parameter optimization
+
+### Changed
+- Optimized Bayesian propagation CPD parameters via 180-config grid sweep:
+  - `_CPD_HIGH`: 0.85 → 0.90 (P(known | all prereqs known))
+  - `_CPD_LOW`: 0.15 → 0.05 (P(known | any prereq unknown))
+  - Bayesian accuracy: 69.5% → 70.4% (+0.9%)
+- Extracted hardcoded CPD values into module-level constants (`_CPD_HIGH`, `_CPD_LOW`, `_EVIDENCE_THRESHOLD`)
+
+## 2026-03-23 -- Kulturperler migration to limbic
+
+### Changed
+- Updated kulturperler DR-arkivet scripts to use limbic instead of custom implementations:
+  - `import_drdk_batch.py` and `enrich_from_drdk.py`: replaced custom state management (load_state/save_state/update_production_state with fcntl locking) with `limbic.cerebellum.StateStore`; replaced custom JSONL logging (log_event/get_log_path) with `limbic.cerebellum.AuditLogger`; replaced bare `sqlite3.connect()` with `limbic.amygdala.connect()`
+  - `fetch_drdk_catalog.py`: replaced `sqlite3.connect()` with `limbic.amygdala.connect()`
+  - `cleanup_utils.py`: added `get_db()`, `get_state_store()`, `get_audit_logger()` helpers that wrap limbic for use by downstream scripts
+
+### Fixed
+- Documentation: `StateStore` examples incorrectly referenced SQLite (`.db` extension, "WAL mode") — it actually uses JSON files with atomic temp-file writes and `fcntl.flock()`. Fixed in both README.md and cerebellum/README.md.
+
 ## 2026-03-22 -- Calibration metrics and confidence-based pair classification
 
 ### Added
