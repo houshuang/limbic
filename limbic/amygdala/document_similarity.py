@@ -89,7 +89,10 @@ def find_similar_documents(
     if isinstance(text_fields, str):
         field_weights = {text_fields: 1.0}
     else:
-        field_weights = text_fields
+        field_weights = dict(text_fields)
+
+    if not field_weights:
+        raise ValueError("text_fields must specify at least one field")
 
     if model is None:
         model = EmbeddingModel()
@@ -238,6 +241,8 @@ def _embed_weighted(
     # Weighted combination
     combined = np.zeros((len(ref_ids), model.dim), dtype=np.float32)
     total_weight = sum(field_weights.values())
+    if total_weight <= 0:
+        raise ValueError("text_fields weights must sum to a positive value")
 
     for fname, weight in field_weights.items():
         _, embs = field_results[fname]

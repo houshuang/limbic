@@ -105,16 +105,32 @@ def reference_exists(
     field_name: str,
     target_type: str,
     *,
+    sub_field: str | None = None,
     severity: str = "error",
 ) -> Rule:
-    """Referenced entity must exist in the dataset. Handles scalar and list fields."""
+    """Referenced entity must exist in the dataset.
+
+    Handles scalar, flat list, and nested dict-list fields:
+      - reference_exists('work', 'author_id', 'person') — scalar
+      - reference_exists('work', 'author_ids', 'person') — flat list
+      - reference_exists('perf', 'credits', 'person', sub_field='person_id') — nested
+    """
     def check(etype: str, eid: str, data: dict, all_entities: dict) -> list[str]:
         ref_val = data.get(field_name)
         if ref_val is None:
             return []
         target_entities = all_entities.get(target_type, {})
         if isinstance(ref_val, list):
-            missing = [str(r) for r in ref_val if str(r) not in target_entities]
+            if sub_field is not None:
+                # Nested dict-list: credits[].person_id
+                ref_ids = [
+                    str(item.get(sub_field))
+                    for item in ref_val
+                    if isinstance(item, dict) and item.get(sub_field) is not None
+                ]
+            else:
+                ref_ids = [str(r) for r in ref_val]
+            missing = [r for r in ref_ids if r not in target_entities]
             if missing:
                 return [f"{field_name} references {target_type}/{m} which does not exist"
                         for m in missing]

@@ -283,25 +283,34 @@ def classify_pairs(
 
     results: list[dict] = [None] * len(texts)  # type: ignore[list-item]
 
-    # Pass 1: cosine handles easy cases
-    ambiguous_indices = []
+    # Pass 1: cosine handles easy cases (low band only)
+    nli_indices = []
     for i, score in enumerate(scores):
-        if score >= known_threshold:
-            results[i] = {"classification": "KNOWN", "score": score, "nli_label": None}
-        elif score < extends_threshold:
+        if score < extends_threshold:
             results[i] = {"classification": "NEW", "score": score, "nli_label": None}
         else:
-            ambiguous_indices.append(i)
+            # Both ambiguous and high-cosine pairs go through NLI.
+            # High-cosine contradictions are the primary use case for the cascade.
+            nli_indices.append(i)
 
-    # Pass 2: NLI resolves the ambiguous zone in one batch
-    if ambiguous_indices:
-        ambiguous_texts = [texts[i] for i in ambiguous_indices]
-        nli_results = nli_classify_batch(ambiguous_texts)
-        for idx, nli in zip(ambiguous_indices, nli_results):
-            classification = _NLI_TO_CLASSIFICATION.get(nli["label"], "EXTENDS")
+    # Pass 2: NLI resolves ambiguous zone and catches high-cosine contradictions
+    if nli_indices:
+        nli_texts = [texts[i] for i in nli_indices]
+        nli_results = nli_classify_batch(nli_texts)
+        for idx, nli in zip(nli_indices, nli_results):
+            score = scores[idx]
+            if score >= known_threshold and nli["label"] != "contradiction":
+                # High-cosine, not contradicted → KNOWN
+                classification = "KNOWN"
+            elif score >= known_threshold and nli["label"] == "contradiction":
+                # High-cosine contradiction — the case this cascade exists for
+                classification = "NEW"
+            else:
+                # Ambiguous zone: NLI fully decides
+                classification = _NLI_TO_CLASSIFICATION.get(nli["label"], "EXTENDS")
             results[idx] = {
                 "classification": classification,
-                "score": scores[idx],
+                "score": score,
                 "nli_label": nli["label"],
             }
 

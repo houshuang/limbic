@@ -76,6 +76,8 @@ class Index:
         self.db_path = db_path
         self.conn = connect(db_path)
         self.conn.executescript(SCHEMA)
+        self._vi_cache: dict[str | None, VectorIndex] = {}
+        self._vi_dirty = True
 
     def add_document(self, path: str, chunks: list[dict], collection: str = "default",
                      metadata: dict | None = None, mtime: float | None = None):
@@ -97,12 +99,15 @@ class Index:
                 "INSERT INTO chunks (doc_path,content,metadata,collection,embedding) VALUES (?,?,?,?,?)",
                 (path, chunk["content"], json.dumps(chunk.get("metadata", {})), collection, blob))
         self.conn.commit()
-        self._rebuild_fts()
+        self._sync_fts_for(path)
+        self._vi_dirty = True
 
     def add_claims(self, claims: list[dict], collection: str = "claims"):
         """Add claims (idempotent). Each needs 'id', 'content', optional 'metadata'/'embedding'."""
+        doc_paths = []
         for c in claims:
             dp = f"claim:{c['id']}"
+            doc_paths.append(dp)
             now = time.time()
             self.conn.execute("DELETE FROM chunks WHERE doc_path = ?", (dp,))
             self.conn.execute(
@@ -114,15 +119,44 @@ class Index:
                 "INSERT INTO chunks (doc_path,content,metadata,collection,embedding) VALUES (?,?,?,?,?)",
                 (dp, c["content"], json.dumps(c.get("metadata", {})), collection, blob))
         self.conn.commit()
-        self._rebuild_fts()
+        for dp in doc_paths:
+            self._sync_fts_for(dp)
+        self._vi_dirty = True
 
-    def _rebuild_fts(self):
-        self.conn.execute("DELETE FROM chunks_fts")
-        for r in self.conn.execute("SELECT rowid as rid, content FROM chunks").fetchall():
-            self.conn.execute("INSERT INTO chunks_fts (rowid, content) VALUES (?,?)", (r["rid"], r["content"]))
+    def _sync_fts_for(self, doc_path: str):
+        """Incrementally sync FTS index for chunks belonging to doc_path."""
+        # Get current chunk rowids for this doc
+        chunk_rows = self.conn.execute(
+            "SELECT rowid as rid, content FROM chunks WHERE doc_path = ?", (doc_path,)
+        ).fetchall()
+        new_rowids = {r["rid"] for r in chunk_rows}
+        # Get existing FTS rowids for this doc's chunks
+        if new_rowids:
+            ph = ",".join("?" * len(new_rowids))
+            existing = self.conn.execute(
+                f"SELECT rowid FROM chunks_fts WHERE rowid IN ({ph})", list(new_rowids)
+            ).fetchall()
+            existing_rowids = {r[0] for r in existing}
+        else:
+            existing_rowids = set()
+        # Delete stale FTS entries (chunks that were removed)
+        old_rowids = self.conn.execute(
+            "SELECT f.rowid FROM chunks_fts f LEFT JOIN chunks c ON f.rowid = c.rowid WHERE c.rowid IS NULL"
+        ).fetchall()
+        for r in old_rowids:
+            self.conn.execute("DELETE FROM chunks_fts WHERE rowid = ?", (r[0],))
+        # Insert new FTS entries
+        for r in chunk_rows:
+            if r["rid"] not in existing_rowids:
+                self.conn.execute(
+                    "INSERT OR REPLACE INTO chunks_fts (rowid, content) VALUES (?,?)",
+                    (r["rid"], r["content"])
+                )
         self.conn.commit()
 
     def _build_vector_index(self, collection: str | None = None) -> VectorIndex:
+        if not self._vi_dirty and collection in self._vi_cache:
+            return self._vi_cache[collection]
         vi = VectorIndex()
         q = "SELECT id, embedding FROM chunks WHERE embedding IS NOT NULL"
         params: list = []
@@ -134,6 +168,8 @@ class Index:
             ids = [str(r["id"]) for r in rows]
             vecs = np.vstack([np.frombuffer(r["embedding"], dtype=np.float32).copy() for r in rows])
             vi.add(ids, vecs)
+        self._vi_cache[collection] = vi
+        self._vi_dirty = False
         return vi
 
     @staticmethod

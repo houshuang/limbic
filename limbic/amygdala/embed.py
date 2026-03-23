@@ -17,9 +17,12 @@ education) but hurts diverse corpora. Three modes:
   +24% discrimination gap at 128d. (Exp 11)
 """
 
+import logging
 import re
 from collections import OrderedDict
 from dataclasses import dataclass, field
+
+log = logging.getLogger(__name__)
 
 import numpy as np
 
@@ -83,6 +86,7 @@ class EmbeddingModel:
         self._cache: OrderedDict[str, np.ndarray] = OrderedDict()
         self._model = None
         self._whitening: WhiteningParams | None = None
+        self._whitening_warned = False
         self._persistent_cache = None
         if cache_path is not None:
             from .cache import PersistentEmbeddingCache
@@ -106,9 +110,19 @@ class EmbeddingModel:
             return self._genericize(text)
         return text
 
+    @property
+    def _whitening_configured(self) -> bool:
+        return self.whiten_dims is not None or self.whiten_epsilon is not None or self.whiten_abt is not None
+
     def _apply_whitening(self, embeddings: np.ndarray) -> np.ndarray:
         """Apply PCA whitening: center, project, renormalize."""
         if self._whitening is None:
+            if self._whitening_configured and not self._whitening_warned:
+                log.warning(
+                    "Whitening configured but not fitted — call fit_whitening() first. "
+                    "Returning raw embeddings."
+                )
+                self._whitening_warned = True
             return embeddings
         centered = embeddings - self._whitening.mean
         whitened = centered @ self._whitening.W

@@ -86,7 +86,7 @@ pip install -e ".[dev,llm,hippocampus]"
 | **embed** | Sentence embedding with 3 whitening modes, Matryoshka truncation, genericization, persistent cache | 83–452x speedup with SQLite cache; +32% nearest-neighbor separation with Soft-ZCA whitening |
 | **search** | Numpy vector search, SQLite FTS5, hybrid RRF fusion, cross-encoder reranking | +32.5% nDCG with reranking; RRF 4x more robust than convex fusion under embedding degradation |
 | **novelty** | Multi-signal novelty scoring: global + topic-local + centroid specificity + temporal decay + NLI cascade | +17% novel/known separation with centroid specificity; NLI fixes 94% of high-cosine contradictions |
-| **cluster** | Greedy centroid clustering (batch + incremental), complete linkage, pairwise cosine, confidence-calibrated pair classification | Incremental matches batch quality at threshold >= 0.85, 1.8x faster, zero order sensitivity |
+| **cluster** | Greedy centroid clustering (batch + incremental), complete linkage, pairwise cosine, confidence-calibrated pair classification | Incremental matches batch quality at threshold >= 0.85, 1.8x faster; order-sensitive at lower thresholds |
 | **document_similarity** | Document-level thematic similarity using weighted multi-field embeddings | 94% accuracy on human-rated pairs; AUROC=0.930 on 300-pair dataset; rho=0.818 |
 | **calibrate** | Cohen's kappa, LLM judge validation (Bootstrap Validation Protocol), intra-rater reliability | Validates LLM judges against human gold labels |
 | **cache** | Persistent SQLite-backed embedding cache | 20K texts: 48s cold → 585ms warm |
@@ -279,7 +279,7 @@ clusters = greedy_centroid_cluster(embeddings, threshold=0.85)
 # Returns list of clusters (each a list of indices). Singletons excluded.
 
 # Incremental clustering -- for streaming/continuous ingestion
-# Identical quality to batch at threshold >= 0.85, 1.8x faster, zero order sensitivity
+# Close to batch quality at threshold >= 0.85, 1.8x faster (order-sensitive)
 clusterer = IncrementalCentroidCluster(threshold=0.85)
 for i, vec in enumerate(vecs):
     cluster_id = clusterer.add(i, vec)
@@ -786,7 +786,7 @@ The three packages are independent but designed to work together:
 
 ## Tests
 
-234 tests covering all three packages:
+290 tests covering all three packages:
 
 ```bash
 pip install -e ".[dev]"

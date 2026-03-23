@@ -110,9 +110,15 @@ class FTS5Index:
             self.conn.execute("INSERT OR REPLACE INTO fts_docs (id,content,metadata) VALUES (?,?,?)",
                               (d["id"], d["content"], json.dumps(d.get("metadata", {}))))
         self.conn.commit()
-        self.conn.execute("DELETE FROM fts_index")
-        for r in self.conn.execute("SELECT rowid, content FROM fts_docs").fetchall():
-            self.conn.execute("INSERT INTO fts_index (rowid, content) VALUES (?,?)", (r["rowid"], r["content"]))
+        # Sync FTS incrementally instead of full rebuild
+        for d in docs:
+            rowid = self.conn.execute(
+                "SELECT rowid FROM fts_docs WHERE id = ?", (d["id"],)
+            ).fetchone()[0]
+            self.conn.execute(
+                "INSERT OR REPLACE INTO fts_index (rowid, content) VALUES (?,?)",
+                (rowid, d["content"])
+            )
         self.conn.commit()
 
     @staticmethod
