@@ -368,7 +368,7 @@ fringes = knowledge_fringes(graph, state)  # outer_fringe = ready to learn next
 
 | Backend | Accuracy (K=5) | Latency | Dependencies |
 |---------|---------------|---------|-------------|
-| `"heuristic"` | 62-65% | 0.01ms | none |
+| `"heuristic"` | 65-69% | 0.01ms | none |
 | `"bayesian"` | 69-74% | 1.7ms | pgmpy |
 
 The heuristic uses bidirectional rule-based propagation (known signals raise

@@ -1,0 +1,9 @@
+iter	score	ceiling	gap	delta	status	description
+0	0.6661	0.7209	0.0547	0.0000	baseline	Current heuristic propagation
+1	0.6774	0.7209	0.0434	+0.0113	KEPT	Global prereqs sweep: re-check all nodes after each update
+2	0.6830	0.7209	0.0378	+0.0056	KEPT	Add unknown-prereq lowering to global sweep
+3	0.6647	0.7209	0.0561	-0.0183	REVERTED	Geometric mean of prereqs instead of min (too permissive)
+4	0.6830	0.7209	0.0378	+0.0000	REVERTED	Unknown-child backward inference (no improvement, adds complexity)
+5	0.6830	0.7209	0.0378	+0.0000	REVERTED	Sibling inference via shared prereqs (no improvement)
+6	0.6860	0.7209	0.0348	+0.0030	KEPT	Include "basic" familiarity in upward propagation (floor=0.65)
+7	0.6321	0.7209	0.0888	-0.0539	REVERTED	heard_of bidirectional + softer ceiling (too permissive)
