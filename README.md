@@ -795,9 +795,9 @@ python -m pytest tests/ -v
 
 | Package | Tests |
 |---------|-------|
-| limbic.amygdala | 147 |
-| limbic.hippocampus | 54 |
-| limbic.cerebellum | 33 |
+| limbic.amygdala | 201 |
+| limbic.hippocampus | 55 |
+| limbic.cerebellum | 34 |
 
 CI runs on every PR via GitHub Actions.
 
@@ -807,7 +807,7 @@ Limbic powers search, data curation, and knowledge management in several systems
 
 - **otak / alif** — a **67K-node claims-first knowledge system** using embedding, novelty detection, hybrid search, clustering (canonical finding synthesis), and cosine+NLI cascade for deduplication. Podcast fact-checking showed that structured search changes 31% of verdicts vs. flat embedding search alone.
 - **petrarca** — a **news curation pipeline** using document similarity to find related articles, calibrated thresholds for feed ranking vs near-duplicate detection, and hybrid search across multilingual content.
-- **kulturperler** — a **Nordic performing arts archive** (10,000+ entities) using proposals for all data changes, cascade merges for deduplicating persons/works, tiered LLM verification of 2,400+ works across 30+ audit sessions, veto-gate dedup of fuzzy-matched person names. Total audit cost: ~$270.
+- **kulturperler** — a **Nordic performing arts archive** (10,000+ entities) using proposals for all data changes, cascade merges for deduplicating persons/works, tiered LLM verification of 2,400+ works across 30+ audit sessions, veto-gate dedup of fuzzy-matched person names. Total audit cost: ~$270. The DR-arkivet import scripts use `StateStore` and `AuditLogger` for resumable batch imports with JSONL audit trails, and `connect()` for all SQLite access.
 - A **reading and annotation system** using novelty scoring and `classify_pairs` to detect when new annotations overlap with existing knowledge.
 - A **conversation search tool** using hybrid RRF search over chat history.
 
