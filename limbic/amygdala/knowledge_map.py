@@ -368,10 +368,11 @@ def _propagate_prereqs_met(
     graph: KnowledgeGraph, state: BeliefState,
     node_id: str, depth: int, visited: set[str],
 ) -> None:
-    """Raise children whose prerequisites are now confidently known.
+    """Raise children whose prerequisites are believed known.
 
-    If all of a child's prerequisites have belief >= 0.7 (likely known),
-    raise the child's belief. Dampens with depth to avoid over-propagation.
+    Models P(child_known | prereqs_known) ≈ 0.85, dampened per hop.
+    Uses minimum prerequisite belief as the signal strength, so partially
+    confident prerequisites still propagate (just less strongly).
     """
     for child_id in graph.children_of(node_id):
         if child_id in visited or child_id in state.assessed:
@@ -379,12 +380,13 @@ def _propagate_prereqs_met(
         visited.add(child_id)
         prereqs = graph.prerequisites_of(child_id)
         prereq_beliefs = [state.beliefs.get(p, 0.3) for p in prereqs]
-        if all(b >= 0.7 for b in prereq_beliefs):
-            # All prereqs likely known → raise child toward 0.7 (dampened by depth)
-            floor = 0.7 * (_DAMPEN ** depth)
+        min_prereq = min(prereq_beliefs) if prereq_beliefs else 0.3
+        if min_prereq >= 0.5:
+            # Scale floor by weakest prereq confidence: strong prereqs → ~0.85, weak → ~0.5
+            base = 0.5 + 0.35 * ((min_prereq - 0.5) / 0.5)  # maps 0.5→0.5, 1.0→0.85
+            floor = base * (_DAMPEN ** (depth * 0.5))  # gentler dampen: sqrt of original
             current = state.beliefs.get(child_id, 0.3)
             state.beliefs[child_id] = max(current, floor)
-            # Recurse to grandchildren
             _propagate_prereqs_met(graph, state, child_id, depth + 1, visited)
 
 

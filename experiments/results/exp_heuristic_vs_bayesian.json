@@ -1,0 +1,105 @@
+{
+  "experiment": "heuristic_vs_bayesian",
+  "date": "2026-03-23 09:37",
+  "n_trials": 40,
+  "k_values": [
+    3,
+    5,
+    8,
+    10
+  ],
+  "baseline": {
+    "wide_tree_5x4_K3": {
+      "heuristic": 0.6056,
+      "bayesian": 0.6306,
+      "gap": 0.025
+    },
+    "wide_tree_5x4_K5": {
+      "heuristic": 0.6516,
+      "bayesian": 0.6938,
+      "gap": 0.0422
+    },
+    "wide_tree_5x4_K8": {
+      "heuristic": 0.6846,
+      "bayesian": 0.7846,
+      "gap": 0.1
+    },
+    "wide_tree_5x4_K10": {
+      "heuristic": 0.6818,
+      "bayesian": 0.7955,
+      "gap": 0.1136
+    },
+    "dense_dag_20_40_K3": {
+      "heuristic": 0.6441,
+      "bayesian": 0.7029,
+      "gap": 0.0588
+    },
+    "dense_dag_20_40_K5": {
+      "heuristic": 0.6667,
+      "bayesian": 0.6883,
+      "gap": 0.0217
+    },
+    "dense_dag_20_40_K8": {
+      "heuristic": 0.6771,
+      "bayesian": 0.7292,
+      "gap": 0.0521
+    },
+    "dense_dag_20_40_K10": {
+      "heuristic": 0.7375,
+      "bayesian": 0.7675,
+      "gap": 0.03
+    },
+    "chain_20_K3": {
+      "heuristic": 0.6809,
+      "bayesian": 0.7147,
+      "gap": 0.0338
+    },
+    "chain_20_K5": {
+      "heuristic": 0.64,
+      "bayesian": 0.7017,
+      "gap": 0.0617
+    },
+    "chain_20_K8": {
+      "heuristic": 0.6771,
+      "bayesian": 0.75,
+      "gap": 0.0729
+    },
+    "chain_20_K10": {
+      "heuristic": 0.6625,
+      "bayesian": 0.7625,
+      "gap": 0.1
+    },
+    "diamond_5x3_K3": {
+      "heuristic": 0.7173,
+      "bayesian": 0.7577,
+      "gap": 0.0404
+    },
+    "diamond_5x3_K5": {
+      "heuristic": 0.7364,
+      "bayesian": 0.7795,
+      "gap": 0.0432
+    },
+    "diamond_5x3_K8": {
+      "heuristic": 0.6969,
+      "bayesian": 0.7906,
+      "gap": 0.0938
+    },
+    "diamond_5x3_K10": {
+      "heuristic": 0.775,
+      "bayesian": 0.7958,
+      "gap": 0.0208
+    }
+  },
+  "error_analysis": {
+    "topology": "wide_tree_5x4",
+    "K": 10,
+    "error_types": {
+      "false_positive": 46,
+      "false_negative": 88,
+      "correct": 306
+    },
+    "n_disagreements": 109,
+    "pgmpy_wins": 77,
+    "heuristic_wins": 32
+  }
+}
