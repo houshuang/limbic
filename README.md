@@ -84,7 +84,7 @@ pip install -e ".[dev,llm,hippocampus]"
 | Module | What it does | Key numbers |
 |--------|-------------|-------------|
 | **embed** | Sentence embedding with 3 whitening modes, Matryoshka truncation, genericization, persistent cache | 83–452x speedup with SQLite cache; +32% nearest-neighbor separation with Soft-ZCA whitening |
-| **search** | Numpy vector search, SQLite FTS5, hybrid RRF fusion, cross-encoder reranking | +32.5% nDCG with reranking; RRF 4x more robust than convex fusion under embedding degradation |
+| **search** | Numpy vector search, SQLite FTS5, hybrid RRF fusion, cross-encoder reranking | RRF 4x more robust than convex fusion; reranking +16% nDCG on medical, -5% on scientific (dataset-dependent) |
 | **novelty** | Multi-signal novelty scoring: global + topic-local + centroid specificity + temporal decay + NLI cascade | +17% novel/known separation with centroid specificity; NLI fixes 94% of high-cosine contradictions |
 | **cluster** | Greedy centroid clustering (batch + incremental), complete linkage, pairwise cosine, confidence-calibrated pair classification | Incremental matches batch quality at threshold >= 0.85, 1.8x faster; order-sensitive at lower thresholds |
 | **document_similarity** | Document-level thematic similarity using weighted multi-field embeddings | 94% accuracy on human-rated pairs; AUROC=0.930 on 300-pair dataset; rho=0.818 |
@@ -203,7 +203,7 @@ results = fts.search("text content", limit=10)
 hybrid = HybridSearch(vector_index=vi, fts_index=fts)
 results = hybrid.search(query_vec, "query text", limit=10)
 
-# Cross-encoder reranking -- +32.5% nDCG@10 on SciFact
+# Cross-encoder reranking (requires results with content)
 reranked = rerank("query text", results)  # uses ms-marco-MiniLM-L-6-v2
 ```
 
@@ -254,11 +254,11 @@ result = nli_classify("Education improves outcomes",
 Cosine similarity **cannot distinguish agreement from disagreement**. Two claims that say opposite things about the same topic often have *higher* cosine similarity than two unrelated claims. This is well-documented in the literature but rarely addressed in embedding libraries.
 
 The `classify_pairs()` function implements a cosine + NLI cascade:
-- **Above threshold** (e.g., 0.88): cosine-confident KNOWN
-- **Below threshold** (e.g., 0.72): cosine-confident NEW
-- **In between**: NLI cross-encoder decides (entailment/contradiction/neutral)
+- **Below threshold** (e.g., 0.72): cosine-confident NEW (skip NLI)
+- **Above threshold**: NLI cross-encoder runs to catch high-cosine contradictions
+  - Entailment → KNOWN, Contradiction → NEW, Neutral → EXTENDS
 
-This gives 94% accuracy on high-cosine contradictions at ~13ms per pair.
+This catches the case that matters most: claims that cosine says are similar but actually contradict each other. 94% accuracy at ~13ms per pair.
 
 #### Performance at scale
 
@@ -367,10 +367,11 @@ fringes = knowledge_fringes(graph, state)
 
 Features:
 - **Expected Information Gain** probe selection (simulates all possible answers)
-- **Multi-hop belief propagation** through prerequisite DAG (with dampening)
+- **Two propagation backends**: rule-based heuristic (0.08ms) or exact belief propagation (0.16ms), both zero-dependency
 - **Overclaiming detection** via foil concepts (signal detection theory)
 - **KST inner/outer fringe** computation for learning path recommendations
 - **LLM-powered graph generation** from domain descriptions or document outlines
+- **DAG validation**: rejects cycles and duplicate node IDs at construction
 
 ```python
 # Generate a knowledge graph from a topic description
@@ -512,7 +513,7 @@ validator = Validator([
     required_field("work", "title"),
     valid_values("work", "category", {"teater", "opera", "konsert", "film"}),
     reference_exists("performance", "work_id", "work"),
-    no_orphans("person", [("work", "playwrights"), ("performance", "credits")]),
+    no_orphans("person", [("work", "playwrights"), ("performance", "credits", "person_id")]),
     conditional_required("work", lambda d: d.get("category") == "opera", "composers",
                          condition_label="category is opera"),
 ])
@@ -705,7 +706,7 @@ Every significant design choice in limbic.amygdala was tested in controlled expe
 | 6 | NLI for contradictions? | 94% accuracy on high-cosine contradictions | SICK (4,906 pairs) |
 | 7 | Text genericization? | +14% on numbers/dates, 0% proper nouns, -6% URLs | 50 claim pairs |
 | 8 | Are defaults optimal? | **Yes.** Rank 1/120 in grid search. | 120 configs, 3 datasets |
-| 9 | Cross-encoder reranking? | +32.5% nDCG@10 on SciFact | 5K docs, 300 queries |
+| 9 | Cross-encoder reranking? | +16% on NFCorpus, -5% on SciFact (dataset-dependent) | 5K + 3.6K docs |
 | 10 | Temporal decay? | +9.3% Spearman at lambda=0.02 (half-life ~35 days) | Time-ordered calibration |
 | 11 | Whitening on domain data? | +34.5% gap at 64d, +24% at 128d | 27K education claims |
 | 12 | Soft-ZCA vs PCA? | Soft-ZCA strictly better (+32% vs +24%) | Domain calibration |
