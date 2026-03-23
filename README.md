@@ -29,7 +29,7 @@ limbic.amygdala          limbic.hippocampus          limbic.cerebellum
  Calibration metrics     Validation                  Context builder
  SQLite helpers            (composable rules)           (for LLM prompts)
                          YAML store
-                          (file-locked, atomic)
+                          (file-locked atomic)
 ```
 
 | Package | Purpose | Core dependency |
@@ -91,7 +91,7 @@ pip install -e ".[dev,llm,hippocampus]"
 | **calibrate** | Cohen's kappa, LLM judge validation (Bootstrap Validation Protocol), intra-rater reliability | Validates LLM judges against human gold labels |
 | **cache** | Persistent SQLite-backed embedding cache | 20K texts: 48s cold → 585ms warm |
 | **index** | SQLite document/chunk storage with hybrid search | Single-file, zero-config, FTS5 built in |
-| **knowledge_map** | Adaptive knowledge probing via Shannon entropy maximization and Bayesian belief propagation | Converges in 8–12 questions on 30-node graphs |
+| **knowledge_map** | Adaptive knowledge probing via entropy maximization with heuristic or exact belief propagation (zero deps) | Converges in 8–12 questions on 30-node graphs |
 | **llm** | Multi-provider LLM client (Gemini, Anthropic, OpenAI) with structured output and retry | Auto-fallback, cost tracking, async + sync |
 
 ### Quick start
@@ -555,8 +555,8 @@ store.backup("person", "42")             # timestamped backup
 from limbic.cerebellum import BatchProcessor, StateStore, ItemResult
 from pathlib import Path
 
-# State persists across runs (JSON file with file locking)
-state_store = StateStore(Path("audit_state.json"))
+# State persists across runs (SQLite with WAL mode)
+state_store = StateStore(Path("audit_state.db"))
 
 processor = BatchProcessor(
     state_store=state_store,
@@ -587,7 +587,7 @@ result = processor.process(
 Features:
 - **Resumable**: already-processed items are skipped on restart
 - **Budget-tracked**: stops at `max_cost`, warns at 80%
-- **Atomic state**: file-locked JSON prevents corruption from concurrent writers
+- **Atomic state**: SQLite WAL mode for concurrent-safe persistence
 - **ETA logging**: per-batch cost and time-remaining estimates
 
 ### Multi-tier orchestration
@@ -629,7 +629,7 @@ orchestrator = TieredOrchestrator(
         VerificationTier("triage", fast_triage, cost_estimate=0.001, description="Fast LLM check"),
         VerificationTier("deep", deep_verify, cost_estimate=0.05, description="Thorough verification"),
     ],
-    state_store=StateStore(Path("audit_state.json")),
+    state_store=StateStore(Path("audit_state.db")),
 )
 
 results = orchestrator.run(
@@ -753,7 +753,7 @@ limbic/
 ```
 
 Design principles:
-- **No external services.** Everything runs locally. SQLite for persistence, numpy for vectors, JSON/YAML for state.
+- **No external services.** Everything runs locally. SQLite for persistence, numpy for vectors, YAML for hippocampus entities.
 - **Opt-in complexity.** Basic usage needs only numpy + sentence-transformers. YAML support, LLM features, and orchestration are all opt-in via extras.
 - **Storage-agnostic.** Cascade merges, validation, and batch processing use callback functions — bring your own storage backend.
 - **Numpy arrays everywhere.** All embedding operations return `np.ndarray` for interop.

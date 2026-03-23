@@ -144,8 +144,8 @@ def init_beliefs(
     Args:
         graph: The knowledge graph.
         prior_fn: Custom prior function(node_dict) -> float. Default uses obscurity.
-        propagator: "heuristic" (rule-based, zero deps) or "bayesian" (pgmpy exact
-            inference, +7-10% accuracy, requires pgmpy installed).
+        propagator: "heuristic" (rule-based, zero deps) or "bayesian" (forward-backward
+            belief propagation, +1-5% accuracy, also zero deps).
     """
     beliefs = {}
     for node in graph.nodes:
@@ -301,7 +301,7 @@ def update_beliefs(
 def _propagate(graph: KnowledgeGraph, state: BeliefState, node_id: str, familiarity: str) -> None:
     """Propagate belief update through the prerequisite DAG.
 
-    Dispatches to heuristic (rule-based) or Bayesian (pgmpy exact inference).
+    Dispatches to heuristic (rule-based) or Bayesian (forward-backward BP).
     """
     if state._propagator == "bayesian":
         _propagate_bayesian(graph, state)
@@ -316,7 +316,7 @@ def _propagate_heuristic(
 
     After the local update, does a global sweep: re-checks all nodes to see
     if prerequisites-met propagation should fire based on cumulative evidence.
-    This approximates pgmpy's global inference pass.
+    This approximates the Bayesian backend's global inference pass.
     """
     if familiarity in ("none", "heard_of"):
         _propagate_down(graph, state, node_id, ceiling=0.1, depth=0, visited=set())
@@ -461,8 +461,8 @@ def _propagate_bayesian(graph: KnowledgeGraph, state: BeliefState) -> None:
                       P(known | any_prereq_unknown) = 0.15
       - Assessed nodes: fixed at their observed belief
 
-    Equivalent to pgmpy VariableElimination on the same DAG, but ~10x faster
-    (~0.1ms vs ~1.7ms) because it's specialized for binary noisy-AND.
+    Specialized for binary noisy-AND CPDs. Exact on trees/chains,
+    approximate on dense DAGs with v-structures (~0.16ms).
     """
     topo = _topo_sort(graph)
     if not topo:

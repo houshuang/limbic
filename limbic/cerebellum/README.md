@@ -36,8 +36,8 @@ The core building block: process items in batches, track costs, skip already-pro
 from limbic.cerebellum import BatchProcessor, StateStore, ItemResult
 from pathlib import Path
 
-# State persists across runs (JSON file with file locking)
-state_store = StateStore(Path("audit_state.json"))
+# State persists across runs (SQLite with WAL mode)
+state_store = StateStore(Path("audit_state.db"))
 
 processor = BatchProcessor(
     state_store=state_store,
@@ -69,7 +69,7 @@ result = processor.process(
 
 - **Resumable:** Already-processed items (status `done`, `verified`, `applied`, `skipped`) are automatically skipped on restart. Crash mid-batch? Just restart — completed batches are preserved.
 - **Budget-tracked:** Stops before the next batch if `max_cost` would be exceeded. Logs a warning at 80% budget consumption.
-- **Atomic state:** `StateStore` uses `fcntl.flock()` for file-level locking and writes through a temp file to prevent corruption.
+- **Atomic state:** `StateStore` uses SQLite WAL mode for concurrent-safe persistence. Individual item updates are single SQL upserts.
 - **ETA logging:** After each batch, logs elapsed time, cost, and estimated time remaining.
 - **Error isolation:** If `process_fn` raises an exception, all items in that batch are marked as `"error"` and processing continues with the next batch.
 
@@ -96,12 +96,12 @@ result = processor.process(
 ### StateStore
 
 ```python
-state_store = StateStore(Path("audit_state.json"))
+state_store = StateStore(Path("audit_state.db"))
 
-# Load state (or fresh state if file doesn't exist)
+# Load state (or fresh state if DB doesn't exist)
 state = state_store.load()
 
-# Update a single item (thread-safe via file locking)
+# Update a single item (concurrent-safe via SQLite WAL)
 state_store.update_item("person/42", "done", cost=0.003, confidence=0.95)
 
 # Get items that haven't been processed yet
@@ -154,7 +154,7 @@ orchestrator = TieredOrchestrator(
         VerificationTier("triage", fast_triage, cost_estimate=0.001, description="Fast LLM check"),
         VerificationTier("deep", deep_verify, cost_estimate=0.05, description="Thorough verification"),
     ],
-    state_store=StateStore(Path("audit_state.json")),
+    state_store=StateStore(Path("audit_state.db")),
 )
 
 # Run all items through triage, escalate flagged items to deep verification

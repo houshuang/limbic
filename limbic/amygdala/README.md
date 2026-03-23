@@ -32,7 +32,7 @@ pip install "limbic[llm]"
 | **cache** | Persistent SQLite-backed embedding cache | 20K texts: 48s cold → 585ms warm |
 | **index** | SQLite document/chunk storage with hybrid search, `connect()` helper | Single-file, zero-config, FTS5 built in |
 | **calibrate** | Cohen's kappa, LLM judge validation (Bootstrap Validation Protocol), intra-rater reliability | Validates LLM judges against human gold labels |
-| **knowledge_map** | Adaptive knowledge probing via entropy maximization, with heuristic or exact Bayesian propagation (pgmpy) | Converges in 8–12 questions on 30-node graphs |
+| **knowledge_map** | Adaptive knowledge probing via entropy maximization, with heuristic or exact Bayesian propagation | Converges in 8–12 questions on 30-node graphs |
 | **knowledge_map_gen** | LLM-powered knowledge graph generation from topic descriptions | Generates 15–50 node prerequisite DAGs |
 | **llm** | Multi-provider LLM client (Gemini, Anthropic, OpenAI) with structured output and retry | Auto-fallback, cost tracking, async + sync |
 
