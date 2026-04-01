@@ -27,6 +27,12 @@ MODELS = {
 FALLBACK = {"gemini3-flash": "gemini25-flash"}
 MAX_RETRIES, BACKOFF_BASE = 3, 2
 
+# Cost logging (optional)
+try:
+    from limbic.cerebellum.cost_log import cost_log as _cost_log
+except ImportError:
+    _cost_log = None
+
 
 def _calc_cost(key, inp, out):
     m = MODELS[key]
@@ -136,6 +142,15 @@ async def generate_structured(prompt: str, schema: dict, system_prompt: str = "Y
         result, model = json.loads(raw["text"]), fb
         m = fm
     cost = _calc_cost(model, raw["input_tokens"], raw["output_tokens"])
+    if _cost_log:
+        try:
+            _cost_log.log(project=os.environ.get("COST_LOG_PROJECT", "limbic"),
+                          model=f"{m['provider']}/{m['id']}",
+                          prompt_tokens=raw["input_tokens"],
+                          completion_tokens=raw["output_tokens"],
+                          cost_usd=cost)
+        except Exception:
+            pass
     return result, {"total_cost_usd": cost, "input_tokens": raw["input_tokens"],
                     "output_tokens": raw["output_tokens"], "duration_s": raw["duration_s"],
                     "model": model, "provider": m["provider"]}
