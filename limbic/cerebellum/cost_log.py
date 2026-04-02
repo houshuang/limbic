@@ -392,6 +392,324 @@ cost_log = CostLog()
 
 
 # ---------------------------------------------------------------------------
+# Sync helper
+# ---------------------------------------------------------------------------
+
+def sync_from_remote(host: str = "alif",
+                     remote_db: str = "/opt/limbic-data/llm_costs.db") -> int:
+    """Rsync the remote cost DB and merge into local. Returns new row count."""
+    import subprocess
+    import tempfile
+    tmp = tempfile.mktemp(suffix=".db")
+    result = subprocess.run(
+        ["rsync", "-az", f"{host}:{remote_db}", tmp],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        log.warning("rsync failed: %s", result.stderr.strip())
+        return -1
+    cl = CostLog()
+    n = cl.merge_from(tmp)
+    os.unlink(tmp)
+    return n
+
+
+# ---------------------------------------------------------------------------
+# Dashboard server (stdlib only — no Flask/datasette needed)
+# ---------------------------------------------------------------------------
+
+_DASHBOARD_HTML = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLM Cost Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  :root { --bg: #f7f4ec; --ink: #2a2420; --muted: #6a6458; --accent: #8b2500;
+          --rule: #e4dfd4; --card: #fff; --green: #2a7a4a; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'DM Sans', -apple-system, sans-serif; background: var(--bg);
+         color: var(--ink); max-width: 1100px; margin: 0 auto; padding: 24px; }
+  h1 { font-size: 22px; font-weight: 600; margin-bottom: 4px; }
+  .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+  .sync-btn { background: var(--accent); color: #fff; border: none; padding: 6px 16px;
+              border-radius: 4px; cursor: pointer; font-size: 13px; float: right; margin-top: -38px; }
+  .sync-btn:hover { opacity: 0.85; }
+  .totals { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+  .total-card { background: var(--card); border: 1px solid var(--rule); border-radius: 8px;
+                padding: 16px 20px; flex: 1; min-width: 140px; }
+  .total-card .label { font-size: 11px; color: var(--muted); text-transform: uppercase;
+                       letter-spacing: 0.05em; }
+  .total-card .value { font-size: 28px; font-weight: 600; margin-top: 4px; }
+  .total-card .value.cost { color: var(--accent); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 24px; }
+  @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
+  .panel { background: var(--card); border: 1px solid var(--rule); border-radius: 8px; padding: 20px; }
+  .panel h2 { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: var(--muted); font-weight: 500; padding: 6px 8px;
+       border-bottom: 1px solid var(--rule); font-size: 11px; text-transform: uppercase; }
+  td { padding: 6px 8px; border-bottom: 1px solid var(--rule); }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .controls { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+  .controls select, .controls input { padding: 6px 10px; border: 1px solid var(--rule);
+    border-radius: 4px; font-size: 13px; background: var(--card); }
+  canvas { max-height: 260px; }
+  .chart-panel { grid-column: 1 / -1; }
+  .last-sync { font-size: 11px; color: var(--muted); }
+</style>
+</head>
+<body>
+<h1>LLM Cost Dashboard</h1>
+<div class="subtitle">
+  <span id="db-path"></span> &middot; <span class="last-sync" id="last-sync"></span>
+</div>
+<button class="sync-btn" onclick="doSync()">Sync from Hetzner</button>
+
+<div class="controls">
+  <select id="days" onchange="reload()">
+    <option value="1">Last 24h</option>
+    <option value="7" selected>Last 7 days</option>
+    <option value="30">Last 30 days</option>
+    <option value="90">Last 90 days</option>
+    <option value="0">All time</option>
+  </select>
+</div>
+
+<div class="totals" id="totals"></div>
+
+<div class="grid">
+  <div class="panel chart-panel">
+    <h2>Daily Cost</h2>
+    <canvas id="daily-chart"></canvas>
+  </div>
+  <div class="panel">
+    <h2>By Project</h2>
+    <table id="by-project"></table>
+  </div>
+  <div class="panel">
+    <h2>By Model</h2>
+    <table id="by-model"></table>
+  </div>
+  <div class="panel">
+    <h2>By Host</h2>
+    <table id="by-host"></table>
+  </div>
+  <div class="panel">
+    <h2>Recent Calls</h2>
+    <table id="recent"></table>
+  </div>
+</div>
+
+<script>
+let dailyChart = null;
+const $ = id => document.getElementById(id);
+
+async function api(path) {
+  const r = await fetch('/api/' + path);
+  return r.json();
+}
+
+function fmt(n) { return '$' + n.toFixed(4); }
+function fmtK(n) { return n >= 1000 ? (n/1000).toFixed(1) + 'k' : n.toString(); }
+
+function renderTable(id, rows, cols) {
+  const el = $(id);
+  let h = '<thead><tr>' + cols.map(c => `<th>${c[0]}</th>`).join('') + '</tr></thead><tbody>';
+  for (const r of rows) {
+    h += '<tr>' + cols.map(c => {
+      const v = c[1](r);
+      return `<td class="${c[2]||''}">${v}</td>`;
+    }).join('') + '</tr>';
+  }
+  el.innerHTML = h + '</tbody>';
+}
+
+async function reload() {
+  const days = $('days').value;
+  const d = await api('summary?days=' + days);
+
+  // Totals
+  $('totals').innerHTML = `
+    <div class="total-card"><div class="label">Total Cost</div><div class="value cost">${fmt(d.total_usd)}</div></div>
+    <div class="total-card"><div class="label">API Calls</div><div class="value">${d.total_calls.toLocaleString()}</div></div>
+    <div class="total-card"><div class="label">Prompt Tokens</div><div class="value">${fmtK(d.total_prompt)}</div></div>
+    <div class="total-card"><div class="label">Completion Tokens</div><div class="value">${fmtK(d.total_completion)}</div></div>
+  `;
+  $('db-path').textContent = d.db_path;
+  $('last-sync').textContent = 'Last sync: ' + (d.last_sync || 'never');
+
+  const cols = [
+    ['Name', r => r.grp, ''],
+    ['Calls', r => r.calls.toLocaleString(), 'num'],
+    ['Cost', r => fmt(r.cost_usd), 'num'],
+  ];
+  renderTable('by-project', d.by_project, cols);
+  renderTable('by-model', d.by_model, cols);
+  renderTable('by-host', d.by_host, cols);
+
+  // Recent calls
+  const recent = await api('recent?days=' + days);
+  renderTable('recent', recent.slice(0, 20), [
+    ['Time', r => r.ts.slice(5, 16).replace('T', ' '), ''],
+    ['Project', r => r.project, ''],
+    ['Model', r => r.model.replace('gemini/', ''), ''],
+    ['Tokens', r => fmtK(r.prompt_tokens + r.completion_tokens), 'num'],
+    ['Cost', r => fmt(r.cost_usd), 'num'],
+  ]);
+
+  // Daily chart
+  const daily = await api('daily?days=' + days);
+  if (dailyChart) dailyChart.destroy();
+  const projects = [...new Set(daily.flatMap(d => Object.keys(d.projects)))];
+  const colors = ['#8b2500','#2a7a4a','#4a6fa5','#d4a056','#7a4a8b','#5a8a6a','#a05040'];
+  dailyChart = new Chart($('daily-chart'), {
+    type: 'bar',
+    data: {
+      labels: daily.map(d => d.date.slice(5)),
+      datasets: projects.map((p, i) => ({
+        label: p,
+        data: daily.map(d => d.projects[p] || 0),
+        backgroundColor: colors[i % colors.length],
+      })),
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: { x: { stacked: true }, y: { stacked: true, ticks: { callback: v => '$' + v.toFixed(2) } } },
+      plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 11 } } } },
+    },
+  });
+}
+
+async function doSync() {
+  const btn = document.querySelector('.sync-btn');
+  btn.textContent = 'Syncing...';
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/sync', { method: 'POST' });
+    const d = await r.json();
+    btn.textContent = d.new_rows >= 0 ? `Synced (${d.new_rows} new)` : 'Sync failed';
+    if (d.new_rows >= 0) reload();
+  } catch { btn.textContent = 'Sync failed'; }
+  setTimeout(() => { btn.textContent = 'Sync from Hetzner'; btn.disabled = false; }, 3000);
+}
+
+reload();
+</script>
+</body>
+</html>
+"""
+
+
+def _serve_dashboard(port: int = 8042, open_browser: bool = True):
+    """Serve the built-in cost dashboard on localhost."""
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    import urllib.parse
+
+    cl = CostLog()
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *a): pass  # quiet
+
+        def _json(self, data, status=200):
+            body = json.dumps(data, default=str).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", len(body))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            parsed = urllib.parse.urlparse(self.path)
+            qs = dict(urllib.parse.parse_qsl(parsed.query))
+            days = int(qs.get("days", 7)) or None
+
+            if parsed.path == "/":
+                body = _DASHBOARD_HTML.encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", len(body))
+                self.end_headers()
+                self.wfile.write(body)
+
+            elif parsed.path == "/api/summary":
+                total_rows = cl.query(days=days)
+                self._json({
+                    "total_usd": cl.total(days=days),
+                    "total_calls": len(total_rows),
+                    "total_prompt": sum(r["prompt_tokens"] for r in total_rows),
+                    "total_completion": sum(r["completion_tokens"] for r in total_rows),
+                    "by_project": cl.summary(days=days, group_by="project"),
+                    "by_model": cl.summary(days=days, group_by="model"),
+                    "by_host": cl.summary(days=days, group_by="host"),
+                    "db_path": str(cl.db_path),
+                    "last_sync": _last_sync_time(),
+                })
+
+            elif parsed.path == "/api/recent":
+                rows = cl.query(days=days)[:50]
+                self._json([dict(r) for r in rows])
+
+            elif parsed.path == "/api/daily":
+                conn = cl._connect()
+                clauses, params = [], []
+                if days:
+                    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime(
+                        "%Y-%m-%dT%H:%M:%SZ")
+                    clauses.append("ts >= ?")
+                    params.append(cutoff)
+                where = " WHERE " + " AND ".join(clauses) if clauses else ""
+                rows = conn.execute(f"""
+                    SELECT substr(ts, 1, 10) AS date, project,
+                           SUM(cost_usd) AS cost
+                    FROM llm_costs{where}
+                    GROUP BY date, project
+                    ORDER BY date
+                """, params).fetchall()
+                daily = {}
+                for r in rows:
+                    d = r["date"]
+                    if d not in daily:
+                        daily[d] = {"date": d, "projects": {}}
+                    daily[d]["projects"][r["project"]] = round(r["cost"], 6)
+                self._json(list(daily.values()))
+
+            else:
+                self.send_error(404)
+
+        def do_POST(self):
+            if self.path == "/api/sync":
+                n = sync_from_remote()
+                self._json({"new_rows": n, "total": cl.total()})
+            else:
+                self.send_error(404)
+
+    server = HTTPServer(("127.0.0.1", port), Handler)
+    print(f"  Dashboard: http://localhost:{port}")
+    print(f"  DB: {cl.db_path}")
+    print(f"  Press Ctrl+C to stop\n")
+    if open_browser:
+        import webbrowser
+        webbrowser.open(f"http://localhost:{port}")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nStopped.")
+
+
+def _last_sync_time() -> str | None:
+    """Check when the last sync from hetzner happened (most recent hetzner row)."""
+    cl = CostLog()
+    conn = cl._connect()
+    row = conn.execute(
+        "SELECT MAX(ts) FROM llm_costs WHERE host = 'hetzner'"
+    ).fetchone()
+    return row[0] if row and row[0] else None
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -402,7 +720,7 @@ def _cli():
 
     parser = argparse.ArgumentParser(
         prog="python -m limbic.cerebellum.cost_log",
-        description="LLM cost tracking — report and sync",
+        description="LLM cost tracking — report, sync, and dashboard",
     )
     sub = parser.add_subparsers(dest="cmd")
 
@@ -419,9 +737,14 @@ def _cli():
     syn.add_argument("--remote-db", default="/opt/limbic-data/llm_costs.db",
                      help="Remote DB path")
 
+    # -- dashboard --
+    dash = sub.add_parser("dashboard", help="Launch web dashboard")
+    dash.add_argument("--port", type=int, default=8042)
+    dash.add_argument("--no-open", action="store_true", help="Don't open browser")
+
     # -- datasette --
     ds = sub.add_parser("datasette", help="Launch datasette web UI")
-    ds.add_argument("--port", type=int, default=8042)
+    ds.add_argument("--port", type=int, default=8043)
 
     args = parser.parse_args()
 
@@ -440,7 +763,6 @@ def _cli():
             if not rows:
                 print("  (no data)")
                 return
-            # header
             print(f"  {'Group':<30} {'Calls':>7} {'Prompt':>10} {'Compl':>10} {'Cost':>10}")
             print(f"  {'-'*30} {'-'*7} {'-'*10} {'-'*10} {'-'*10}")
             for r in rows:
@@ -449,20 +771,15 @@ def _cli():
             print()
 
     elif args.cmd == "sync":
-        import tempfile
-        tmp = tempfile.mktemp(suffix=".db")
         print(f"Syncing from {args.host}:{args.remote_db} ...")
-        result = subprocess.run(
-            ["rsync", "-az", f"{args.host}:{args.remote_db}", tmp],
-            capture_output=True, text=True,
-        )
-        if result.returncode != 0:
-            print(f"rsync failed: {result.stderr}", file=sys.stderr)
+        n = sync_from_remote(args.host, args.remote_db)
+        if n < 0:
+            print("Sync failed.", file=sys.stderr)
             sys.exit(1)
-        cl = CostLog()
-        n = cl.merge_from(tmp)
-        os.unlink(tmp)
-        print(f"Merged {n} new rows.  Total: ${cl.total():.4f}")
+        print(f"Merged {n} new rows.  Total: ${CostLog().total():.4f}")
+
+    elif args.cmd == "dashboard":
+        _serve_dashboard(port=args.port, open_browser=not args.no_open)
 
     elif args.cmd == "datasette":
         db = str(CostLog().db_path)
