@@ -1,11 +1,14 @@
-"""Tests for amygdala.search — vector, FTS5, and hybrid search."""
+"""Tests for amygdala.search — vector, FTS5, hybrid search, multi-list RRF, and query expansion."""
 
 import numpy as np
 import pytest
 
 from limbic.amygdala.embed import EmbeddingModel
 from limbic.amygdala.index import Index
-from limbic.amygdala.search import VectorIndex, FTS5Index, HybridSearch, Result, dedup_by
+from limbic.amygdala.search import (
+    VectorIndex, FTS5Index, HybridSearch, Result, dedup_by,
+    multi_list_rrf, TracedResult, RRFContribution, strong_signal,
+)
 
 
 TEST_DOCS = [
@@ -299,3 +302,103 @@ class TestDedupBy:
         ]
         deduped = dedup_by(results, key_fn=lambda r: r.metadata["g"])
         assert len(deduped) == 2
+
+
+class TestMultiListRRF:
+    def test_basic_fusion(self):
+        results = multi_list_rrf(
+            ranked_lists=[
+                [{"id": "a"}, {"id": "b"}],
+                [{"id": "b"}, {"id": "c"}],
+            ],
+            list_labels=["vec", "fts"],
+        )
+        assert all(isinstance(r, TracedResult) for r in results)
+        ids = [r.id for r in results]
+        assert "a" in ids and "b" in ids and "c" in ids
+        # "b" appears in both lists, should be top
+        assert results[0].id == "b"
+
+    def test_top_rank_bonus(self):
+        """Items at rank 1 get +0.05 bonus."""
+        results = multi_list_rrf(
+            ranked_lists=[
+                [{"id": "a"}, {"id": "b"}],
+            ],
+            list_labels=["vec"],
+        )
+        k = 60
+        a_expected = 1 / (k + 1) + 0.05  # rank 1 bonus
+        b_expected = 1 / (k + 2) + 0.02  # rank 2-3 bonus
+        assert abs(results[0].score - a_expected) < 1e-10
+        assert abs(results[1].score - b_expected) < 1e-10
+
+    def test_no_bonus(self):
+        results = multi_list_rrf(
+            ranked_lists=[[{"id": "a"}]],
+            list_labels=["vec"],
+            top_rank_bonus=False,
+        )
+        k = 60
+        assert abs(results[0].score - 1 / (k + 1)) < 1e-10
+
+    def test_traces(self):
+        results = multi_list_rrf(
+            ranked_lists=[
+                [{"id": "a"}, {"id": "b"}],
+                [{"id": "b"}, {"id": "a"}],
+            ],
+            list_labels=["vec", "fts"],
+        )
+        b = next(r for r in results if r.id == "b")
+        assert len(b.traces) == 2
+        labels = {t.list_label for t in b.traces}
+        assert labels == {"vec", "fts"}
+
+    def test_custom_id_fn(self):
+        results = multi_list_rrf(
+            ranked_lists=[
+                [{"chunk_id": 10}, {"chunk_id": 20}],
+            ],
+            list_labels=["vec"],
+            id_fn=lambda x: x["chunk_id"],
+        )
+        assert results[0].id == 10
+
+    def test_many_lists(self):
+        """7 lists (original + 5 expanded) should produce higher scores."""
+        single = multi_list_rrf(
+            ranked_lists=[[{"id": "a"}]],
+            list_labels=["vec"],
+        )
+        many = multi_list_rrf(
+            ranked_lists=[[{"id": "a"}] for _ in range(7)],
+            list_labels=[f"list_{i}" for i in range(7)],
+        )
+        assert many[0].score > single[0].score
+        assert len(many[0].traces) == 7
+
+    def test_empty_lists(self):
+        results = multi_list_rrf([], [])
+        assert results == []
+
+
+class TestStrongSignal:
+    def test_clear_winner(self):
+        assert strong_signal([0.90, 0.70]) is True
+
+    def test_gap_too_small(self):
+        assert strong_signal([0.85, 0.80]) is False
+
+    def test_top_too_low(self):
+        assert strong_signal([0.60, 0.40]) is False
+
+    def test_single_result(self):
+        assert strong_signal([0.95]) is False
+
+    def test_custom_thresholds(self):
+        assert strong_signal([0.70, 0.50], threshold=0.65, gap=0.10) is True
+
+    def test_exact_boundary(self):
+        assert strong_signal([0.82, 0.70], threshold=0.82, gap=0.12) is True
+        assert strong_signal([0.82, 0.71], threshold=0.82, gap=0.12) is False

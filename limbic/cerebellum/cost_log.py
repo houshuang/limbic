@@ -607,6 +607,17 @@ def _serve_dashboard(port: int = 8042, open_browser: bool = True):
     """Serve the built-in cost dashboard on localhost."""
     from http.server import HTTPServer, BaseHTTPRequestHandler
     import urllib.parse
+    import socket
+
+    # Check if port is already in use (previous instance still running)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        if s.connect_ex(("127.0.0.1", port)) == 0:
+            url = f"http://localhost:{port}"
+            print(f"  Dashboard already running at {url}")
+            if open_browser:
+                import webbrowser
+                webbrowser.open(url)
+            return
 
     cl = CostLog()
 
@@ -687,6 +698,7 @@ def _serve_dashboard(port: int = 8042, open_browser: bool = True):
                 self.send_error(404)
 
     server = HTTPServer(("127.0.0.1", port), Handler)
+    server.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     print(f"  Dashboard: http://localhost:{port}")
     print(f"  DB: {cl.db_path}")
     print(f"  Press Ctrl+C to stop\n")
