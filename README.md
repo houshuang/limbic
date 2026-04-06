@@ -21,22 +21,22 @@ limbic.amygdala          limbic.hippocampus          limbic.cerebellum
  Embedding               Proposals                   Batch processing
  Vector search            (modify/merge/delete        (resumable, budget-
  Hybrid search             with lifecycle)              tracked, persistent)
- Novelty detection       Cascade merges              Multi-tier orchestrator
- Clustering               (relink all references       (triage -> deep verify
- Document similarity       when merging entities)       with auto-escalation)
- Knowledge mapping       Deduplication               Audit logging
- LLM client               (veto-gate filtering)       (JSONL with analysis)
- Calibration metrics     Validation                  Context builder
- SQLite helpers            (composable rules)           (for LLM prompts)
-                         YAML store
-                          (file-locked atomic)
+ Query expansion         Cascade merges              Multi-tier orchestrator
+ Multi-list RRF           (relink all references       (triage -> deep verify
+ Novelty detection         when merging entities)       with auto-escalation)
+ Clustering              Deduplication               Audit logging
+ Document similarity      (veto-gate filtering)       (JSONL with analysis)
+ Knowledge mapping       Validation                  Context builder
+ LLM client               (composable rules)           (for LLM prompts)
+ Calibration metrics     YAML store                  Cost logging
+ SQLite helpers            (file-locked atomic)        (cross-project, dashboard)
 ```
 
 | Package | Purpose | Core dependency |
 |---------|---------|-----------------|
 | **limbic.amygdala** | Find patterns: embed, search, deduplicate, score novelty | numpy, sentence-transformers |
 | **limbic.hippocampus** | Manage changes: proposals with review lifecycle, cascade merges, validation | pyyaml |
-| **limbic.cerebellum** | Verify correctness: LLM-assisted batch audits with budget control | (none beyond stdlib) |
+| **limbic.cerebellum** | Verify correctness: LLM-assisted batch audits with budget control, cross-project cost logging | (none beyond stdlib; litellm optional for cost computation) |
 
 Each package has its own detailed README in its directory.
 
@@ -84,7 +84,7 @@ pip install -e ".[dev,llm,hippocampus]"
 | Module | What it does | Key numbers |
 |--------|-------------|-------------|
 | **embed** | Sentence embedding with 3 whitening modes, Matryoshka truncation, genericization, persistent cache | 83–452x speedup with SQLite cache; +32% nearest-neighbor separation with Soft-ZCA whitening |
-| **search** | Numpy vector search, SQLite FTS5, hybrid RRF fusion, cross-encoder reranking | RRF 4x more robust than convex fusion; reranking +16% nDCG on medical, -5% on scientific (dataset-dependent) |
+| **search** | Numpy vector search, SQLite FTS5, hybrid RRF fusion, cross-encoder reranking, multi-list RRF with contribution tracing, LLM query expansion (lex/vec/hyde) | RRF 4x more robust than convex fusion; reranking +16% nDCG on medical; query expansion 3-5x score improvement |
 | **novelty** | Multi-signal novelty scoring: global + topic-local + centroid specificity + temporal decay + NLI cascade | +17% novel/known separation with centroid specificity; NLI fixes 94% of high-cosine contradictions |
 | **cluster** | Greedy centroid clustering (batch + incremental), complete linkage, pairwise cosine, confidence-calibrated pair classification | Incremental matches batch quality at threshold >= 0.85, 1.8x faster; order-sensitive at lower thresholds |
 | **document_similarity** | Document-level thematic similarity using weighted multi-field embeddings | 94% accuracy on human-rated pairs; AUROC=0.930 on 300-pair dataset; rho=0.818 |
@@ -219,6 +219,59 @@ reranked = rerank("query text", results)  # uses ms-marco-MiniLM-L-6-v2
 | NFCorpus (3.6K docs) | 0.235 | 0.126 | 0.286 | **0.333** |
 
 FTS5 dominates on scientific text (exact terminology matters); vector dominates on medical queries (semantic matching matters). Reranking helps on NFCorpus (+16%) but slightly hurts on SciFact (-5%), likely because scientific terminology already gives exact matches high FTS5 scores.
+
+### Multi-list RRF and query expansion
+
+For advanced search scenarios, limbic provides LLM-powered query expansion and multi-list fusion with full contribution tracing:
+
+```python
+from limbic.amygdala import (
+    EmbeddingModel, VectorIndex, FTS5Index,
+    expand_query, multi_list_rrf, expanded_hybrid_search, strong_signal,
+)
+
+# --- Multi-list RRF with contribution tracing ---
+# Fuse any number of ranked lists (from different search strategies)
+fused = multi_list_rrf(
+    [vec_results, fts_results, reranked_results],
+    ["vector", "fts", "reranked"],
+)
+for r in fused[:3]:
+    print(f"{r.id}: {r.score:.4f}")
+    for t in r.traces:
+        print(f"  {t.list_label}: rank {t.rank} → +{t.contribution:.4f}")
+# Top-rank bonuses (QMD-style): +0.05 for rank 1, +0.02 for ranks 2-3
+
+# --- LLM query expansion ---
+# Generates lex (keyword variants), vec (semantic rephrases), hyde (hypothetical docs)
+expanded = expand_query(
+    "database lock problems",
+    domain_context="The corpus contains SQLite WAL mode discussions",
+)
+# [ExpandedQuery(type="lex", query="deadlock contention WAL"),
+#  ExpandedQuery(type="vec", query="concurrent write failures in SQLite"),
+#  ExpandedQuery(type="hyde", query="When multiple writers attempt..."), ...]
+
+# --- One-call expanded hybrid search ---
+# Combines expand_query + multi_list_rrf in a single call
+model = EmbeddingModel()
+results = expanded_hybrid_search(
+    "effect of digital tools on learning",
+    vector_index=vi,
+    fts_index=fts,
+    embed_fn=model.embed,
+    domain_context="Nordic education research",
+)
+# Each result has full traces showing which sub-query contributed
+
+# --- Skip expansion when not needed ---
+top_scores = [r.score for r in first_pass_results[:2]]
+if strong_signal(top_scores, threshold=0.82, gap=0.12):
+    # Top result is strong and clearly separated — skip expensive LLM expansion
+    pass
+```
+
+**Why query expansion?** A single query misses vocabulary the user doesn't think of. Lex variants find different keywords; vec variants capture different framings; hyde variants bridge the query-document vocabulary gap by generating hypothetical answers. Multi-list RRF fuses all results without manual weight tuning.
 
 ### Novelty detection
 
@@ -680,6 +733,32 @@ summary = summarize_logs(entries)
 ops = extract_operations(entries, op_types=["fix_name", "merge"])
 ```
 
+### Cost logging
+
+Centralized LLM cost tracking across projects, models, and hosts. Uses litellm's pricing data (2,500+ models) for automatic cost computation:
+
+```python
+from limbic.cerebellum.cost_log import cost_log, compute_cost
+
+# Standalone logging (any SDK)
+cost_log.log(project="petrarca", model="gemini/gemini-2.5-flash",
+             prompt_tokens=1200, completion_tokens=340)
+
+# litellm callback (auto-captures every litellm.completion call)
+import litellm
+litellm.callbacks = [cost_log.callback("alif")]
+
+# Query costs
+records = cost_log.query(project="petrarca", days=7)
+total = sum(r.cost_usd for r in records)
+
+# Built-in dashboard and CLI
+# python -m limbic.cerebellum.cost_log report --days 7
+# python -m limbic.cerebellum.cost_log sync --host alif
+```
+
+DB location: `COST_LOG_DB` env var or `~/.local/share/limbic/llm_costs.db`. Includes a web dashboard, remote sync from servers, and CLI reporting.
+
 ### Context builder
 
 Build structured prompts for LLM verification calls:
@@ -742,21 +821,25 @@ limbic/
   search.py -> VectorIndex,          ProposalStore)               StateStore,
                FTS5Index,                                         ItemResult)
                HybridSearch,        cascade.py                      |
-               rerank                (ReferenceGraph,            orchestrator.py
-    |                                 apply_merge,               (TieredOrchestrator,
-  novelty.py -> VectorIndex           apply_delete)               VerificationTier)
-    |                                                               |
-  cluster.py (numpy only)           dedup.py                    audit_log.py
+               rerank,               (ReferenceGraph,            orchestrator.py
+               multi_list_rrf,        apply_merge,               (TieredOrchestrator,
+               expand_query,          apply_delete)               VerificationTier)
+               expanded_hybrid_                                      |
+                 search             dedup.py                    audit_log.py
     |                                (VetoMatcher,               (AuditLogger,
-  document_similarity.py             VetoGate,                   read_logs,
+  novelty.py -> VectorIndex           VetoGate,                   read_logs,
     |                                 ExclusionList)              extract_operations)
-  index.py -> search + connect()                                    |
+  cluster.py (numpy only)                                           |
     |                               validate.py                 context.py
-  calibrate.py                       (Validator, Rule,           (ContextBuilder,
+  document_similarity.py             (Validator, Rule,           (ContextBuilder,
     |                                 composable checks)          build_batch_context)
-  knowledge_map.py (pure algo)
-    |                               store.py
-  knowledge_map_gen.py -> llm.py     (YAMLStore, file-locked)
+  index.py -> search + connect()                                    |
+    |                               store.py                    cost_log.py
+  calibrate.py                       (YAMLStore, file-locked)    (CostLog, cost_log,
+    |                                                              compute_cost,
+  knowledge_map.py (pure algo)                                     dashboard, sync)
+    |
+  knowledge_map_gen.py -> llm.py
     |
   llm.py (Gemini/Anthropic/OpenAI)
 ```
@@ -795,7 +878,7 @@ The three packages are independent but designed to work together:
 
 ## Tests
 
-297 tests covering all three packages:
+325 tests covering all three packages:
 
 ```bash
 pip install -e ".[dev]"
@@ -804,7 +887,7 @@ python -m pytest tests/ -v
 
 | Package | Tests |
 |---------|-------|
-| limbic.amygdala | 208 |
+| limbic.amygdala | 236 |
 | limbic.hippocampus | 55 |
 | limbic.cerebellum | 34 |
 
@@ -818,7 +901,7 @@ Limbic powers search, data curation, and knowledge management in several systems
 - **petrarca** — a **news curation pipeline** using document similarity to find related articles, calibrated thresholds for feed ranking vs near-duplicate detection, and hybrid search across multilingual content.
 - **kulturperler** — a **Nordic performing arts archive** (10,000+ entities) using proposals for all data changes, cascade merges for deduplicating persons/works, tiered LLM verification of 2,400+ works across 30+ audit sessions, veto-gate dedup of fuzzy-matched person names. Total audit cost: ~$270. The DR-arkivet import scripts use `StateStore` and `AuditLogger` for resumable batch imports with JSONL audit trails, and `connect()` for all SQLite access.
 - A **reading and annotation system** using novelty scoring and `classify_pairs` to detect when new annotations overlap with existing knowledge.
-- A **conversation search tool** using hybrid RRF search over chat history.
+- **[claude-chat-search](https://github.com/houshuang/claude-chat-search)** — hybrid RRF search over Claude Code chat history with optional LLM query expansion via `expand_query` and `multi_list_rrf`.
 
 ## License
 
