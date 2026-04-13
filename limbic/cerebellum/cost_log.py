@@ -170,7 +170,9 @@ class CostLog:
         if self._conn is not None:
             return self._conn
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(self._db_path), timeout=30)
+        conn = sqlite3.connect(
+            str(self._db_path), timeout=30, check_same_thread=False
+        )
         conn.row_factory = sqlite3.Row
         if str(self._db_path) != ":memory:":
             conn.execute("PRAGMA journal_mode=WAL")
@@ -397,9 +399,26 @@ cost_log = CostLog()
 
 def sync_from_remote(host: str = "alif",
                      remote_db: str = "/opt/limbic-data/llm_costs.db") -> int:
-    """Rsync the remote cost DB and merge into local. Returns new row count."""
+    """Rsync the remote cost DB and merge into local. Returns new row count.
+
+    Runs `PRAGMA wal_checkpoint(TRUNCATE)` on the remote DB over SSH before
+    rsyncing. Without this, WAL-only writes (i.e. everything since the last
+    passive checkpoint) stay in `<db>-wal` on the remote and never make it
+    across, silently dropping hours of production rows.
+    """
     import subprocess
     import tempfile
+
+    # Force a full WAL checkpoint on the remote so all committed rows land in
+    # the main DB file that rsync is about to pull.
+    checkpoint = subprocess.run(
+        ["ssh", host, f"sqlite3 {remote_db} 'PRAGMA wal_checkpoint(TRUNCATE);'"],
+        capture_output=True, text=True,
+    )
+    if checkpoint.returncode != 0:
+        log.warning("remote WAL checkpoint failed: %s", checkpoint.stderr.strip())
+        # Continue anyway — stale sync is better than no sync.
+
     tmp = tempfile.mktemp(suffix=".db")
     result = subprocess.run(
         ["rsync", "-az", f"{host}:{remote_db}", tmp],
