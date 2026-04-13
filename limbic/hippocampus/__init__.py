@@ -8,6 +8,15 @@ from .dedup import (
 )
 from .validate import ValidationResult, Rule, Validator, required_field, valid_values, reference_exists, no_orphans, conditional_required
 from .store import YAMLStore
+from .wikidata_resolve import (
+    WikidataResolver,
+    Resolution,
+    ScoredCandidate,
+    validate_chosen_qid,
+    TYPE_HINT_P31,
+    COHERENCE_PROPERTIES,
+    DEFAULT_WEIGHTS,
+)
 
 __all__ = [
     "Proposal",
@@ -36,4 +45,11 @@ __all__ = [
     "no_orphans",
     "conditional_required",
     "YAMLStore",
+    "WikidataResolver",
+    "Resolution",
+    "ScoredCandidate",
+    "validate_chosen_qid",
+    "TYPE_HINT_P31",
+    "COHERENCE_PROPERTIES",
+    "DEFAULT_WEIGHTS",
 ]

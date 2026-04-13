@@ -63,9 +63,15 @@ DEFAULT_LANGS: tuple[str, ...] = (
 # Wikidata API limits + policy
 WBGETENTITIES_MAX_IDS = 50        # per-call batch limit for `ids=Q1|Q2|...`
 DEFAULT_RATE_PER_SEC = 5.0        # ≤5 req/s per Wikidata UA policy
-DEFAULT_MAXLAG_SECONDS = 5        # server-side lag threshold
+# maxlag default is None (don't send). Wikidata's maxlag checks the slowest
+# lag across *all* related services including wdqs (query service), which is
+# often tens of seconds lagged even when the REST API is healthy in <300ms.
+# Setting maxlag=5 (the documented recommendation) causes REST calls to get
+# rejected unnecessarily during routine query-service load. High-volume
+# batch consumers can opt in; interactive/light use should leave it off.
+DEFAULT_MAXLAG_SECONDS: int | None = None
 DEFAULT_TIMEOUT_SECONDS = 30
-DEFAULT_MAX_RETRIES = 5  # enough to ride out ~30-40s of replication lag
+DEFAULT_MAX_RETRIES = 5
 
 # Cache source tags — separate sources keep `clear_source` and
 # `invalidate_before` scoped per operation type.
@@ -246,7 +252,7 @@ class WikidataClient:
         sparql_base: str = SPARQL_BASE_DEFAULT,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         max_retries: int = DEFAULT_MAX_RETRIES,
-        maxlag_seconds: int = DEFAULT_MAXLAG_SECONDS,
+        maxlag_seconds: int | None = DEFAULT_MAXLAG_SECONDS,
         ssl_context: ssl.SSLContext | None = None,
         fetcher: Fetcher | None = None,
     ):
@@ -309,8 +315,9 @@ class WikidataClient:
                 "language": language,
                 "limit": str(limit),
                 "format": "json",
-                "maxlag": str(self.maxlag),
             }
+            if self.maxlag is not None:
+                params["maxlag"] = str(self.maxlag)
             return self._request_json_get(self.api_base, params)
 
         payload = self._cached_or_fetch(self.cache_search, key, do)
@@ -364,8 +371,9 @@ class WikidataClient:
                 "ids": "|".join(batch),
                 "languages": "|".join(langs),
                 "format": "json",
-                "maxlag": str(self.maxlag),
             }
+            if self.maxlag is not None:
+                params["maxlag"] = str(self.maxlag)
             payload = self._request_json_get(self.api_base, params)
 
             # Redirects: {"from": "Q123", "to": "Q456"}. Requesting Q123
