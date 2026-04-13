@@ -259,4 +259,9 @@ class EmbeddingModel:
         if self.truncate_dim is not None:
             return self.truncate_dim
         self._load_model()
-        return self._model.get_sentence_embedding_dimension()
+        # sentence-transformers renamed get_sentence_embedding_dimension →
+        # get_embedding_dimension. Prefer the new name when available for
+        # forward compatibility, fall back for older installs.
+        fn = getattr(self._model, "get_embedding_dimension", None) or \
+             self._model.get_sentence_embedding_dimension
+        return fn()

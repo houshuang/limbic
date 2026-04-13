@@ -8,8 +8,15 @@ version = "0.1.0"
 description = "Data curation toolkit: embeddings, search, proposals, and AI-assisted verification"
 requires-python = ">=3.11"
 dependencies = [
-    "numpy>=1.24",
+    # numpy pinned below 2.x: torch wheels for macOS x86_64 top out at 2.2.2,
+    # which was built against numpy 1.x and crashes with numpy 2.0 ABI. When
+    # torch on this platform ships a numpy-2-compatible wheel, raise the cap.
+    "numpy>=1.24,<2",
     "sentence-transformers>=2.2",
+    # transformers 5.x requires torch>=2.4 and has broken fallbacks (NameError
+    # in transformers.integrations.accelerate) when torch is disabled. Pinned
+    # below 5 until the macOS x86_64 torch wheel ceiling is raised.
+    "transformers>=4.30,<5",
 ]
 
 [project.optional-dependencies]
@@ -20,6 +27,9 @@ llm = [
 ]
 hippocampus = [
     "pyyaml>=6.0",
+]
+temporal = [
+    "edtf>=4.0",
 ]
 dev = [
     "pytest>=7.0",
