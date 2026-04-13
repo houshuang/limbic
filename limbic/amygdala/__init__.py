@@ -17,6 +17,16 @@ from .temporal import (
     equals,
     plausibility_score,
 )
+from .wikidata import (
+    WikidataClient,
+    Candidate,
+    Entity,
+    TokenBucket,
+    WikidataError,
+    MaxlagError,
+    WikidataNotFound,
+    DEFAULT_LANGS,
+)
 from .document_similarity import Document, SimilarityPair, find_similar_documents, embed_documents, document_similarity_matrix
 from .calibrate import cohens_kappa, validate_llm_judge, intra_rater_reliability
 from .knowledge_map import KnowledgeGraph, BeliefState, init_beliefs, next_probe, next_probe_batch, update_beliefs, coverage_report, is_converged, calibrate_beliefs, adjust_for_calibration, knowledge_fringes
@@ -60,6 +70,14 @@ __all__ = [
     "meets",
     "equals",
     "plausibility_score",
+    "WikidataClient",
+    "Candidate",
+    "Entity",
+    "TokenBucket",
+    "WikidataError",
+    "MaxlagError",
+    "WikidataNotFound",
+    "DEFAULT_LANGS",
     "Document",
     "SimilarityPair",
     "find_similar_documents",

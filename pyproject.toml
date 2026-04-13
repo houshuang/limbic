@@ -17,6 +17,9 @@ dependencies = [
     # in transformers.integrations.accelerate) when torch is disabled. Pinned
     # below 5 until the macOS x86_64 torch wheel ceiling is raised.
     "transformers>=4.30,<5",
+    # certifi: auto-detected by limbic.amygdala.wikidata so SSL works on Python
+    # installs without a populated system CA store (common on macOS). Tiny dep.
+    "certifi>=2024.0",
 ]
 
 [project.optional-dependencies]
