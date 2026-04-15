@@ -53,6 +53,7 @@ documented incident that motivated this rule.
 from __future__ import annotations
 
 import math
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Protocol
@@ -110,6 +111,92 @@ TYPE_HINT_P31: dict[str, set[str]] = {
         "Q1004",         # comics
     },
 }
+
+
+# --- regnal-name spelling variants ---
+#
+# Wikidata's labels for historical rulers often use the native-language
+# spelling (e.g. Q52934 "Carl XII of Sweden" — Swedish — rather than "Karl
+# XII" or "Charles XII"). `wbsearchentities` is label+alias keyed, so a
+# capture that uses a non-label spelling can return zero useful candidates
+# even when the person exists. Worse, it sometimes returns unrelated entities
+# like paintings or statues that share the searched spelling.
+#
+# Each tuple is a class of interchangeable regnal forenames. When a mention's
+# first token matches one of these classes AND the mention looks regnal
+# (contains a Roman numeral like "XII", or has an "of <place>" suffix), the
+# resolver retries `search()` with each sibling variant to broaden recall.
+#
+# Additions: only add pairs where the substitution is genuinely used for the
+# same historical person across sources. Don't add mere translation pairs
+# (e.g. "Jean" and "John" for random Frenchmen) unless regnal — that would
+# inflate the candidate set for common given names. If in doubt, skip.
+REGNAL_NAME_VARIANTS: tuple[tuple[str, ...], ...] = (
+    ("Karl", "Carl", "Charles", "Carolus", "Carlos"),
+    ("Friedrich", "Frederick", "Frederik", "Frederic", "Federico"),
+    ("Wilhelm", "William", "Willem", "Guillaume", "Guillermo"),
+    ("Heinrich", "Henry", "Henri", "Enrico", "Enrique"),
+    ("Ludwig", "Louis", "Ludovico", "Luis", "Lodewijk"),
+    ("Philipp", "Philip", "Philippe", "Felipe", "Filippo"),
+    ("Gustaf", "Gustav", "Gustavus", "Gustave"),
+    ("Erik", "Eric", "Erich"),
+    ("Pyotr", "Peter", "Pietro", "Pierre", "Pedro"),
+    ("Johann", "Johannes", "John", "Giovanni", "Juan", "Jean"),
+    ("Jakob", "James", "Jacob", "Giacomo", "Jaime"),
+    ("Rudolf", "Rudolph", "Rodolfo"),
+    ("Franz", "Francis", "Francesco", "François", "Francisco"),
+    ("Leopold", "Leopoldo"),
+    ("Maximilian", "Maximiliano"),
+    ("Alexander", "Aleksandr", "Alessandro"),
+    ("Nikolaus", "Nicholas", "Nikolai", "Niccolò"),
+    ("Olaf", "Olav", "Olof"),
+    ("Håkon", "Haakon", "Hakon"),
+    ("Sigismund", "Zygmunt"),
+)
+
+_ROMAN_NUMERAL_RE = re.compile(r"[IVXLCDM]+")
+
+
+def _regnal_variants(mention: str) -> list[str]:
+    """Generate spelling variants for a regnal-style mention.
+
+    Only fires when the mention looks regnal: either contains a Roman numeral
+    (II, III, IV, XII, …) or has an "of <place>" suffix. This gates against
+    accidentally remapping normal modern names like "Karl Schmidt".
+
+    Returns variants with the first token substituted for each sibling in the
+    matched row of `REGNAL_NAME_VARIANTS`. The original spelling is excluded
+    (caller already tried that).
+    """
+    parts = mention.split()
+    if len(parts) < 2:
+        return []
+    first = parts[0]
+
+    # Regnal shape check: Roman numeral somewhere after the first token, or
+    # an "of" preposition (lowercase — "Odo of France" but not "Of Mice").
+    has_roman = any(_ROMAN_NUMERAL_RE.fullmatch(p) for p in parts[1:])
+    has_of = any(p == "of" for p in parts[1:])
+    if not (has_roman or has_of):
+        return []
+
+    for variants in REGNAL_NAME_VARIANTS:
+        if first in variants:
+            return [" ".join([v] + parts[1:]) for v in variants if v != first]
+    return []
+
+
+def _any_person_candidate(
+    candidates: list[Candidate], entity_map: dict[str, Entity]
+) -> bool:
+    """True iff any candidate's P31 claims include Q5 (human)."""
+    for c in candidates:
+        entity = entity_map.get(c.qid)
+        if entity is None:
+            continue
+        if "Q5" in set(entity.claim_qids("P31")):
+            return True
+    return False
 
 
 # --- Wikidata claim properties used for coherence walks ---
@@ -287,7 +374,26 @@ class WikidataResolver:
         raw_candidates = self.client.search(
             mention, limit=self.search_limit, language=self.search_language
         )
+
+        # Regnal-variant retry when the initial search returns zero candidates.
+        # (Second retry — after type-checking via get_many — happens at Step 3
+        # for the case where results are non-empty but miss the real person.)
+        variant_searches_tried: list[str] = []
         if not raw_candidates:
+            for variant in _regnal_variants(mention):
+                variant_searches_tried.append(variant)
+                extra = self.client.search(
+                    variant, limit=self.search_limit, language=self.search_language
+                )
+                if extra:
+                    raw_candidates.extend(extra)
+
+        if not raw_candidates:
+            detail = (
+                f" (also tried variants: {', '.join(variant_searches_tried)})"
+                if variant_searches_tried
+                else ""
+            )
             return Resolution(
                 mention=mention,
                 context_text=context_text,
@@ -297,12 +403,37 @@ class WikidataResolver:
                 chosen_qid=None,
                 confidence=0.0,
                 candidates=[],
-                reasoning=f"No Wikidata candidates for '{mention}'.",
+                reasoning=f"No Wikidata candidates for '{mention}'{detail}.",
             )
 
         # Step 3: enrich via wbgetentities (single batch call).
         qids = [c.qid for c in raw_candidates if c.qid]
         entity_map = self.client.get_many(qids) if qids else {}
+
+        # Step 3b: regnal-variant retry for type_hint='person' when candidates
+        # exist but none are human. Karl XII of Sweden returned only paintings
+        # (see memory/ session-77-observations Bug 3 in petrarca).
+        if type_hint == "person" and not _any_person_candidate(raw_candidates, entity_map):
+            for variant in _regnal_variants(mention):
+                if variant in variant_searches_tried:
+                    continue
+                variant_searches_tried.append(variant)
+                extra = self.client.search(
+                    variant, limit=self.search_limit, language=self.search_language
+                )
+                if not extra:
+                    continue
+                # Merge new candidates, dedup by QID
+                existing_qids = {c.qid for c in raw_candidates}
+                new_cands = [c for c in extra if c.qid and c.qid not in existing_qids]
+                if not new_cands:
+                    continue
+                new_entities = self.client.get_many([c.qid for c in new_cands])
+                raw_candidates.extend(new_cands)
+                entity_map.update(new_entities)
+                # Stop as soon as we find a human — avoid unnecessary API calls
+                if _any_person_candidate(new_cands, new_entities):
+                    break
 
         # Step 4: score each candidate.
         scored: list[ScoredCandidate] = []
@@ -442,6 +573,29 @@ class WikidataResolver:
             total += weight * scores.get(key, 0.0)
         return total
 
+    def _is_weak_structural_match(
+        self, candidate: ScoredCandidate, type_hint: str | None
+    ) -> bool:
+        """Both type_score and date_score are concretely negative.
+
+        `type_score < 0.5` means a concrete P31 mismatch (0.3), not neutral (0.5).
+        `date_score < 0.5` means a concrete plausibility conflict — both sides
+        have dates and they're far apart. If both structural signals say
+        "wrong", the candidate is unsafe to accept without LLM disambiguation,
+        even if description/coherence/rank pushed total past threshold.
+
+        Only fires when a type_hint was supplied — otherwise type_score would
+        be the neutral 0.5.
+
+        See memory/session77_phase1_fixes.md Bug 4 (Count Odo → Fire Brigade
+        Museum) in petrarca for the incident that motivated this rule.
+        """
+        if type_hint is None:
+            return False
+        type_score = candidate.scores.get("type", 0.5)
+        date_score = candidate.scores.get("date", 1.0)
+        return type_score < 0.5 and date_score < 0.5
+
     def _decide(
         self,
         mention: str,
@@ -465,8 +619,9 @@ class WikidataResolver:
         passes_margin = (
             second_total == 0.0 or top.total >= self.margin_ratio * second_total
         )
+        weak_structural = self._is_weak_structural_match(top, type_hint)
 
-        if passes_abs and passes_margin:
+        if passes_abs and passes_margin and not weak_structural:
             reasoning = (
                 f"Resolved '{mention}' → {top.qid} ({top.label}). "
                 f"top total={top.total:.3f} "
@@ -494,6 +649,11 @@ class WikidataResolver:
                 f"margin {top.total:.3f}/{second_total:.3f} "
                 f"({top.total / max(second_total, 1e-9):.2f}x) "
                 f"below required {self.margin_ratio}x"
+            )
+        if weak_structural:
+            reason_parts.append(
+                f"weak structural match (type={top.scores.get('type', 0):.2f}, "
+                f"date={top.scores.get('date', 0):.2f} — both < 0.5)"
             )
         reasoning = (
             f"Ambiguous for '{mention}': "

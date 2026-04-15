@@ -21,11 +21,13 @@ from limbic.hippocampus import (
     validate_chosen_qid,
 )
 from limbic.hippocampus.wikidata_resolve import (
+    _any_person_candidate,
     _coherence_score,
     _cosine_unit,
     _date_score,
     _extract_dates,
     _rank_score,
+    _regnal_variants,
     _type_score,
 )
 
@@ -468,3 +470,256 @@ def test_resolver_weights_override():
     res = resolver.resolve("Richard I")
     # With only the rank prior, Strauss (rank 0 in our fixture) wins.
     assert res.chosen_qid == "Q12345"
+
+
+# --- regnal-name variant retry (Bug 3: Karl XII of Sweden) ---
+
+
+def test_regnal_variants_charles_of_sweden():
+    # Roman numeral + "of <place>" → regnal shape; Karl ↔ Carl ↔ Charles class
+    variants = _regnal_variants("Karl XII of Sweden")
+    assert "Carl XII of Sweden" in variants
+    assert "Charles XII of Sweden" in variants
+    assert "Karl XII of Sweden" not in variants  # original excluded
+
+
+def test_regnal_variants_requires_regnal_shape():
+    # "Karl Schmidt" is a modern name, not regnal → no variants
+    assert _regnal_variants("Karl Schmidt") == []
+
+
+def test_regnal_variants_of_place_without_numeral():
+    # "Odo of France" has "of <place>" but no numeral — still regnal-looking
+    # (though "Odo" isn't in our variants table, so no results)
+    variants = _regnal_variants("Louis of France")
+    assert "Ludwig of France" in variants
+    assert "Luis of France" in variants
+
+
+def test_regnal_variants_unknown_first_name():
+    # Regnal shape but first name not in any variant class
+    assert _regnal_variants("Olaf III of Norway") != []  # in our table
+    assert _regnal_variants("Thorfinn III of Orkney") == []  # not in table
+
+
+def test_regnal_variants_single_token_mention():
+    # Need at least 2 tokens to be regnal
+    assert _regnal_variants("Karl") == []
+
+
+def test_any_person_candidate_true():
+    entity_map = {
+        "Q1": _person_entity("Q1", p31=["Q5"]),  # human
+        "Q2": Entity(qid="Q2"),
+    }
+    cands = [Candidate(qid="Q1", label="", rank=0), Candidate(qid="Q2", label="", rank=1)]
+    assert _any_person_candidate(cands, entity_map) is True
+
+
+def test_any_person_candidate_false():
+    entity_map = {
+        "Q1": _person_entity("Q1", p31=["Q3305213"]),  # painting
+        "Q2": _person_entity("Q2", p31=["Q3305213"]),  # painting
+    }
+    cands = [Candidate(qid="Q1", label="", rank=0), Candidate(qid="Q2", label="", rank=1)]
+    assert _any_person_candidate(cands, entity_map) is False
+
+
+def test_resolver_retries_when_no_candidates():
+    # Zero candidates for "Karl XII of Sweden" — retry with "Carl" / "Charles" variants
+    client = FakeWikidataClient(
+        search_results={
+            "Karl XII of Sweden": [],
+            "Carl XII of Sweden": [
+                Candidate(qid="Q52934", label="Carl XII of Sweden",
+                          description="King of Sweden 1697-1718", rank=0),
+            ],
+        },
+        entities={
+            "Q52934": _person_entity("Q52934", born=1682, died=1718, p31=["Q5"]),
+        },
+    )
+    resolver = WikidataResolver(client=client)
+    res = resolver.resolve(
+        "Karl XII of Sweden",
+        context_text="Swedish king, Great Northern War",
+        type_hint="person",
+        date_hint=DateRange(start=1680, end=1720),
+    )
+    assert res.chosen_qid == "Q52934", res.reasoning
+    # Verify we tried both the original and at least one variant
+    assert "Karl XII of Sweden" in client.search_calls
+    assert any(v in client.search_calls for v in ("Carl XII of Sweden", "Charles XII of Sweden"))
+
+
+def test_resolver_retries_when_only_paintings_returned():
+    # The actual Karl XII failure mode: search returns only paintings of him,
+    # not the person. Retry should surface the real person via spelling variant.
+    client = FakeWikidataClient(
+        search_results={
+            "Karl XII of Sweden": [
+                Candidate(qid="Q119811370", label="Karl XII of Sweden",
+                          description="painting by Schröder", rank=0),
+                Candidate(qid="Q106357900", label="Karl XII of Sweden",
+                          description="painting by Ankarcrona", rank=1),
+            ],
+            "Carl XII of Sweden": [
+                Candidate(qid="Q52934", label="Carl XII of Sweden",
+                          description="King of Sweden 1697-1718", rank=0),
+            ],
+        },
+        entities={
+            # Paintings: P31 = Q3305213 (painting), NOT Q5 (human)
+            "Q119811370": Entity(qid="Q119811370", claims={
+                "P31": [{"mainsnak": {"datatype": "wikibase-item",
+                                       "datavalue": {"value": {"id": "Q3305213"}}},
+                         "rank": "normal"}],
+            }),
+            "Q106357900": Entity(qid="Q106357900", claims={
+                "P31": [{"mainsnak": {"datatype": "wikibase-item",
+                                       "datavalue": {"value": {"id": "Q3305213"}}},
+                         "rank": "normal"}],
+            }),
+            "Q52934": _person_entity("Q52934", born=1682, died=1718, p31=["Q5"]),
+        },
+    )
+    resolver = WikidataResolver(client=client)
+    res = resolver.resolve(
+        "Karl XII of Sweden",
+        context_text="King of Sweden, fought Peter the Great",
+        type_hint="person",
+        date_hint=DateRange(start=1680, end=1720),
+    )
+    assert res.chosen_qid == "Q52934", (
+        f"Expected Carl XII person Q52934, got {res.chosen_qid}. Reasoning: {res.reasoning}"
+    )
+
+
+def test_resolver_does_not_retry_for_non_regnal_mention():
+    # "Nobody" doesn't match any regnal shape → no retries, falls through to no_match.
+    client = FakeWikidataClient(search_results={"Nobody": []})
+    resolver = WikidataResolver(client=client)
+    res = resolver.resolve("Nobody", type_hint="person")
+    assert res.status == "no_match"
+    # Only one search call (the original); no variants were tried
+    assert client.search_calls == ["Nobody"]
+
+
+# --- weak-structural-match downgrade (Bug 4: Count Odo → Fire Brigade Museum) ---
+
+
+def test_weak_structural_single_candidate_downgraded():
+    """Count Odo was resolved to a Fire Brigade Museum because it was the
+    only candidate scoring past threshold — even though type=0.30 (wrong type)
+    and date=0.00 (big gap). With the fix, status should be ambiguous.
+    """
+    # Single candidate: museum, P31=Q3305213 (painting) — NOT Q5 (human).
+    # Inception 1985, so date plausibility vs 885-886 hint is ~0.
+    museum_entity = Entity(qid="Q67389525", claims={
+        "P31": [{"mainsnak": {"datatype": "wikibase-item",
+                               "datavalue": {"value": {"id": "Q3305213"}}},
+                 "rank": "normal"}],
+        "P571": [{"mainsnak": {"datatype": "time",
+                                "datavalue": {"value": {"time": "+1985-00-00T00:00:00Z"}}},
+                  "rank": "normal"}],
+    })
+    client = FakeWikidataClient(
+        search_results={
+            "Count Odo": [
+                Candidate(qid="Q67389525", label="Count Ödön Széchenyi Fire Brigade Museum",
+                          description="museum in Istanbul", rank=0),
+            ],
+        },
+        entities={"Q67389525": museum_entity},
+    )
+    # Use weights that would have pushed the museum past threshold (description
+    # + coherence + rank = non-negligible). To make the test deterministic,
+    # set weights so total crosses 0.55 despite type=0.30, date<0.5.
+    resolver = WikidataResolver(
+        client=client,
+        weights={"type": 0.20, "date": 0.10, "description": 0.20,
+                 "coherence": 0.20, "rank": 0.30},
+        absolute_threshold=0.4,  # lowered so single-candidate passes on raw signals
+        margin_ratio=1.0,
+    )
+    res = resolver.resolve(
+        "Count Odo",
+        context_text="Viking siege of Paris 885-886",
+        type_hint="person",
+        date_hint=DateRange(start=880, end=900),
+    )
+    # Should be ambiguous, not resolved — the structural mismatch guards us.
+    assert res.status == "ambiguous", (
+        f"Expected ambiguous due to weak structural signals (type=0.30, date≈0.0), "
+        f"got {res.status}. Reasoning: {res.reasoning}"
+    )
+    assert res.chosen_qid is None
+    assert "weak structural match" in res.reasoning
+
+
+def test_weak_structural_does_not_fire_without_type_hint():
+    """When no type_hint is given, type_score=0.5 (neutral) — downgrade should
+    not fire even if date_score is low, because we have no structural
+    evidence of mismatch."""
+    entity = Entity(qid="Q1", claims={
+        "P571": [{"mainsnak": {"datatype": "time",
+                                "datavalue": {"value": {"time": "+2000-00-00T00:00:00Z"}}},
+                  "rank": "normal"}],
+    })
+    client = FakeWikidataClient(
+        search_results={"X": [Candidate(qid="Q1", label="X",
+                                         description="thing", rank=0)]},
+        entities={"Q1": entity},
+    )
+    resolver = WikidataResolver(client=client, absolute_threshold=0.4,
+                                 margin_ratio=1.0)
+    res = resolver.resolve("X", date_hint=DateRange(start=800, end=900))
+    # Without type_hint, we don't downgrade — status depends on totals
+    # Just verify the new rule didn't hijack the decision.
+    assert res.status in ("resolved", "ambiguous")
+    if res.status == "ambiguous":
+        assert "weak structural match" not in res.reasoning
+
+
+def test_weak_structural_does_not_fire_when_type_matches():
+    """When type_score=1.0 (P31 hits), downgrade does not fire even if
+    date_score is low."""
+    entity = _person_entity("Q5000", born=1800, died=1870, p31=["Q5"])
+    client = FakeWikidataClient(
+        search_results={"Alice": [Candidate(qid="Q5000", label="Alice",
+                                              description="modern person",
+                                              rank=0)]},
+        entities={"Q5000": entity},
+    )
+    resolver = WikidataResolver(client=client, absolute_threshold=0.5,
+                                 margin_ratio=1.0)
+    # Big date gap: candidate 1800-1870 vs hint 500-600 → date_score near 0
+    res = resolver.resolve(
+        "Alice",
+        type_hint="person",
+        date_hint=DateRange(start=500, end=600),
+    )
+    # type_score=1.0 (> 0.5) → weak_structural is False → still resolves if totals pass
+    assert res.status in ("resolved", "ambiguous")
+    if res.status == "ambiguous":
+        assert "weak structural match" not in res.reasoning
+
+
+def test_resolver_does_not_retry_when_person_already_found():
+    # "Louis XIV" returns a valid human on first try → no variant retry needed.
+    client = FakeWikidataClient(
+        search_results={
+            "Louis XIV": [
+                Candidate(qid="Q7742", label="Louis XIV",
+                          description="King of France 1643-1715", rank=0),
+            ],
+        },
+        entities={
+            "Q7742": _person_entity("Q7742", born=1638, died=1715, p31=["Q5"]),
+        },
+    )
+    resolver = WikidataResolver(client=client)
+    resolver.resolve("Louis XIV", type_hint="person",
+                     date_hint=DateRange(start=1630, end=1720))
+    # Only one search call — no variant retry because Q7742 is already a human
+    assert client.search_calls == ["Louis XIV"]
