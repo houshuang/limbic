@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from unittest.mock import patch
@@ -269,10 +270,41 @@ class TestCommandBuilding:
         assert "--tools" in cmd
         tools_idx = cmd.index("--tools")
         assert cmd[tools_idx + 1] == ""
-        # CLAUDECODE stripped
+        # CLAUDECODE + ANTHROPIC_* stripped (prefer Max/OAuth auth, not API-key billing)
         assert "CLAUDECODE" not in captured["env"]
+        assert "ANTHROPIC_API_KEY" not in captured["env"]
+        assert "ANTHROPIC_KEY" not in captured["env"]
+        assert "ANTHROPIC_AUTH_TOKEN" not in captured["env"]
         # Prompt piped as stdin
         assert captured["input"] == "ping"
+
+    def test_anthropic_env_vars_stripped(self, tmp_cost_log, monkeypatch):
+        """When the caller has ANTHROPIC_* vars set, the CLI must not see them."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-should-not-leak")
+        monkeypatch.setenv("ANTHROPIC_KEY", "legacy-should-not-leak")
+        monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "oauth-should-not-leak")
+        # Re-import to refresh module-level _ENV snapshot under the new environ
+        from importlib import reload
+
+        from limbic.cerebellum import claude_cli as cc
+
+        reload(cc)
+
+        response = _single_model_response()
+        captured = {}
+
+        def _fake_run(cmd, **kw):
+            captured["env"] = kw.get("env", {})
+            return _completed(json.dumps(response))
+
+        with patch.object(subprocess, "run", side_effect=_fake_run):
+            cc.generate(prompt="ping", project="testproj")
+
+        assert "ANTHROPIC_API_KEY" not in captured["env"]
+        assert "ANTHROPIC_KEY" not in captured["env"]
+        assert "ANTHROPIC_AUTH_TOKEN" not in captured["env"]
+        # And the caller's parent env was not mutated (still has the vars)
+        assert os.environ.get("ANTHROPIC_API_KEY") == "sk-should-not-leak"
 
     def test_tools_none_omits_flag(self, tmp_cost_log):
         response = _single_model_response()

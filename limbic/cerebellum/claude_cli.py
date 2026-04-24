@@ -15,8 +15,11 @@ Every invocation writes one or more rows to `limbic.cerebellum.cost_log` with
 `script="claude-cli"`. Multi-model sessions (rare for single-call headless mode)
 write one row per model, sharing the same `session_id` in metadata.
 
-The wrapper always runs with `--no-session-persistence` and strips the
-`CLAUDECODE` env var so nested invocation from inside a Claude Code session works.
+The wrapper always runs with `--no-session-persistence` and strips
+`CLAUDECODE` + `ANTHROPIC_API_KEY` / `ANTHROPIC_KEY` / `ANTHROPIC_AUTH_TOKEN`
+from the child env so the CLI uses Max/OAuth auth (matching the cost_log's
+subscription-value accounting) rather than silently billing an API key the
+caller may have set for an SDK path.
 """
 
 from __future__ import annotations
@@ -36,8 +39,22 @@ from .cost_log import cost_log
 
 log = logging.getLogger(__name__)
 
-# Strip CLAUDECODE so nested invocation from inside a Claude Code session works.
-_ENV = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+# Env vars we strip before spawning `claude -p`:
+# - CLAUDECODE: nested invocation from inside a Claude Code session would otherwise
+#   inherit the parent's in-session state.
+# - ANTHROPIC_API_KEY / ANTHROPIC_KEY / ANTHROPIC_AUTH_TOKEN: the CLI prefers these
+#   over its own Max/OAuth login, which would bill API usage *and* break the cost_log
+#   attribution model (CLI rows assume subscription-value accounting — see
+#   CHANGELOG § "Cost dashboard surfaces CLI subscription value"). Callers who hold
+#   an API key for the SDK path should not double-bill when this wrapper falls back
+#   to the CLI.
+_STRIPPED_ENV_KEYS = frozenset({
+    "CLAUDECODE",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+})
+_ENV = {k: v for k, v in os.environ.items() if k not in _STRIPPED_ENV_KEYS}
 
 
 class ClaudeCLIError(RuntimeError):
