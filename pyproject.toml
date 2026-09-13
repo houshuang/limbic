@@ -42,5 +42,8 @@ dev = [
 [tool.setuptools.packages.find]
 include = ["limbic*"]
 
+[tool.setuptools.package-data]
+"limbic.drive" = ["calibration_cases.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

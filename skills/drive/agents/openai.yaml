@@ -1,0 +1,6 @@
+interface:
+  display_name: "Drive"
+  short_description: "Turn a voice dump into a bounded pilot plan"
+  default_prompt: "Use $drive to turn this request into a bounded, evidence-led pilot plan."
+policy:
+  allow_implicit_invocation: true

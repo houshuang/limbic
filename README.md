@@ -2,6 +2,21 @@
 
 **Data curation toolkit: embeddings, search, proposals, and AI-assisted verification.**
 
+## Drive: choose the first move before the swarm
+
+`skills/drive` is a shared Codex/Claude planning skill for open-ended voice dumps
+such as “research this” and “improve this.” It retrieves the nearest local
+precedents, proposes one representative pilot, and stops for human judgment. The
+v0 policy deliberately permits no worker calls or project mutation.
+
+```bash
+python -m limbic.drive calibrate
+python -m limbic.drive validate /path/to/drive-plan.json
+```
+
+The three bundled calibration cases capture costly failure modes from the NRK
+apps, the Otak/Hirsch investigation, and the Codex/Claude workflow research.
+
 Limbic grew out of the same problems appearing across multiple projects:
 
 - **otak / alif** — a 67K-node claims-first knowledge system where new annotations needed novelty detection ("is this claim already captured?"), clustering for dedup, and cosine+NLI cascade to tell paraphrases from contradictions

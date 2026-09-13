@@ -1,0 +1,156 @@
+[
+  {
+    "id": "nrk-mobile-tv-improve",
+    "input": "Improve the Kulturperler mobile and Apple TV apps: code reuse, documentation, bugs, and UX. Drive the work across Claude and Codex.",
+    "failure_observed": "A 14-agent, 68-commit implementation ran for 13 hours before real use exposed direction changes and a crash.",
+    "expect": {
+      "mode": "improve",
+      "pilot_max": 1,
+      "validation_kind": "human-use",
+      "precedent_contains": "MobileMockups-2026-09-06"
+    },
+    "expected_plan": {
+      "schema": "limbic-drive-plan-v0",
+      "mode": "improve",
+      "dry_run": true,
+      "request_summary": "Make the NRK mobile and Apple TV experience materially better without committing to a broad rebuild first.",
+      "desired_outcome": "A direction proven in the real app on one important journey before code is multiplied across platforms.",
+      "definition_of_better": [
+        "The selected journey feels clearer in actual use.",
+        "The pilot reveals whether the proposed shared structure fits both platforms."
+      ],
+      "assumptions": ["The user can react to a simulator, device build, or faithful interactive mockup."],
+      "non_goals": ["No repository-wide refactor or multi-platform implementation in the first pass."],
+      "open_questions": [],
+      "precedent_search": {
+        "queries": ["Kulturperler mobile Apple TV recent improvement mockup crash"],
+        "inspected": [
+          "/Users/stian/src/nrk/kulturperler/KulturperlerTV/Kulturbase/Review/MobileMockups-2026-09-06/index.html",
+          "/Users/stian/src/nrk/kulturperler/KulturperlerTV/Kulturbase/Review/PlatformReview/REVIEW.md"
+        ],
+        "result": "found"
+      },
+      "precedents": [
+        {
+          "source": "/Users/stian/src/nrk/kulturperler/KulturperlerTV/Kulturbase/Review/MobileMockups-2026-09-06/index.html",
+          "lesson": "A concrete artifact followed by the user's reaction corrected direction more effectively than autonomous breadth."
+        }
+      ],
+      "pilot": {
+        "description": "Prototype one end-to-end core browsing journey on one platform, then put it in the user's hands.",
+        "unit_count": 1,
+        "artifact": "One runnable journey or faithful interactive mockup with a short change rationale.",
+        "validation_kind": "human-use",
+        "evidence": ["User performs the journey and names what feels right, wrong, or missing."],
+        "user_checkpoint": "Stop after the user has used the pilot and explicitly accepts or redirects the direction."
+      },
+      "budget": {"max_workers": 0, "max_additional_model_calls": 0, "max_additional_premium_calls": 0},
+      "delegation": {"enabled": false, "workers_may_delegate": false},
+      "scale": {"allowed": false, "gate": "The representative journey is experienced and accepted by the user."},
+      "stop_conditions": ["Stop if the pilot cannot be exercised in a realistic environment."],
+      "next_action": "Inspect the two precedent artifacts and specify the single journey to prototype."
+    }
+  },
+  {
+    "id": "otak-deep-research",
+    "input": "Investigate Otak and the Hirsch argument deeply, improve the accounts and explorer, and use Claude and Codex where useful.",
+    "failure_observed": "Twenty-four Codex jobs and a 59-agent Fable follow-up produced substantial material before testing whether the result helped the user browse and understand the argument.",
+    "expect": {
+      "mode": "research",
+      "pilot_max": 2,
+      "validation_kind": "human-use",
+      "precedent_contains": "AGENT-START-HERE.md"
+    },
+    "expected_plan": {
+      "schema": "limbic-drive-plan-v0",
+      "mode": "research",
+      "dry_run": true,
+      "request_summary": "Determine whether Otak can make the Hirsch argument easier to inspect and reason through, then improve only what proves useful.",
+      "desired_outcome": "A small research-navigation slice that changes the user's understanding or next decision.",
+      "definition_of_better": [
+        "The user can follow evidence and disagreement without reading a generated compendium.",
+        "The slice exposes a real knowledge gap or supports a concrete judgment."
+      ],
+      "assumptions": ["Two propositions are enough to test the navigation idea."],
+      "non_goals": ["No batch generation of all accounts before the browsing test."],
+      "open_questions": [],
+      "precedent_search": {
+        "queries": ["Otak overnight Hirsch handoff next decisive evidence ten-minute browsing"],
+        "inspected": [
+          "/Users/stian/src/otak/.codex/worktrees/hirsch-history-20260912/handoff/otak-overnight-2026-09-13/AGENT-START-HERE.md"
+        ],
+        "result": "found"
+      },
+      "precedents": [
+        {
+          "source": "/Users/stian/src/otak/.codex/worktrees/hirsch-history-20260912/handoff/otak-overnight-2026-09-13/AGENT-START-HERE.md",
+          "lesson": "The decisive evidence was the user's short browsing session, so that test belongs before broad account production."
+        }
+      ],
+      "pilot": {
+        "description": "Prepare one or two disputed propositions with sources, counterclaims, and a navigable path, then have the user browse them for ten minutes.",
+        "unit_count": 2,
+        "artifact": "A minimal argument-navigation slice covering at most two propositions.",
+        "validation_kind": "human-use",
+        "evidence": ["User reports whether the slice changed understanding, trust, or the next question."],
+        "user_checkpoint": "Stop after the ten-minute browse and decide whether the representation is worth scaling."
+      },
+      "budget": {"max_workers": 0, "max_additional_model_calls": 0, "max_additional_premium_calls": 0},
+      "delegation": {"enabled": false, "workers_may_delegate": false},
+      "scale": {"allowed": false, "gate": "The user finds the two-proposition browsing slice useful."},
+      "stop_conditions": ["Stop if the pilot becomes an essay or expands beyond two propositions."],
+      "next_action": "Choose the two propositions with the highest disagreement or uncertainty."
+    }
+  },
+  {
+    "id": "codex-claude-workflow-research",
+    "input": "Research how to combine Codex Max and Claude Max for long-running research and coding without exhausting Astra or Fable.",
+    "failure_observed": "The first pass researched public harnesses before inspecting the user's closest local runs and delivered a long report before the shortest actionable answer.",
+    "expect": {
+      "mode": "research",
+      "pilot_max": 1,
+      "validation_kind": "manual-test",
+      "precedent_contains": "codex-claude-workflow-research-2026-09"
+    },
+    "expected_plan": {
+      "schema": "limbic-drive-plan-v0",
+      "mode": "research",
+      "dry_run": true,
+      "request_summary": "Find a practical way to route Codex and Claude work that preserves premium quota and improves direction-setting.",
+      "desired_outcome": "One immediately testable workflow recommendation grounded in the user's own history, with public research as support.",
+      "definition_of_better": [
+        "The first output says what to try next in one page or less.",
+        "Recommendations explain which observed failure each guardrail prevents."
+      ],
+      "assumptions": ["Local task history is more predictive than generic public advice."],
+      "non_goals": ["No new general-purpose agent framework in the first pass."],
+      "open_questions": [],
+      "precedent_search": {
+        "queries": ["Codex Claude Astra Fable routing quota local runs"],
+        "inspected": [
+          "/Users/stian/src/research/.codex/worktrees/codex-claude-workflow-research/codex-claude-workflow-research-2026-09/README.md"
+        ],
+        "result": "found"
+      },
+      "precedents": [
+        {
+          "source": "/Users/stian/src/research/.codex/worktrees/codex-claude-workflow-research/codex-claude-workflow-research-2026-09/README.md",
+          "lesson": "Retrieve the nearest local analogs first and lead with the smallest actionable recommendation."
+        }
+      ],
+      "pilot": {
+        "description": "Run one real voice dump through a dry-run brief compiler and compare its proposed first move with what later proved useful.",
+        "unit_count": 1,
+        "artifact": "A one-page direction card with precedents, pilot, budget, and stop gate.",
+        "validation_kind": "manual-test",
+        "evidence": ["The direction card recommends a representative pilot instead of a research or implementation swarm."],
+        "user_checkpoint": "Stop after the user judges whether the card picked the right first move."
+      },
+      "budget": {"max_workers": 0, "max_additional_model_calls": 0, "max_additional_premium_calls": 0},
+      "delegation": {"enabled": false, "workers_may_delegate": false},
+      "scale": {"allowed": false, "gate": "The user accepts the direction card's pilot."},
+      "stop_conditions": ["Stop before dispatching any worker or extending the research appendix."],
+      "next_action": "Compile the current request into one direction card and ask the user to judge its first move."
+    }
+  }
+]
