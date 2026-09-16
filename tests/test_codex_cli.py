@@ -182,6 +182,40 @@ class TestRunSubprocess:
         assert proc.returncode == 3
         assert "boom" in proc.stderr
 
+    def test_undecodable_byte_does_not_stall_the_child(self, fake_codex):
+        """A dead drain thread stalls the child on a full pipe, and the caller
+        sees a timeout rather than the decode problem — costing the full 900s on
+        codex_research and pointing the operator the wrong way."""
+        fake_codex("""
+            import sys
+            sys.stdout.buffer.write(b'\\xff' + b'a' * 200000)
+            sys.stdout.buffer.flush()
+        """)
+        proc = cc._run(["codex"], timeout=10)
+        assert proc.returncode == 0
+        assert len(proc.stdout) > 100_000
+
+    def test_timeout_is_bounded_when_a_descendant_escapes_the_group(
+        self, fake_codex, tmp_path
+    ):
+        """A grandchild with its own session survives killpg and keeps the pipe
+        open. close() then blocks on the buffer lock its parked reader holds, so
+        _run overran the timeout it had just enforced."""
+        fake_codex("""
+            import os, sys, time
+            if os.fork() == 0:
+                os.setsid()          # leave the process group, keep the pipe
+                time.sleep(6)
+                os._exit(0)
+            sys.exit(0)
+        """)
+        start = time.monotonic()
+        try:
+            cc._run(["codex"], timeout=1)
+        except cc.CodexCLIError:
+            pass
+        assert time.monotonic() - start < 3.0
+
     def test_missing_binary_raises(self, monkeypatch):
         monkeypatch.setattr(cc.shutil, "which", lambda name: None)
         with pytest.raises(cc.CodexCLIError, match="not available"):

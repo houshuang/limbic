@@ -192,8 +192,12 @@ class MergeReport:
     items_before: dict[str, int] = field(default_factory=dict)
     items_after: dict[str, int] = field(default_factory=dict)
     id_map: dict[str, str] = field(default_factory=dict)
-    dangling: list[str] = field(default_factory=list)
     references_checked: int = 0
+    # Refs that pointed at an id no window produced. _renumber clears these, so
+    # they never reach `dangling` — without the count, losing a link and losing
+    # nothing look identical in the report.
+    references_cleared: int = 0
+    dangling: list[str] = field(default_factory=list)
 
     @property
     def duplicates_removed(self) -> int:
@@ -392,6 +396,12 @@ def merge_windows(
 
     Returns ``(merged, report)``. ``strict`` makes a surviving dangling reference
     raise instead of log — use it in tests.
+
+    Note which counter to watch: ``report.references_cleared`` is the common
+    failure (a window referenced an id that no window produced, so the link is
+    gone), while ``report.dangling`` catches only what survives renumbering — a
+    reference resolving into the wrong collection. An extraction dropping links
+    shows up in the first, not the second.
     """
     merged: dict[str, list] = {coll.name: [] for coll in schema}
     for index, result in enumerate(results):
@@ -410,9 +420,10 @@ def merge_windows(
         alias.update(coll_alias)
 
     report.items_after = {k: len(v) for k, v in merged.items()}
-    report.id_map, unresolved = _renumber(merged, schema, alias)
-    if unresolved:
-        log.warning("merge_windows: %d unresolvable cross-reference(s)", unresolved)
+    report.id_map, report.references_cleared = _renumber(merged, schema, alias)
+    if report.references_cleared:
+        log.warning("merge_windows: %d unresolvable cross-reference(s) cleared",
+                    report.references_cleared)
     report.references_checked, report.dangling = check_references(
         merged, schema, strict=strict)
     return merged, report

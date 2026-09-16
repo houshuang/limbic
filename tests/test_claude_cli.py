@@ -307,12 +307,9 @@ class TestCommandBuilding:
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-should-not-leak")
         monkeypatch.setenv("ANTHROPIC_KEY", "legacy-should-not-leak")
         monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "oauth-should-not-leak")
-        # Re-import to refresh module-level _ENV snapshot under the new environ
-        from importlib import reload
-
+        # No reload: the environment is read per call now. It also used to undo
+        # the tmp_cost_log fixture, so this test wrote to the real cost DB.
         from limbic.cerebellum import claude_cli as cc
-
-        reload(cc)
 
         response = _single_model_response()
         captured = {}

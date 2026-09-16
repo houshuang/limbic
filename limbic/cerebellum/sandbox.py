@@ -134,17 +134,30 @@ def _inside(path: Path, parent: Path) -> bool:
         return False
 
 
+def _guards(protect: Path) -> bool:
+    """Whether ``protect`` is a tree it is possible to be outside of.
+
+    The default is the working directory, and a service's working directory is
+    often ``/`` (systemd's default). Every scratch path is then "inside" it, so
+    the containment check is unsatisfiable rather than violated — refusing to
+    run is the wrong answer. Skip it there; a caller who means something
+    narrower passes ``protect=`` explicitly.
+    """
+    return protect.parent != protect
+
+
 def _scratch_base(protect: Path) -> Path:
     configured = os.environ.get(_SCRATCH_ROOT_ENV)
     base = (Path(configured).expanduser() if configured
             else Path(tempfile.gettempdir()) / "limbic-agent-scratch")
     protect = protect.resolve()
+    guarded = _guards(protect)
     base = base.resolve(strict=False)
-    if _inside(base, protect):
+    if guarded and _inside(base, protect):
         raise RuntimeError(f"{_SCRATCH_ROOT_ENV} must be outside {protect}: {base}")
     base.mkdir(mode=0o700, parents=True, exist_ok=True)
     base = base.resolve()
-    if _inside(base, protect):  # catches an existing symlink redirected back inside
+    if guarded and _inside(base, protect):  # catches a symlink redirected back inside
         raise RuntimeError(f"{_SCRATCH_ROOT_ENV} must be outside {protect}: {base}")
     meta = base.stat()
     if meta.st_uid != os.getuid():
@@ -235,6 +248,13 @@ def sanitized_environment(
             if name in _SAFE_ENV or name in allow or name.startswith(_SAFE_ENV_PREFIXES)}
     if home is not None:
         home = Path(home)
+        # Repointing HOME contains per-call CLI state, but an agent CLI also
+        # resolves its *credentials* from HOME — Codex reads ~/.codex/auth.json —
+        # so moving HOME without this silently logs it out, and the call fails as
+        # an auth error rather than anything that points here. Pin CODEX_HOME to
+        # the real one unless the operator already set it.
+        if "CODEX_HOME" not in keep and saved.get("HOME"):
+            keep["CODEX_HOME"] = str(Path(saved["HOME"]) / ".codex")
         keep["HOME"] = str(home)
         keep["TMPDIR"] = str(home)
         keep["XDG_CONFIG_HOME"] = str(home / ".config")
@@ -259,7 +279,8 @@ def _slot_root(protect: Path) -> Path:
     root = (Path(configured).expanduser() if configured
             else Path(tempfile.gettempdir()) / "limbic-agent-slots")
     root = root.resolve(strict=False)
-    if _inside(root, protect.resolve()):
+    protect = protect.resolve()
+    if _guards(protect) and _inside(root, protect):
         raise RuntimeError(f"{_SLOT_ROOT_ENV} must be outside {protect}: {root}")
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     if root.stat().st_uid != os.getuid():
@@ -365,6 +386,13 @@ def call_slot(
     The gate is advisory between cooperating processes (flock on a lock file),
     and the budget survives restarts. Raises :class:`AgentBudgetExceeded` when the
     day's cap is spent, and :class:`TimeoutError` when no slot frees up in time.
+
+    **"Host-wide" is only as wide as the lock directory is shared.** Both default
+    under :func:`tempfile.gettempdir`, which is per-service under systemd's
+    ``PrivateTmp=yes`` and resets on reboot when ``/tmp`` is a tmpfs — so the gate
+    silently becomes per-service and the daily cap silently resets. A deployment
+    that means either of them literally must set ``LIMBIC_AGENT_SLOT_ROOT`` and
+    ``LIMBIC_AGENT_BUDGET_PATH`` to persistent, shared paths.
     """
     try:
         import fcntl

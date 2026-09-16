@@ -226,6 +226,17 @@ def _kill_process_tree(proc: subprocess.Popen, grace: float = 2.0) -> None:
             time.sleep(0.05)
 
 
+def _join_readers(readers: list[threading.Thread], budget: float) -> None:
+    """Join every reader within one shared ``budget``, not ``budget`` each.
+
+    Per-thread timeouts multiply: the overhead a caller sees on the abnormal path
+    has to be a fixed bound, not a bound per stream.
+    """
+    deadline = time.monotonic() + budget
+    for reader in readers:
+        reader.join(timeout=max(0.0, deadline - time.monotonic()))
+
+
 def _run(cmd: list[str], timeout: int) -> subprocess.CompletedProcess:
     """Run `codex exec` with bounded output and a process-group kill on timeout."""
     if not is_available():
@@ -235,6 +246,7 @@ def _run(cmd: list[str], timeout: int) -> subprocess.CompletedProcess:
     try:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            errors="replace",  # one undecodable byte must not kill a drain thread
             env=_codex_env(), stdin=subprocess.DEVNULL,  # codex exec blocks on stdin otherwise
             start_new_session=(os.name == "posix"),      # own process group, so we can kill the tree
         )
@@ -269,13 +281,19 @@ def _run(cmd: list[str], timeout: int) -> subprocess.CompletedProcess:
             proc.kill()
             proc.wait()
     finally:
-        for reader in readers:
-            reader.join(timeout=1)
+        _join_readers(readers, budget=1.0)
         if any(reader.is_alive() for reader in readers):
             _kill_process_tree(proc, grace=0.2)
-            for reader in readers:
-                reader.join(timeout=1)
-        for stream in (proc.stdout, proc.stderr):
+            _join_readers(readers, budget=1.0)
+        # Close only the pipes whose reader has finished. A descendant that left
+        # the process group (its own setsid) survives the kill and still holds
+        # the write end, so its reader is parked in read() holding the buffer
+        # lock that close() needs — closing would block for as long as that
+        # orphan lives, silently blowing through the timeout just enforced.
+        # Leaking one fd to a daemon thread is the cheaper failure.
+        for reader, stream in zip(readers, (proc.stdout, proc.stderr)):
+            if reader.is_alive():
+                continue
             try:
                 stream.close()
             except (OSError, ValueError):
@@ -405,12 +423,15 @@ def codex_research(
 
     ``isolated`` (default on, matching ``codex_json``) adds ``--ephemeral`` and
     ``--ignore-user-config``, so the run leaves no rollout behind and reads none
-    of the host's ``~/.codex`` settings. This matters *more* here than for
+    of the host's ``~/.codex/config.toml``. This matters *more* here than for
     ``codex_json``: this is the call that reads untrusted web pages with network
-    egress. Model and reasoning are always passed explicitly, so ignoring user
-    config changes nothing about which model runs. Pass ``isolated=False`` only
-    when the run genuinely needs the host profile (e.g. a locally configured MCP
-    server).
+    egress.
+
+    Model and reasoning are always passed explicitly, so this never changes which
+    model runs — but it does drop *everything else* the host profile sets, which
+    on a developer machine can include ``service_tier``, ``notify``,
+    ``personality`` and any configured MCP servers. Pass ``isolated=False`` when
+    the run genuinely needs those.
     """
     schema_path = output_path = None
     try:

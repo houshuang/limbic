@@ -1200,9 +1200,11 @@ unlock it (`tools.web_search`, `sandbox_workspace_write.network_access`) are on
 by default — omit both and it quietly degrades to a shallow one-shot.
 
 Both calls run with `--ephemeral --ignore-user-config`, so they leave no rollout
-behind and read none of the host's `~/.codex` settings; pass `isolated=False` to
-`codex_research` if a run genuinely needs the host profile (a locally configured
-MCP server, say). Quota errors trip a process-local cooldown
+behind and read none of the host's `~/.codex/config.toml`. That never changes
+which model runs — model and reasoning are always passed explicitly — but it does
+drop everything *else* the host profile sets, which can include `service_tier`,
+`notify`, `personality` and any configured MCP servers. Pass `isolated=False` to
+`codex_research` when a run genuinely needs those. Quota errors trip a process-local cooldown
 (`mark_unavailable_from_error`) so a cron run stops hammering a depleted
 allowance, and transient non-zero exits retry once while quota errors and
 timeouts do not.
@@ -1245,6 +1247,23 @@ with call_slot(), isolated_scratch() as scratch, sanitized_environment(home=scra
 | `sanitized_environment()` | An injection turning into a credential disclosure. The parent legitimately holds API keys and SMTP credentials; the child gets runtime plumbing only, and anything else needs an explicit opt-in. |
 | `call_slot()` | A fan-out bursting the auth quota. A cross-process flock gate plus a persistent daily cap that survives restarts; raises `AgentBudgetExceeded` when the day is spent, `TimeoutError` when no slot frees up. |
 
+**Two deployment preconditions**, both of which fail quietly rather than loudly:
+
+- `sanitized_environment(home=...)` pins `CODEX_HOME` to your real `~/.codex` so
+  repointing HOME doesn't move the agent's credentials with it. If you set
+  `CODEX_HOME` yourself, that wins — point it at wherever the service's
+  `codex login` actually wrote.
+- The slot and budget files default under `tempfile.gettempdir()`. Under
+  systemd's `PrivateTmp=yes` that is per-service, and on a tmpfs `/tmp` it resets
+  on reboot — so "host-wide gate" and "persistent daily cap" quietly become
+  neither. Set `LIMBIC_AGENT_SLOT_ROOT` and `LIMBIC_AGENT_BUDGET_PATH` to shared,
+  persistent paths if you mean them literally.
+
+`protect=` defaults to the working directory and is what the scratch root must
+not live inside. A working directory of `/` (systemd's default) makes that
+unsatisfiable rather than violated, so the check is skipped there — pass
+`protect=` explicitly if you mean a specific tree.
+
 **This is not an OS sandbox**, and is documented as such in the module: the child
 keeps whatever process and network permissions the CLI grants it. These raise the
 cost of a successful injection; they do not make one impossible. Constrain tool
@@ -1273,8 +1292,15 @@ per_window = [extract(w.text) for w in split_into_windows(chapter_text)]
 merged, report = merge_windows(per_window, SCHEMA, strict=False)
 
 report.duplicates_removed    # collapsed across the seams
-report.dangling              # references that still don't resolve
+report.references_cleared    # refs to ids no window produced — links LOST
+report.dangling              # refs surviving renumber into the wrong collection
 ```
+
+Watch `references_cleared`, not `dangling`. The common failure is a window
+referencing an id that no window produced; `merge_windows` clears those, so they
+never reach `dangling` and an extraction quietly dropping links looks identical
+to a clean one. `dangling` only catches what survives renumbering — a reference
+resolving into the wrong collection.
 
 `merge_windows` is the whole pipeline, but each step is exported for the cases
 that need to interleave something: `namespace_ids(result, i, schema)`,

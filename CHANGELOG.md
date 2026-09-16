@@ -63,6 +63,47 @@ All notable changes to the limbic monorepo (formerly amygdala) are documented he
     non-Latin item compared as the empty set and nothing deduplicated;
   - `split_into_windows` validates its parameters and cannot fail to advance.
 
+### Fixed in review
+
+Found by a Fable review of the branch before merge; all four reproduced first.
+
+- **`_run` overran the timeout it had just enforced.** A descendant with its own
+  session (`setsid`) survives `killpg` and still holds the pipe, so its reader
+  thread is parked in `read()` holding the buffer lock that `close()` needs —
+  a 1s timeout returned after 6.1s. Streams whose reader is still alive are now
+  left to the daemon thread, and the reader joins share one budget instead of
+  one each. Same case now returns in 2.1s.
+- **One undecodable byte became a 900s false timeout.** `UnicodeDecodeError` is
+  a `ValueError`, which the drain thread caught and returned on; the child then
+  stalled on a full pipe and the caller saw a timeout, which does not retry.
+  `Popen` now uses `errors="replace"`, matching what `_finish` already did.
+- **`sandbox` refused to run from a working directory of `/`.** `protect`
+  defaults to the cwd, and systemd's default `WorkingDirectory` is `/`, so every
+  scratch path was "inside" the protected tree — the check is unsatisfiable
+  there rather than violated, and is now skipped. hvaskjer protected a fixed
+  repo root; the cwd default was introduced by the port.
+- **`sanitized_environment(home=...)` logged Codex out.** Codex resolves
+  `~/.codex/auth.json` from `$HOME`, so repointing HOME moved its credentials.
+  hvaskjer only worked because its deploy exports `CODEX_HOME`; that precondition
+  did not survive the port, and the documented recipe was broken as written.
+  `CODEX_HOME` is now pinned to the original HOME unless the operator set it.
+- **`MergeReport.dangling` was nearly vacuous.** `_renumber` clears every
+  unresolvable reference before `check_references` runs, so the common failure —
+  a window referencing an id no window produced — showed `dangling == []`. Added
+  `references_cleared`, which is the counter that actually means "links lost".
+- **`tests/test_claude_cli.py` wrote to the real cost database.** Its
+  `reload(cc)` (there to refresh the old `_ENV` snapshot, now removed) also
+  reset the module's `cost_log` past the `tmp_cost_log` fixture, leaving 15
+  `project='testproj'` rows in `~/.local/share/limbic/llm_costs.db`. Predates
+  this branch; removing the now-pointless reload fixes it.
+
+Also documented two behaviours that are correct but were understated:
+`--ignore-user-config` drops the whole host profile (`service_tier`, `notify`,
+`personality`, MCP servers), not just "nothing about which model runs"; and the
+slot/budget defaults under `tempfile.gettempdir()` are per-service under
+systemd's `PrivateTmp=yes` and reset on a tmpfs `/tmp`, so "host-wide" and
+"persistent" need the env overrides to be literally true.
+
 ### Documentation
 - README claimed **325 tests across three packages**; there were 530 across four.
   Now 606, with an accurate per-package table.

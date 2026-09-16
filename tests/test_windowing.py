@@ -221,6 +221,23 @@ class TestMergeWindows:
         assert merged["evidence"][0]["supports_claim"] is None
         assert report.dangling == []
 
+    def test_cleared_references_are_counted(self):
+        """`dangling` is empty because _renumber already cleared it; without a
+        separate counter, losing a link looks identical to losing nothing."""
+        windows = [{
+            "claims": [{"id": "C1", "text": "alpha beta gamma"}],
+            "evidence": [{"id": "E1", "text": "ev", "supports_claim": "C99"}],
+            "cases": [{"id": "CASE1", "name": "c", "claims_supported": ["C98", "C1"]}],
+        }]
+        _, report = merge_windows(windows, SCHEMA, strict=True)
+        assert report.references_cleared == 2
+        assert report.dangling == []
+
+    def test_clean_merge_clears_nothing(self):
+        _, report = merge_windows(
+            [_window("first claim here", "ev one", "C1")], SCHEMA, strict=True)
+        assert report.references_cleared == 0
+
     def test_strict_raises_on_a_surviving_dangling_reference(self):
         windows = [{
             "claims": [{"id": "C1", "text": "alpha beta gamma"}],

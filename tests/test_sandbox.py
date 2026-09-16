@@ -116,6 +116,14 @@ class TestIsolatedScratch:
             with isolated_scratch():
                 pass
 
+    def test_root_working_directory_does_not_block_the_call(self, roots, monkeypatch):
+        """systemd's default WorkingDirectory is "/", and every path is inside it,
+        so the containment check is unsatisfiable rather than violated. Refusing
+        to run would fail a service on its first call."""
+        monkeypatch.chdir("/")
+        with isolated_scratch() as scratch:
+            assert scratch.is_dir()
+
     def test_calls_do_not_share_a_directory(self, roots):
         with isolated_scratch() as a, isolated_scratch() as b:
             assert a != b
@@ -169,6 +177,22 @@ class TestSanitizedEnvironment:
             assert os.environ["HOME"] == str(tmp_path)
             assert os.environ["TMPDIR"] == str(tmp_path)
             assert os.environ["XDG_CONFIG_HOME"] == str(tmp_path / ".config")
+
+    def test_repointing_home_keeps_the_agent_logged_in(self, tmp_path, monkeypatch):
+        """Codex resolves ~/.codex/auth.json from HOME, so moving HOME without
+        pinning CODEX_HOME logs it out — and the call fails as an auth error
+        that points nowhere near here."""
+        monkeypatch.setenv("HOME", "/home/real")
+        monkeypatch.delenv("CODEX_HOME", raising=False)
+        with sanitized_environment(home=tmp_path):
+            assert os.environ["HOME"] == str(tmp_path)
+            assert os.environ["CODEX_HOME"] == "/home/real/.codex"
+
+    def test_operator_codex_home_is_not_overridden(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", "/home/real")
+        monkeypatch.setenv("CODEX_HOME", "/opt/deploy/.codex")
+        with sanitized_environment(home=tmp_path):
+            assert os.environ["CODEX_HOME"] == "/opt/deploy/.codex"
 
     def test_a_subprocess_actually_sees_the_scrub(self, monkeypatch):
         """The whole point: the child must not inherit the secret.
@@ -227,6 +251,11 @@ class TestCallSlot:
             with call_slot(slots=1):
                 raise ValueError("boom")
         with call_slot(slots=1):  # would block forever if the lock leaked
+            pass
+
+    def test_root_working_directory_does_not_block_the_gate(self, roots, monkeypatch):
+        monkeypatch.chdir("/")
+        with call_slot(slots=1):
             pass
 
     def test_corrupt_budget_state_is_refused(self, roots):
