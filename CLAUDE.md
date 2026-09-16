@@ -34,7 +34,7 @@ model = EmbeddingModel(genericize=True, whiten_epsilon=0.1)
 | **Whitened, homogeneous text** (extracted claims) | **0.85** | Very similar surface form |
 | **Whitened, diverse authorship** (op-eds, responses) | **0.70–0.75** | Different writers phrase same argument differently |
 
-If your largest cluster has 50+ members, your threshold is too low or you need whitening. Start at 0.75 post-whitening, then sweep [0.70, 0.75, 0.80, 0.85] on your data. Validated on 27K education claims (0.85), 6.5K political proposals (0.75–0.80), and 1.7K op-ed claims (0.75).
+If your largest cluster has 50+ members, your threshold is too low or you need whitening. If you get *zero* clusters, it is too high — whitening can leave a corpus whose maximum pairwise similarity is below 0.85. Start at 0.75 post-whitening, then sweep [0.70, 0.75, 0.80, 0.85] on your data. Validated on 27K education claims (0.85), 6.5K political proposals (0.75–0.80), and 1.7K op-ed claims (0.75).
 
 ### Always validate thresholds before shipping
 
@@ -134,6 +134,19 @@ results = orchestrator.run(items, id_fn=lambda x: x["id"], max_cost=50.0, escala
 
 **"My clusters are huge (50+ members)"**
 Your threshold is too low, or you're using raw embeddings on domain-focused text. Whiten first (`whiten_epsilon=0.1`), then cluster at 0.85.
+
+**"I get zero clusters"**
+The mirror image, and more common after whitening than people expect. Whitening
+moves the whole similarity distribution down, so an inherited threshold can sit
+above your corpus's *maximum* pairwise similarity and match nothing. Check it:
+`pairwise_cosine(vecs)` off-diagonal max. Start at 0.75 post-whitening and sweep.
+
+**"Every novelty score is exactly 0.0"**
+You scored vectors that are in the index, so each item is its own nearest
+neighbour. Below 51 items the adaptive top-k is 1, which makes this exact rather
+than approximate — every score is `0.0`. Above 51 the scores are quietly
+depressed instead. Score held-out items against an index of what you already
+had, or pass an explicit `top_k`.
 
 **"Everything scores 0.7+ similarity"**
 Domain-focused corpus without whitening. The narrow embedding cone compresses all scores. Use `EmbeddingModel(whiten_epsilon=0.1)` and `fit_whitening(corpus)`.

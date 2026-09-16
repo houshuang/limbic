@@ -199,6 +199,7 @@ results = orchestrator.run(
 ```python
 status = orchestrator.status(all_ids=["1", "2", "3"])
 print(status.summary())
+# OrchestratorStatus: .tier_counts, .total_cost, .remaining_items
 # "triage: done=180, needs_review=20 | deep: done=18, needs_review=2 | cost=$12.34 | remaining=0"
 ```
 
@@ -267,6 +268,7 @@ entries = list(read_logs(Path("audit_logs/"), prefix="verify", since="2026-03-01
 
 # Aggregate statistics
 summary = summarize_logs(entries)
+# LogSummary: .total_cost, .items_processed, .error_count, .by_tier, .by_action
 print(summary.total_cost)       # $12.34
 print(summary.items_processed)  # 450
 print(summary.by_tier)          # {"triage": {"count": 400, "cost": 0.40}, "deep": {"count": 50, "cost": 2.50}}
@@ -378,6 +380,206 @@ Audit findings can automatically create proposals for human review. See the hipp
 
 ---
 
+## Cost logging (`cost_log.py`)
+
+Centralized LLM cost tracking across projects, models, and hosts. Uses litellm's pricing data (2,500+ models) for automatic cost computation:
+
+```python
+from limbic.cerebellum.cost_log import cost_log, compute_cost
+
+# Standalone logging (any SDK)
+cost_log.log(project="petrarca", model="gemini/gemini-2.5-flash",
+             prompt_tokens=1200, completion_tokens=340)
+# Each row is a CostRecord: project, host, model, api_key_hint, prompt/completion/
+# cached tokens, cost_usd, script, purpose — enough to attribute spend to a
+# specific script on a specific machine, not just to a project.
+
+# litellm callback (auto-captures every litellm.completion call)
+import litellm
+litellm.callbacks = [cost_log.callback("alif")]
+
+# Query costs
+records = cost_log.query(project="petrarca", days=7)
+total = sum(r.cost_usd for r in records)
+
+# Built-in dashboard and CLI
+# python -m limbic.cerebellum.cost_log report --days 7
+# python -m limbic.cerebellum.cost_log sync --host alif
+```
+
+DB location: `COST_LOG_DB` env var or `~/.local/share/limbic/llm_costs.db`. Includes a web dashboard (`python -m limbic.cerebellum.cost_log dashboard`, port 8042) that splits API spend (billed) from Claude CLI usage (Max-plan subscription value), remote sync from servers, and CLI reporting.
+
+## CLI wrappers (`claude_cli.py`, `codex_cli.py`)
+
+Both wrap a locally installed coding CLI rather than an API key. That is often
+the cheaper path — Codex runs under a ChatGPT subscription, Claude under a Max
+plan — and it is the only way to get an *agentic* run (tools, web search, a
+writable workspace) instead of a single completion.
+
+```python
+from limbic.cerebellum import claude_generate, ClaudeTask, claude_generate_parallel
+
+result, meta = claude_generate(
+    prompt="Classify this sentiment: I love it",
+    project="myapp", purpose="sentiment", model="haiku",
+    schema={"type": "object", "properties": {"label": {"type": "string"}}},
+)
+
+results = claude_generate_parallel(
+    [ClaudeTask(prompt=p, schema=SCHEMA) for p in prompts],
+    project="myapp", max_concurrent=4,
+)
+```
+
+Every `claude -p` invocation writes a `cost_log` row with `script="claude-cli"`,
+so subscription usage shows up in the same dashboard as API spend. The wrapper
+always passes `--no-session-persistence` and strips `CLAUDECODE` plus
+`ANTHROPIC_API_KEY` from the child environment — the key would silently switch a
+Max-plan login to metered API billing *and* break cost attribution.
+
+```python
+from limbic.cerebellum import codex_json, codex_research
+
+# Locked down: read-only sandbox, no network, no writes. Just classify/transform.
+verdict = codex_json("Is this claim supported?", schema=SCHEMA, system=RUBRIC)
+
+# Deliberately agentic: web search + a writable workspace with network egress.
+dossier = codex_research(
+    "Research X. Web-search anything ambiguous. Write findings to out.json.",
+    schema=SCHEMA, scratch_dir="/tmp/run",
+)
+```
+
+`codex_research` is the one that follows leads, and the two config flags that
+unlock it (`tools.web_search`, `sandbox_workspace_write.network_access`) are on
+by default — omit both and it quietly degrades to a shallow one-shot.
+
+Both calls run with `--ephemeral --ignore-user-config`, so they leave no rollout
+behind and read none of the host's `~/.codex/config.toml`. That never changes
+which model runs — model and reasoning are always passed explicitly — but it does
+drop everything *else* the host profile sets, which can include `service_tier`,
+`notify`, `personality` and any configured MCP servers. Pass `isolated=False` to
+`codex_research` when a run genuinely needs those. Quota errors trip a process-local cooldown
+(`mark_unavailable_from_error`) so a cron run stops hammering a depleted
+allowance, and transient non-zero exits retry once while quota errors and
+timeouts do not.
+
+Both wrappers raise a typed error — `ClaudeCLIError` / `CodexCLIError` — for a
+missing binary, a non-zero exit, a timeout, or unparseable output, so a batch can
+distinguish "this item failed" from "the CLI is gone". `claude_is_available()`
+and `codex_is_available()` check for the binary up front, which is what a nightly
+job wants before it starts a thousand items.
+
+`strict_response_schema()` (exported as `codex_strict_response_schema`) converts
+a permissive JSON Schema into the shape
+Codex's structured output requires: `additionalProperties: false`, every
+property in `required`, formerly-optional fields made nullable.
+
+## Agent isolation (`sandbox.py`)
+
+`codex_research` exists to read material you do not control — scraped pages,
+forwarded mail, uploaded images. Prompt injection is therefore a routine
+operating condition, and these are the four guards worth having. They were
+written for a nightly pipeline that ingests public event listings and email.
+
+```python
+from limbic.cerebellum import (
+    call_slot, isolated_scratch, sanitized_environment, untrusted_payload,
+    codex_research,
+)
+
+mission = "Extract every event announced below." + untrusted_payload(
+    "scraped-page", page_html)
+
+with call_slot(), isolated_scratch() as scratch, sanitized_environment(home=scratch):
+    events = codex_research(mission, schema=SCHEMA, scratch_dir=str(scratch))
+```
+
+| Primitive | What it stops |
+|---|---|
+| `untrusted_payload(label, text)` | External text read as instructions. Delimits it with a content-derived nonce (so the payload cannot close its own block) and puts the refusal instruction *ahead* of the data, where later text cannot override it. |
+| `isolated_scratch(files=...)` | The agent reading your repository. A private 0700 directory outside the project, with an allowlist of inputs, destroyed afterwards. Attachments belong here so a hostile image never becomes a durable file. |
+| `sanitized_environment()` | An injection turning into a credential disclosure. The parent legitimately holds API keys and SMTP credentials; the child gets runtime plumbing only, and anything else needs an explicit opt-in. |
+| `call_slot()` | A fan-out bursting the auth quota. A cross-process flock gate plus a persistent daily cap that survives restarts; raises `AgentBudgetExceeded` when the day is spent, `TimeoutError` when no slot frees up. |
+
+**Two deployment preconditions**, both of which fail quietly rather than loudly:
+
+- `sanitized_environment(home=...)` pins `CODEX_HOME` to your real `~/.codex` so
+  repointing HOME doesn't move the agent's credentials with it. If you set
+  `CODEX_HOME` yourself, that wins — point it at wherever the service's
+  `codex login` actually wrote.
+- The slot and budget files default under `tempfile.gettempdir()`. Under
+  systemd's `PrivateTmp=yes` that is per-service, and on a tmpfs `/tmp` it resets
+  on reboot — so "host-wide gate" and "persistent daily cap" quietly become
+  neither. Set `LIMBIC_AGENT_SLOT_ROOT` and `LIMBIC_AGENT_BUDGET_PATH` to shared,
+  persistent paths if you mean them literally.
+
+`protect=` defaults to the working directory and is what the scratch root must
+not live inside. A working directory of `/` (systemd's default) makes that
+unsatisfiable rather than violated, so the check is skipped there — pass
+`protect=` explicitly if you mean a specific tree.
+
+**This is not an OS sandbox**, and is documented as such in the module: the child
+keeps whatever process and network permissions the CLI grants it. These raise the
+cost of a successful injection; they do not make one impossible. Constrain tool
+and network policy separately — for Codex that is
+`codex_research(web_search=..., network=...)`.
+
+## Windowed extraction (`windowing.py`)
+
+Asking a model to extract structured items from a long document in one call
+loses most of them. Windowing recovers them; the merge is the hard part.
+
+```python
+from limbic.cerebellum import (
+    Collection, MergeSchema, Reference, merge_windows, split_into_windows,
+)
+
+SCHEMA = MergeSchema([
+    Collection("claims", prefix="C", dedup_field="text"),
+    Collection("evidence", prefix="E", dedup_field="text",
+               references=[Reference("supports_claim", target="claims")]),
+    Collection("cases", prefix="CASE", dedup_field="name",
+               references=[Reference("claims_supported", target="claims", many=True)]),
+])
+
+per_window = [extract(w.text) for w in split_into_windows(chapter_text)]
+merged, report = merge_windows(per_window, SCHEMA, strict=False)
+
+report.duplicates_removed    # collapsed across the seams
+report.references_cleared    # refs to ids no window produced — links LOST
+report.dangling              # refs surviving renumber into the wrong collection
+```
+
+Watch `references_cleared`, not `dangling`. The common failure is a window
+referencing an id that no window produced; `merge_windows` clears those, so they
+never reach `dangling` and an extraction quietly dropping links looks identical
+to a clean one. `dangling` only catches what survives renumbering — a reference
+resolving into the wrong collection.
+
+`merge_windows` is the whole pipeline, but each step is exported for the cases
+that need to interleave something: `namespace_ids(result, i, schema)`,
+`dedup_by_field(items, field)` (which returns the alias map), and
+`check_references(merged, schema, strict=...)` to re-verify after your own edits.
+`MergeReport` carries `items_before` / `items_after` per collection,
+`duplicates_removed`, the full `id_map`, and any surviving `dangling` references.
+
+Three things go wrong if you merge naively, and `merge_windows` fixes them in a
+fixed order:
+
+1. **Ids collide.** Every window numbers its own output from `C1`, `E1`, … so
+   window 2's `C1` is a different item, and its `supports_claim: "C1"` means
+   *its own*. Ids are namespaced `w{i}:` **before** concatenation; concatenating
+   first and renumbering later silently rewires references between windows.
+2. **The overlap duplicates items** — that is what it is for, but the copies
+   arrive worded slightly differently and often truncated at a window edge. Dedup
+   is word-overlap against `min(|A|, |B|)`, asymmetric so a truncated restatement
+   still matches, and the **longer** text wins.
+3. **Dropping a duplicate orphans references to it.** Dedup returns an alias map
+   (every input id → the id that survived in its place), and renumbering resolves
+   references through it. Anything still unresolvable is cleared and counted,
+   never left dangling.
+
 ## What's NOT in cerebellum
 
 - **LLM client.** Cerebellum doesn't call LLMs itself — it orchestrates *your* LLM calls. Use `limbic.amygdala.llm` or any LLM client you prefer.
@@ -385,3 +587,7 @@ Audit findings can automatically create proposals for human review. See the hipp
 - **Retry strategies.** If your `process_fn` fails, the entire batch is marked as error. Exponential backoff and circuit breaker patterns are not built in — implement them in your `process_fn`.
 - **Real-time dashboard.** No UI for monitoring running audits. Use the audit logs and `orchestrator.status()` programmatically.
 - **Webhook notifications.** No HTTP callbacks on budget warnings or batch completion.
+
+---
+
+Part of [limbic](../../README.md).

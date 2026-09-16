@@ -408,9 +408,77 @@ for result in audit_results:
 
 ---
 
+## Wikidata entity resolution (`wikidata_resolve.py`)
+
+`amygdala.wikidata` fetches a QID you already know. This decides *which* QID a
+mention means — deterministically, with an audit record, before any LLM is
+involved.
+
+```python
+from limbic.amygdala import WikidataClient
+from limbic.hippocampus import WikidataResolver, validate_chosen_qid
+
+resolver = WikidataResolver(
+    WikidataClient(user_agent="myproject/1.0 (you@example.com)"),
+    embedder=model,                       # optional: context similarity heuristic
+    existing_kb_lookup=lookup_in_my_kb,   # optional: prefer entities you already have
+)
+
+res = resolver.resolve("Rollo", context_text="...Viking ruler of Normandy...",
+                       type_hint="person", date_hint=parse_date("860-930"),
+                       already_resolved={"William Longsword": "Q313659"})
+
+res.status       # "resolved" | "ambiguous" | "not_found"
+res.chosen_qid   # "Q57285" when resolved, None when ambiguous
+res.confidence
+res.candidates   # every ScoredCandidate with its per-heuristic breakdown
+res.reasoning
+```
+
+Five heuristics are scored independently and combined by `DEFAULT_WEIGHTS`, each
+contributing to `ScoredCandidate.scores` so a resolution is inspectable rather
+than a bare QID:
+
+| Heuristic | Weight | What it uses |
+|---|---|---|
+| `coherence` | 0.30 | Does the candidate's family/role claims (P22 father, P25 mother, P26 spouse, P40 child, P39 position, P108 employer) point at QIDs already resolved in this batch? The strongest signal, because it is the one an unrelated same-named entity cannot fake. |
+| `type` | 0.25 | Does `P31 instance of` match the `type_hint`, per the `TYPE_HINT_P31` allowlist? |
+| `description` | 0.20 | Cosine similarity between the candidate's description and `context_text`, via the `embedder` you passed. |
+| `date` | 0.15 | `amygdala.temporal.plausibility_score` of the candidate's P569/P570 (or P571/P576) dates against your `date_hint`. |
+| `rank` | 0.10 | The search API's position. A weak prior on purpose — Wikidata's rank is popularity-biased. |
+
+Pass `already_resolved={mention: qid}` to feed the coherence heuristic what the
+rest of the batch has already settled; resolving a cast list in one pass is
+markedly more accurate than resolving each name cold.
+
+Two design choices matter in practice:
+
+- **Type mismatch is a soft penalty (~0.3), not a filter.** Wikidata's class
+  hierarchy is deep and any hand-written P31 allowlist is shallow; hard-filtering
+  discards correct answers whose `instance of` is three subclasses away from what
+  you listed.
+- **Ambiguity is a status, not a guess.** Below `absolute_threshold`, or when the
+  runner-up is within `margin_ratio`, it returns `status="ambiguous"` with the
+  candidates ranked — the point at which handing the shortlist to an LLM is cheap
+  and safe. Guessing at that point is what produces confidently wrong links.
+
+Three module constants make the heuristics inspectable and overridable:
+`TYPE_HINT_P31` (the `instance of` allowlist per type hint), `COHERENCE_PROPERTIES`
+(the properties compared for context coherence), and `DEFAULT_WEIGHTS` (how the
+five scores combine). Pass `weights=` to reweight for a corpus where, say, dates
+are reliable and context is thin.
+
+`validate_chosen_qid(candidates, chosen_qid)` closes the loop after LLM
+disambiguation: it verifies the model picked from the candidate set rather than
+inventing a plausible-looking QID.
+
 ## What's NOT in hippocampus
 
 - **Database migrations.** Hippocampus manages data-level changes (entities), not schema-level changes. Use Alembic or similar for schema migrations.
 - **Conflict resolution.** If two pending proposals touch the same entity, hippocampus doesn't detect or resolve the conflict. This is a known limitation (see IDEAS.md).
 - **Multi-file transactions.** Each proposal applies independently. Atomic application of multiple proposals as a group is not yet supported.
 - **Version control.** The backup mechanism creates timestamped snapshots, but there's no diff/revert/branch model. For full versioning, use git on the YAML directory.
+
+---
+
+Part of [limbic](../../README.md).

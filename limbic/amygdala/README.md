@@ -42,6 +42,44 @@ pip install "limbic[llm]"
 
 ---
 
+## Recipe: analyze a corpus of responses
+
+A common task: you have 50–500 texts (policy responses, reviews, survey answers) and want to find shared arguments, unique insights, and contradictions. This pipeline chains embedding, whitening, clustering, and novelty detection:
+
+```python
+from limbic.amygdala import (
+    EmbeddingModel, VectorIndex, greedy_centroid_cluster,
+    batch_novelty, pairwise_cosine, extract_pairs, classify_pairs,
+)
+
+# 1. Embed with domain-appropriate settings
+#    genericize=True strips numbers/dates that poison similarity
+#    whiten_epsilon=0.1 spreads the narrow embedding cone (essential for domain corpora)
+model = EmbeddingModel(genericize=True, whiten_epsilon=0.1, cache_path="cache.db")
+texts = [claim["text"] for claim in claims]
+model.fit_whitening(texts)
+vecs = model.embed_batch(texts)
+
+# 2. Cluster to find shared arguments (0.85 threshold after whitening)
+clusters = greedy_centroid_cluster(vecs, threshold=0.85)
+# Each cluster = group of claims making ~the same argument
+# Count distinct sources per cluster → "how many respondents say this?"
+
+# 3. Score novelty per claim
+index = VectorIndex()
+index.add([str(i) for i in range(len(vecs))], vecs)
+scores = batch_novelty(vecs, index)
+# 0.0 = everyone says this, 1.0 = only this source says it
+# Aggregate per source to rank "who brings the most novel arguments?"
+
+# 4. Find contradictions (cosine can't distinguish agree vs disagree)
+pairs = extract_pairs(pairwise_cosine(vecs), threshold=0.72)
+classified = classify_pairs(texts, pairs)
+# Returns KNOWN (paraphrase), NEW (contradiction), EXTENDS (elaboration)
+```
+
+See also the [entity dedup recipe](../hippocampus/README.md#deduplication-deduppy) in limbic.hippocampus and the [batch verification recipe](../cerebellum/README.md#batch-processing-batchpy) in limbic.cerebellum.
+
 ## Embedding (`embed.py`)
 
 The `EmbeddingModel` class wraps sentence-transformers with features designed for domain-specific corpora.
@@ -181,6 +219,93 @@ FTS5 dominates on scientific text (exact terminology matters); vector dominates 
 
 ---
 
+### Search benchmarks
+
+| Dataset | Vector nDCG@10 | FTS5 nDCG@10 | Hybrid | Hybrid + rerank |
+|---------|---------------|-------------|--------|-----------------|
+| SciFact (5K docs, 300 queries) | 0.484 | 0.638 | 0.674 | **0.641** |
+| NFCorpus (3.6K docs) | 0.235 | 0.126 | 0.286 | **0.333** |
+
+FTS5 dominates on scientific text (exact terminology matters); vector dominates on medical queries (semantic matching matters). Reranking helps on NFCorpus (+16%) but slightly hurts on SciFact (-5%), likely because scientific terminology already gives exact matches high FTS5 scores.
+
+## Multi-list RRF and query expansion (`search.py`)
+
+For advanced search scenarios, limbic provides LLM-powered query expansion and multi-list fusion with full contribution tracing:
+
+```python
+from limbic.amygdala import (
+    EmbeddingModel, VectorIndex, FTS5Index,
+    expand_query, multi_list_rrf, expanded_hybrid_search, strong_signal,
+)
+
+# --- Multi-list RRF with contribution tracing ---
+# Fuse any number of ranked lists (from different search strategies)
+fused = multi_list_rrf(
+    [vec_results, fts_results, reranked_results],
+    ["vector", "fts", "reranked"],
+)
+for r in fused[:3]:
+    print(f"{r.id}: {r.score:.4f}")
+    for t in r.traces:
+        print(f"  {t.list_label}: rank {t.rank} → +{t.contribution:.4f}")
+# Top-rank bonuses (QMD-style): +0.05 for rank 1, +0.02 for ranks 2-3
+# Each fused hit is a TracedResult carrying RRFContribution entries, so a
+# surprising ranking is attributable to the list that produced it rather than
+# being an opaque blended score.
+
+# --- LLM query expansion ---
+# Generates lex (keyword variants), vec (semantic rephrases), hyde (hypothetical docs)
+expanded = expand_query(
+    "database lock problems",
+    domain_context="The corpus contains SQLite WAL mode discussions",
+)
+# [ExpandedQuery(type="lex", query="deadlock contention WAL"),
+#  ExpandedQuery(type="vec", query="concurrent write failures in SQLite"),
+#  ExpandedQuery(type="hyde", query="When multiple writers attempt..."), ...]
+
+# --- One-call expanded hybrid search ---
+# Combines expand_query + multi_list_rrf in a single call
+model = EmbeddingModel()
+results = expanded_hybrid_search(
+    "effect of digital tools on learning",
+    vector_index=vi,
+    fts_index=fts,
+    embed_fn=model.embed,
+    domain_context="Nordic education research",
+)
+# Each result has full traces showing which sub-query contributed
+
+# --- Skip expansion when not needed ---
+top_scores = [r.score for r in first_pass_results[:2]]
+if strong_signal(top_scores, threshold=0.82, gap=0.12):
+    # Top result is strong and clearly separated — skip expensive LLM expansion
+    pass
+```
+
+**Why query expansion?** A single query misses vocabulary the user doesn't think of. Lex variants find different keywords; vec variants capture different framings; hyde variants bridge the query-document vocabulary gap by generating hypothetical answers. Multi-list RRF fuses all results without manual weight tuning.
+
+## Result diversity (`search.py`)
+
+```python
+from limbic.amygdala import type_diversity_cap, dedup_by
+
+# No single facet may take more than 60% of the top-k
+balanced = type_diversity_cap(
+    results, key_fn=lambda r: r.metadata["source_type"], max_fraction=0.6, k=10,
+)
+
+# Collapse near-identical hits (e.g. several chunks of the same document)
+unique = dedup_by(results, key_fn=lambda r: r.metadata["doc_id"])
+```
+
+Relevance ranking has no opinion about balance, so one prolix source can take
+every slot in an answer that should span several. `type_diversity_cap` caps each
+group at `ceil(max_fraction * k)`, defers the over-cap items, and backfills from
+them only if the result would otherwise come up short — so it costs nothing when
+the ranking is already balanced. Relative order within a group is preserved, and
+it assumes the input is already sorted by score descending.
+
+
 ## Novelty detection (`novelty.py`)
 
 Answers: **"Is this text saying something new relative to what I already have?"** Returns a float from 0.0 (exact duplicate) to 1.0 (completely novel).
@@ -244,6 +369,11 @@ Tested on a 27K-claim knowledge base (Experiment 15):
 - `batch_novelty()`: **3.6ms per claim**
 
 ---
+
+
+`corpus_centroid(vectors)` returns the mean direction that the
+centroid-specificity signal dampens against — compute it once and reuse it
+across a batch rather than letting each call re-derive it.
 
 ## Clustering (`cluster.py`)
 
@@ -515,6 +645,137 @@ SQLite-backed, keyed by text hash. Stores pre-whitening vectors so the same cach
 
 ---
 
+## Temporal reasoning (`temporal.py`)
+
+Historical and archival data rarely carries a clean date. `temporal` parses the
+expressions it *does* carry into integer year ranges, then answers interval
+questions over them.
+
+```python
+from limbic.amygdala import parse_date, overlaps, during, plausibility_score
+
+parse_date("940s")              # DateRange(start=940, end=949)
+parse_date("circa 942")         # DateRange(start=942, end=942, approximate=True)
+parse_date("4th century BC")    # DateRange(start=-400, end=-301)
+parse_date("942-996")           # DateRange(start=942, end=996)
+parse_date("196X")              # DateRange(start=1960, end=1969)   (EDTF, needs the extra)
+
+# Allen interval relations: before, after, during, overlaps, meets, equals
+overlaps(parse_date("940s"), parse_date("942-996"))   # True — was X alive when Y happened?
+
+# Soft consistency instead of a hard filter: how plausible is this candidate
+# date given the surrounding context? 1.0 inside, decaying outside.
+plausibility_score(parse_date("1015"), context=parse_date("990-1030"))   # 1.0
+plausibility_score(parse_date("1450"), context=parse_date("990-1030"))   # 0.015
+```
+
+Two integer years is coarser than full EDTF, but it indexes trivially (two
+columns, a BETWEEN) and covers every query entity resolution actually asks. The
+precision flags (`approximate`, `uncertain`) are carried alongside rather than
+folded into the range, so "c. 942" and "942?" stay distinguishable — and "circa
+942" stays a *point* with a flag rather than silently widening into a decade you
+never asserted. Widen it yourself if your domain wants that; `plausibility_score`
+already decays softly outside the range, which covers most of the reason to.
+
+Full EDTF strings are supported when the optional package is installed
+(`pip install "limbic[temporal]"`). Both the ratified uppercase spelling (`196X`)
+and the 2012-draft lowercase one (`196x`, `19uu`) parse, because archive data
+predates the change.
+
+## Wikidata client (`wikidata.py`)
+
+```python
+from limbic.amygdala import WikidataClient
+
+wd = WikidataClient(user_agent="myproject/1.0 (you@example.com)",
+                    cache_db_path="wikidata_cache.db")
+
+candidates = wd.search("Rollo")          # ranked Candidate list (API-popularity biased)
+entity = wd.get("Q57285")                # labels, aliases, descriptions, claims
+entities = wd.get_many(["Q1", "Q2"])     # batched, up to 50 QIDs per HTTP call
+rows = wd.sparql("SELECT ?x WHERE { ... }")
+```
+
+Every response goes through `PayloadCache` (30-day default TTL), so a re-run of
+an enrichment pass costs nothing. Requests are rate-limited by an in-process
+`TokenBucket` (thread-safe) at Wikidata's published 5 req/s, and `maxlag` is honoured — a
+`MaxlagError` means the server asked you to back off, not that the data is
+missing. `WikidataNotFound` is the distinct "this QID doesn't exist" case.
+
+A `user_agent` is required, not optional: Wikidata blocks anonymous bulk
+clients, and the failure is a silent throttle rather than an error.
+
+Errors are typed so a caller can tell them apart: `WikidataError` is the base,
+`MaxlagError` means the server asked you to back off (retry later, the data is
+fine), and `WikidataNotFound` means the QID genuinely does not exist. Label and
+alias lookups walk `DEFAULT_LANGS` in order, so a missing English label falls
+back rather than coming back empty.
+
+For turning a *mention* into a QID rather than fetching a known one, see
+[`hippocampus.wikidata_resolve`](../hippocampus/README.md#wikidata-entity-resolution-wikidata_resolvepy).
+
+## Retrieval evaluation (`retrieval_eval.py`)
+
+`calibrate` validates an LLM judge against humans; `retrieval_eval` validates
+*retrieval*. It is the standard pooled-judgment IR loop, so "is hybrid better
+than vector here?" gets a number instead of an anecdote.
+
+```python
+from limbic.amygdala import retrieval_eval as rev
+
+# runs  : {query_id: {method_name: [doc_id, ...ranked best-first]}}
+# qrels : {query_id: {doc_id: grade}}   graded 0-3
+pooled = rev.pool(runs, depth=10)               # union of every method's top-10
+qrels = rev.judge_pool(pooled, queries, doc_text=get_text,
+                       judge_fn=rev.make_llm_judge())
+scores = rev.score(runs, qrels, k_ndcg=10, k_recall=20, rel_threshold=2,
+                   strata=query_category)       # per-category breakdown
+print(rev.format_report(scores))
+```
+
+Pooling is what keeps the comparison fair: judging only one method's results
+scores that method against its own definition of relevant. `judge_pool` accepts
+`existing` qrels so adding a method re-judges only the newly pooled documents.
+
+The pool is still only as wide as the methods in it — see
+[Design decisions](../../docs/EVIDENCE.md) for what happened when a
+genuinely different method was added late.
+
+## Serendipity (`serendipity.py`)
+
+Retrieval optimises precision. This optimises *surprise* — pairs related enough
+to be meaningful but far enough apart that you would not have connected them.
+
+```python
+from limbic.amygdala import serendipity as ser
+
+pairs = ser.serendipity_pairs(
+    ids, embeddings,
+    metas=metas, facet_key=lambda m: m["source_type"],
+    band=(0.55, 0.82),      # the inverted-U sweet spot — CALIBRATE THIS
+    facet_bonus=0.15,       # crossing a source/era boundary is more surprising
+    top=50,
+)
+# [{"a": ..., "b": ..., "sim": 0.63, "score": 0.91}, ...]
+
+# Swanson ABC bridging: A and C aren't similar, but both relate strongly to B
+bridges = ser.abc_bridges(ids, embeddings, low=0.4, high=0.7)
+```
+
+The band is embedding-space dependent and **must** be recalibrated per model: a
+raw multilingual encoder compresses everything into a high, narrow range, while
+whitening spreads the unrelated floor down. Two measured settings:
+
+| Corpus | Embeddings | Band that worked |
+|---|---|---|
+| Whitened, domain-focused | Soft-ZCA, `whiten_epsilon=0.1` | `(0.55, 0.82)` (the default) |
+| Raw multilingual MiniLM, multi-domain personal corpus | no whitening | `(0.42, 0.74)` |
+
+Geometry only proposes candidates. Whether a link is *worth* anything is a
+separate judgment — scoring candidates on surprise and usefulness separately
+(0–3 each) rather than one blended score is what made the output usable; see
+[Design decisions](../../docs/EVIDENCE.md).
+
 ## What's NOT in amygdala
 
 - **Billion-scale vector search.** Use FAISS, Milvus, or Qdrant for that. Amygdala's brute-force numpy works up to ~100K vectors.
@@ -524,4 +785,8 @@ SQLite-backed, keyed by text hash. Stores pre-whitening vectors so the same cach
 
 ## Full API reference
 
-See the module docstrings in each `.py` file and the [main limbic README](../README.md) for usage examples.
+See the module docstrings in each `.py` file and the [main limbic README](../../README.md) for usage examples.
+
+---
+
+Part of [limbic](../../README.md).
