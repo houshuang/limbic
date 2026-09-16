@@ -36,8 +36,10 @@ import copy
 import json
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -45,11 +47,15 @@ from typing import Any
 DEFAULT_MODEL = os.environ.get("LIMBIC_CODEX_MODEL", "gpt-5.5")
 DEFAULT_REASONING = os.environ.get("LIMBIC_CODEX_REASONING", "medium")
 QUOTA_COOLDOWN_S = int(os.environ.get("LIMBIC_CODEX_QUOTA_COOLDOWN_S", "21600"))
+# Cap on captured stdout/stderr per call. An agentic run is otherwise free to
+# stream until the parent runs out of memory.
+OUTPUT_LIMIT = int(os.environ.get("LIMBIC_CODEX_OUTPUT_LIMIT", str(2 * 1024 * 1024)))
 
-# Strip CLAUDECODE so a nested call from a Claude Code session doesn't inherit
-# in-session state. (We deliberately leave OpenAI auth env alone so Codex uses
-# whatever its own `codex auth` precedence dictates.)
-_ENV = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+# Keys never passed through to the child. CLAUDECODE is stripped so a nested call
+# from a Claude Code session doesn't inherit in-session state. (We deliberately
+# leave OpenAI auth env alone so Codex uses whatever its own `codex auth`
+# precedence dictates.)
+_STRIPPED_ENV_KEYS = frozenset({"CLAUDECODE"})
 
 _DISABLED_UNTIL = 0.0
 _DISABLED_REASON = ""
@@ -93,11 +99,15 @@ def disabled_reason() -> str:
 
 
 def _codex_env() -> dict:
-    env = dict(_ENV)
-    codex_home = os.environ.get("CODEX_HOME")
-    if codex_home:
-        env["CODEX_HOME"] = codex_home
-    return env
+    """The child's environment, read live rather than snapshotted at import.
+
+    A snapshot made this wrapper ignore any env change a caller made afterwards —
+    including scrubbing secrets before handing an agent untrusted text, and
+    including PATH. Callers can now scope the environment with the usual
+    os.environ juggling (or `limbic.cerebellum.sandbox.sanitized_environment`)
+    and have it actually reach the subprocess.
+    """
+    return {k: v for k, v in os.environ.items() if k not in _STRIPPED_ENV_KEYS}
 
 
 def _allow_null(node: Any) -> Any:
@@ -156,20 +166,123 @@ def _parse_json(text: str) -> Any:
     return None
 
 
+class _Tail:
+    """Thread-safe bounded accumulator keeping the LAST ``limit`` characters.
+
+    An agentic run can emit unbounded output, and the diagnostic value is at the
+    end (see ``_finish``), so the head is what gets dropped.
+    """
+
+    def __init__(self, limit: int):
+        self._limit = limit
+        self._value = ""
+        self._discarded = 0
+        self._lock = threading.Lock()
+
+    def add(self, chunk: str) -> None:
+        with self._lock:
+            value = self._value + chunk
+            if len(value) > self._limit:
+                cut = len(value) - self._limit
+                self._discarded += cut
+                value = value[cut:]
+            self._value = value
+
+    def get(self) -> str:
+        with self._lock:
+            prefix = (f"[... {self._discarded} earlier characters discarded ...]\n"
+                      if self._discarded else "")
+            return prefix + self._value
+
+
+def _kill_process_tree(proc: subprocess.Popen, grace: float = 2.0) -> None:
+    """SIGTERM then SIGKILL the child's whole process group.
+
+    ``codex exec`` spawns helpers; killing only the direct child (which is all
+    ``subprocess.run(timeout=...)`` does) leaves them running and holding the
+    workspace open.
+    """
+    if os.name != "posix":  # pragma: no cover - POSIX is the supported target
+        try:
+            proc.terminate()
+            proc.wait(timeout=grace)
+        except (ProcessLookupError, subprocess.TimeoutExpired):
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+        return
+    for sig, wait in ((signal.SIGTERM, grace), (signal.SIGKILL, 0.0)):
+        try:
+            os.killpg(proc.pid, sig)
+        except (ProcessLookupError, PermissionError):
+            return
+        deadline = time.monotonic() + wait
+        while time.monotonic() < deadline:
+            try:
+                os.killpg(proc.pid, 0)
+            except (ProcessLookupError, PermissionError):
+                return
+            time.sleep(0.05)
+
+
 def _run(cmd: list[str], timeout: int) -> subprocess.CompletedProcess:
+    """Run `codex exec` with bounded output and a process-group kill on timeout."""
     if not is_available():
         raise CodexCLIError("codex CLI not available — install from https://github.com/openai/codex and run `codex auth`")
     if temporarily_disabled():
         raise CodexCLIError(f"codex CLI temporarily disabled (quota): {_DISABLED_REASON}")
     try:
-        return subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout,
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             env=_codex_env(), stdin=subprocess.DEVNULL,  # codex exec blocks on stdin otherwise
+            start_new_session=(os.name == "posix"),      # own process group, so we can kill the tree
         )
-    except subprocess.TimeoutExpired as exc:
-        raise CodexCLIError(f"codex CLI timed out after {timeout}s") from exc
     except (FileNotFoundError, OSError) as exc:
         raise CodexCLIError(f"codex CLI subprocess error: {exc}") from exc
+
+    out, err = _Tail(OUTPUT_LIMIT), _Tail(OUTPUT_LIMIT)
+
+    def drain(stream, tail):
+        try:
+            while True:
+                chunk = stream.read(64 * 1024)
+                if not chunk:
+                    return
+                tail.add(chunk)
+        except (OSError, ValueError):
+            return
+
+    readers = [threading.Thread(target=drain, args=(proc.stdout, out), daemon=True),
+               threading.Thread(target=drain, args=(proc.stderr, err), daemon=True)]
+    for reader in readers:
+        reader.start()
+    timed_out = False
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        _kill_process_tree(proc)
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:  # pragma: no cover - SIGKILL already sent
+            proc.kill()
+            proc.wait()
+    finally:
+        for reader in readers:
+            reader.join(timeout=1)
+        if any(reader.is_alive() for reader in readers):
+            _kill_process_tree(proc, grace=0.2)
+            for reader in readers:
+                reader.join(timeout=1)
+        for stream in (proc.stdout, proc.stderr):
+            try:
+                stream.close()
+            except (OSError, ValueError):
+                pass
+    if timed_out:
+        raise CodexCLIError(f"codex CLI timed out after {timeout}s")
+    return subprocess.CompletedProcess(cmd, proc.returncode, out.get(), err.get())
 
 
 def _finish(proc: subprocess.CompletedProcess, output_path: str | None, schema: dict | None) -> Any:
@@ -273,6 +386,7 @@ def codex_research(
     timeout: int = 900,
     web_search: bool = True,
     network: bool = True,
+    isolated: bool = True,
 ) -> Any:
     """Agentic Codex run: web search + writable workspace with network egress.
 
@@ -288,6 +402,15 @@ def codex_research(
     text. Callers own the files and their lifetime — pass paths inside the same
     short-lived workspace, and remember an attached image is untrusted input that
     can carry rendered instructions.
+
+    ``isolated`` (default on, matching ``codex_json``) adds ``--ephemeral`` and
+    ``--ignore-user-config``, so the run leaves no rollout behind and reads none
+    of the host's ``~/.codex`` settings. This matters *more* here than for
+    ``codex_json``: this is the call that reads untrusted web pages with network
+    egress. Model and reasoning are always passed explicitly, so ignoring user
+    config changes nothing about which model runs. Pass ``isolated=False`` only
+    when the run genuinely needs the host profile (e.g. a locally configured MCP
+    server).
     """
     schema_path = output_path = None
     try:
@@ -297,6 +420,8 @@ def codex_research(
                "--sandbox", "workspace-write", "--skip-git-repo-check", "--color", "never",
                "--output-last-message", output_path,
                "-c", f'model_reasoning_effort="{reasoning or DEFAULT_REASONING}"']
+        if isolated:
+            cmd[2:2] = ["--ephemeral", "--ignore-user-config"]
         if web_search:
             cmd += ["-c", "tools.web_search=true"]
         if network:

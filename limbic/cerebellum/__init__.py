@@ -18,6 +18,13 @@ from .claude_cli import (
     generate_parallel as claude_generate_parallel,
     is_available as claude_is_available,
 )
+from .sandbox import (
+    AgentBudgetExceeded,
+    untrusted_payload,
+    isolated_scratch,
+    sanitized_environment,
+    call_slot,
+)
 from .codex_cli import (
     CodexCLIError,
     codex_json,
@@ -59,4 +66,9 @@ __all__ = [
     "codex_research",
     "codex_strict_response_schema",
     "codex_is_available",
+    "AgentBudgetExceeded",
+    "untrusted_payload",
+    "isolated_scratch",
+    "sanitized_environment",
+    "call_slot",
 ]

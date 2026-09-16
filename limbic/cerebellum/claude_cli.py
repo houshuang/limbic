@@ -56,7 +56,13 @@ _STRIPPED_ENV_KEYS = frozenset({
     "ANTHROPIC_KEY",
     "ANTHROPIC_AUTH_TOKEN",
 })
-_ENV = {k: v for k, v in os.environ.items() if k not in _STRIPPED_ENV_KEYS}
+
+
+def _claude_env() -> dict:
+    """The child's environment, read live rather than snapshotted at import, so a
+    caller's later env change (scrubbed secrets, a different PATH) actually reaches
+    the subprocess."""
+    return {k: v for k, v in os.environ.items() if k not in _STRIPPED_ENV_KEYS}
 
 
 class ClaudeCLIError(RuntimeError):
@@ -393,7 +399,7 @@ def generate(
             capture_output=True,
             text=True,
             timeout=timeout,
-            env=_ENV,
+            env=_claude_env(),
         )
     except subprocess.TimeoutExpired as e:
         _log_cli_failure(
