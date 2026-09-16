@@ -4,6 +4,109 @@ All notable changes to the limbic monorepo (formerly amygdala) are documented he
 
 ---
 
+## 2026-09-16 -- Agentic call isolation, windowed extraction, and a documentation audit
+
+### Fixed
+- **`codex_research` ran without `--ephemeral` / `--ignore-user-config`.** The
+  agentic entry point — the one that reads untrusted web pages with network
+  egress — was the one *without* the isolation flags that the locked-down
+  `codex_json` already passed. A downstream pipeline (koigen/hvaskjer) had been
+  rebinding `codex_cli._run` at runtime to inject them rather than fork limbic.
+  Now `isolated=True` is the default here too; pass `isolated=False` when a run
+  genuinely needs the host profile (a locally configured MCP server, say).
+- **A timed-out `codex exec` left its children running.**
+  `subprocess.run(timeout=...)` reaps only the direct child. `_run` now starts
+  its own process group and SIGTERM/SIGKILLs the tree. Verified with a forked
+  grandchild that kept writing after the parent was reaped under the old code.
+- **Captured output was unbounded.** An agentic run could stream until the parent
+  ran out of memory. stdout/stderr are now drained concurrently through a
+  bounded tail (`LIMBIC_CODEX_OUTPUT_LIMIT`, 2 MB default) that keeps the *end* —
+  where the fatal error is — and reports how much it dropped.
+- **Both CLI wrappers snapshotted `os.environ` at import.** Any env change a
+  caller made afterwards was invisible to the subprocess, including scrubbing
+  secrets before handing an agent hostile text — exactly the case the scrub
+  exists for. `codex_cli._codex_env()` and `claude_cli._claude_env()` now read
+  the environment per call.
+- **CI had been red on `main` since 2026-09-04.** `pip install -e ".[dev]"`
+  pulled in neither the `llm` nor the `temporal` extra, so `test_llm.py` failed
+  with `ModuleNotFoundError` while most of `test_temporal.py` silently skipped.
+  It passed locally only because a developer venv accumulates every extra.
+  `dev` now self-references `[hippocampus,llm,temporal]`, and the two provider
+  test classes use the `importorskip` guard the rest of the suite already had.
+
+### Added
+- **`limbic.cerebellum.sandbox`** — isolation primitives for agentic calls,
+  ported from the koigen/hvaskjer nightly where they ran against real scraped
+  and emailed input:
+  - `untrusted_payload()` delimits external material with a content-derived
+    nonce and puts the refusal instruction ahead of the data;
+  - `isolated_scratch()` gives the agent a private 0700 workspace outside the
+    project, with an allowlist of inputs, destroyed afterwards;
+  - `sanitized_environment()` allowlists the child's environment so an injection
+    cannot become a credential disclosure;
+  - `call_slot()` bounds concurrency across processes and enforces a persistent
+    daily call cap.
+
+  Documented as **not** an OS sandbox: the child keeps whatever the CLI grants it.
+- **`limbic.cerebellum.windowing`** — windowed LLM extraction and a merge that
+  preserves cross-references. Whole-chapter extraction loses most of a text; on
+  the Hirsch corpus 6K windows with 1K overlap produced 80–150 claims per chapter
+  against 20–30, and that structural change beat every prompt variation.
+  `merge_windows` enforces the order that makes the merge safe: namespace ids
+  before concatenating, dedup before renumbering, rewrite references as part of
+  renumbering. Generalized from the otak/hirsch-atlas copies, which had already
+  started to diverge:
+  - the hardcoded collections become a declared `MergeSchema`, validated at
+    construction;
+  - the two dedup variants collapse into one that keeps the **longer** text;
+  - word-overlap tokenizing was ASCII-only (`[a-z]+`), so every Norwegian or
+    non-Latin item compared as the empty set and nothing deduplicated;
+  - `split_into_windows` validates its parameters and cannot fail to advance.
+
+### Documentation
+- README claimed **325 tests across three packages**; there were 530 across four.
+  Now 606, with an accurate per-package table.
+- `limbic.drive` shipped on 2026-09-13 with no CHANGELOG entry, no mention in
+  `CLAUDE.md`, and no place in the architecture diagram or package tables. Added,
+  along with its Python API (`validate_plan`, `check_calibrations`).
+- Documented seven modules that had code and tests but no prose anywhere —
+  roughly 2,950 lines and 164 tests: `hippocampus.wikidata_resolve`,
+  `amygdala.wikidata`, `amygdala.temporal`, `amygdala.retrieval_eval`,
+  `amygdala.serendipity`, `cerebellum.claude_cli`, `cerebellum.codex_cli`.
+  Every one had arrived as an upstream from a consumer project, where the
+  explanation stayed behind in that project's own writeup.
+- Recorded findings from production corpora in *Design decisions*, including two
+  **negative results kept deliberately**: LLM reranking cascades never beat the
+  free cross-encoder (the bottleneck is first-stage recall, not ranking), and
+  agentic file-reading leads on quality but erodes with scale at ~1000× the cost.
+  Also the e5-vs-MiniLM encoder trade (an aggregate win hiding a Norwegian
+  regression) and the two-axis serendipity judging that made link output usable.
+- Architecture diagram and all four module tables brought back in line with the
+  actual tree.
+
+---
+
+## 2026-09-13 -- Drive: calibration-first planning policy
+
+### Added
+- **`limbic.drive`**, a fourth package: deterministic policy checks for a Drive
+  direction card. The model still supplies the judgment — what the user means,
+  which precedent matters, what a representative pilot is — while `validate_plan`
+  makes the expensive mistakes mechanically difficult. A v0 plan cannot spawn
+  workers, spend model calls, or authorize a batch before the user has
+  experienced one small pilot.
+- `validate_plan(plan)` returns *every* violation rather than the first, so a
+  plan gets one round of correction instead of one per rule.
+- `check_calibrations()` replays three bundled historical cases — drawn from the
+  NRK apps, the Otak/Hirsch investigation, and the Codex/Claude workflow research
+  — so a policy change that would have re-allowed a past mistake fails here
+  instead of in a live session.
+- CLI: `python -m limbic.drive calibrate` and
+  `python -m limbic.drive validate <plan.json>`.
+- `skills/drive/` ships the shared Codex/Claude planning skill itself.
+
+---
+
 ## 2026-09-04 -- EDTF wildcard spellings and qualifier flags in temporal
 
 ### Fixed

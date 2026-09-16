@@ -16,6 +16,31 @@ python -m limbic.drive validate /path/to/drive-plan.json
 
 The three bundled calibration cases capture costly failure modes from the NRK
 apps, the Otak/Hirsch investigation, and the Codex/Claude workflow research.
+`calibrate` replays all of them; a policy change that would have re-allowed a
+past mistake fails there rather than in a live session.
+
+The same checks are available as a library, so a host that builds plans itself
+can gate them without shelling out:
+
+```python
+from limbic.drive import validate_plan, check_calibrations, SCHEMA_VERSION
+
+violations = validate_plan(plan)      # [] means the plan is allowed to run
+if violations:
+    raise ValueError(violations)
+
+failures = [c for c in check_calibrations() if c.errors]
+for f in failures:
+    print(f.case_id, f.errors)     # CalibrationResult
+```
+
+`load_calibration_cases()` returns the bundled cases as plain dicts if you want
+to extend the set or inspect what a case actually asserts. `SCHEMA_VERSION`
+identifies the plan shape `validate_plan` expects, so a host that stores plans
+can tell an old card from a current one.
+
+`validate_plan` returns *every* violation rather than the first, so a plan gets
+one round of correction instead of one per rule.
 
 Limbic grew out of the same problems appearing across multiple projects:
 
@@ -25,7 +50,7 @@ Limbic grew out of the same problems appearing across multiple projects:
 - **conversation search** — hybrid RRF search over chat history, where the FTS5 query sanitization and cross-encoder reranking patterns were first validated
 - **reading/annotation tools** — novelty scoring and `classify_pairs` to detect when new annotations overlap with existing knowledge
 
-The same patterns kept recurring: deduplicating entities by fuzzy name, merging records with cascading references, tracking what an LLM had verified, staying within API budgets, searching across languages. Limbic is the generalized result: three packages that handle the full pipeline from **finding patterns** in data to **managing the changes** to **verifying correctness**.
+The same patterns kept recurring: deduplicating entities by fuzzy name, merging records with cascading references, tracking what an LLM had verified, staying within API budgets, searching across languages. Limbic is the generalized result: three packages that handle the full pipeline from **finding patterns** in data to **managing the changes** to **verifying correctness**, plus a fourth (`limbic.drive`) that decides what to spend effort on before any of it starts.
 
 ## Three packages, one pipeline
 
@@ -44,16 +69,24 @@ limbic.amygdala          limbic.hippocampus          limbic.cerebellum
  Knowledge mapping       Validation                  Context builder
  LLM client               (composable rules)           (for LLM prompts)
  Calibration metrics     YAML store                  Cost logging
- SQLite helpers            (file-locked atomic)        (cross-project, dashboard)
+ Temporal reasoning        (file-locked atomic)        (cross-project, dashboard)
+ Wikidata client          Wikidata resolver           Claude / Codex CLI
+ Retrieval eval            (deterministic scoring)      (structured + agentic)
+ Serendipity links                                    Agent isolation
+ SQLite helpers                                       Windowed extraction
 ```
+
+Plus **`limbic.drive`** off to the side: a planning policy that turns an
+open-ended request into one bounded pilot before any of the above runs.
 
 | Package | Purpose | Core dependency |
 |---------|---------|-----------------|
 | **limbic.amygdala** | Find patterns: embed, search, deduplicate, score novelty | numpy, sentence-transformers |
 | **limbic.hippocampus** | Manage changes: proposals with review lifecycle, cascade merges, validation | pyyaml |
-| **limbic.cerebellum** | Verify correctness: LLM-assisted batch audits with budget control, cross-project cost logging | (none beyond stdlib; litellm optional for cost computation) |
+| **limbic.cerebellum** | Verify correctness: LLM-assisted batch audits with budget control, cross-project cost logging, CLI wrappers, agent isolation | (none beyond stdlib; litellm optional for cost computation) |
+| **limbic.drive** | Decide what to do first: validate a plan against a calibration-first policy before spending anything | (none beyond stdlib) |
 
-Each package has its own detailed README in its directory.
+Each of the three core packages has its own detailed README in its directory.
 
 ## Is this for you?
 
@@ -108,6 +141,10 @@ pip install -e ".[dev,llm,hippocampus]"
 | **index** | SQLite document/chunk storage with hybrid search | Single-file, zero-config, FTS5 built in |
 | **knowledge_map** | Adaptive knowledge probing via EIG selection with Bayesian belief propagation, batch probing, KST fringes | Converges in 5–8 questions on 20-node graphs; Bayesian propagator 42% faster than heuristic on chains |
 | **llm** | Multi-provider LLM client (Gemini, Anthropic, OpenAI) with structured output and retry | Auto-fallback, cost tracking, async + sync |
+| **temporal** | Uncertain-date parsing ("940s", "circa 942", "4th century BC", EDTF) into integer year ranges, Allen interval relations, soft plausibility scoring | Indexes as two ints; `edtf` extra optional |
+| **wikidata** | Cache-backed, rate-limited Wikidata client: search, get, batched get_many, SPARQL | 30-day payload cache, 5 req/s token bucket, maxlag-aware |
+| **retrieval_eval** | Pooled-judgment IR evaluation: pool -> LLM-judge -> nDCG / Recall / MRR / MAP, with strata | Answers "which retrieval knob actually wins?" |
+| **serendipity** | Non-obvious link finding: inverted-U similarity band, cross-facet bonus, Swanson ABC bridging | 70% of surfaced links rated surprising *and* useful |
 
 ### Quick start
 
@@ -310,6 +347,9 @@ for r in fused[:3]:
     for t in r.traces:
         print(f"  {t.list_label}: rank {t.rank} → +{t.contribution:.4f}")
 # Top-rank bonuses (QMD-style): +0.05 for rank 1, +0.02 for ranks 2-3
+# Each fused hit is a TracedResult carrying RRFContribution entries, so a
+# surprising ranking is attributable to the list that produced it rather than
+# being an opaque blended score.
 
 # --- LLM query expansion ---
 # Generates lex (keyword variants), vec (semantic rephrases), hyde (hypothetical docs)
@@ -363,6 +403,9 @@ score = novelty_score(query_vec, index, use_centroid_specificity=True)
 # Half-life ~35 days at lambda=0.02
 ages = {"id1": 0.0, "id2": 30.0, "id3": 90.0}  # age in days
 score = novelty_score(query_vec, index, timestamps=ages, decay_lambda=0.02)
+
+# corpus_centroid(vectors) gives the mean direction the specificity signal
+# dampens against; compute it once and reuse it across a batch.
 
 # NLI cascade -- cosine can't tell paraphrases from contradictions
 # (both score ~0.73). NLI cross-encoder resolves this:
@@ -574,6 +617,137 @@ Notes:
 - Structured calls send the schema to every provider, so the model is told what
   shape to return rather than just "return JSON".
 
+### Temporal reasoning
+
+Historical and archival data rarely carries a clean date. `temporal` parses the
+expressions it *does* carry into integer year ranges, then answers interval
+questions over them.
+
+```python
+from limbic.amygdala import parse_date, overlaps, during, plausibility_score
+
+parse_date("940s")              # DateRange(start=940, end=949)
+parse_date("circa 942")         # DateRange(start=942, end=942, approximate=True)
+parse_date("4th century BC")    # DateRange(start=-400, end=-301)
+parse_date("942-996")           # DateRange(start=942, end=996)
+parse_date("196X")              # DateRange(start=1960, end=1969)   (EDTF, needs the extra)
+
+# Allen interval relations: before, after, during, overlaps, meets, equals
+overlaps(parse_date("940s"), parse_date("942-996"))   # True — was X alive when Y happened?
+
+# Soft consistency instead of a hard filter: how plausible is this candidate
+# date given the surrounding context? 1.0 inside, decaying outside.
+plausibility_score(parse_date("1015"), context=parse_date("990-1030"))   # 1.0
+plausibility_score(parse_date("1450"), context=parse_date("990-1030"))   # 0.015
+```
+
+Two integer years is coarser than full EDTF, but it indexes trivially (two
+columns, a BETWEEN) and covers every query entity resolution actually asks. The
+precision flags (`approximate`, `uncertain`) are carried alongside rather than
+folded into the range, so "c. 942" and "942?" stay distinguishable — and "circa
+942" stays a *point* with a flag rather than silently widening into a decade you
+never asserted. Widen it yourself if your domain wants that; `plausibility_score`
+already decays softly outside the range, which covers most of the reason to.
+
+Full EDTF strings are supported when the optional package is installed
+(`pip install "limbic[temporal]"`). Both the ratified uppercase spelling (`196X`)
+and the 2012-draft lowercase one (`196x`, `19uu`) parse, because archive data
+predates the change.
+
+### Wikidata client
+
+```python
+from limbic.amygdala import WikidataClient
+
+wd = WikidataClient(user_agent="myproject/1.0 (you@example.com)",
+                    cache_db_path="wikidata_cache.db")
+
+candidates = wd.search("Rollo")          # ranked Candidate list (API-popularity biased)
+entity = wd.get("Q57285")                # labels, aliases, descriptions, claims
+entities = wd.get_many(["Q1", "Q2"])     # batched, up to 50 QIDs per HTTP call
+rows = wd.sparql("SELECT ?x WHERE { ... }")
+```
+
+Every response goes through `PayloadCache` (30-day default TTL), so a re-run of
+an enrichment pass costs nothing. Requests are rate-limited by an in-process
+token bucket at Wikidata's published 5 req/s, and `maxlag` is honoured — a
+`MaxlagError` means the server asked you to back off, not that the data is
+missing. `WikidataNotFound` is the distinct "this QID doesn't exist" case.
+
+A `user_agent` is required, not optional: Wikidata blocks anonymous bulk
+clients, and the failure is a silent throttle rather than an error.
+
+Errors are typed so a caller can tell them apart: `WikidataError` is the base,
+`MaxlagError` means the server asked you to back off (retry later, the data is
+fine), and `WikidataNotFound` means the QID genuinely does not exist. Label and
+alias lookups walk `DEFAULT_LANGS` in order, so a missing English label falls
+back rather than coming back empty.
+
+For turning a *mention* into a QID rather than fetching a known one, see
+[`hippocampus.wikidata_resolve`](#wikidata-entity-resolution).
+
+### Retrieval evaluation
+
+`calibrate` validates an LLM judge against humans; `retrieval_eval` validates
+*retrieval*. It is the standard pooled-judgment IR loop, so "is hybrid better
+than vector here?" gets a number instead of an anecdote.
+
+```python
+from limbic.amygdala import retrieval_eval as rev
+
+# runs  : {query_id: {method_name: [doc_id, ...ranked best-first]}}
+# qrels : {query_id: {doc_id: grade}}   graded 0-3
+pooled = rev.pool(runs, depth=10)               # union of every method's top-10
+qrels = rev.judge_pool(pooled, queries, doc_text=get_text,
+                       judge_fn=rev.make_llm_judge())
+scores = rev.score(runs, qrels, k_ndcg=10, k_recall=20, rel_threshold=2,
+                   strata=query_category)       # per-category breakdown
+print(rev.format_report(scores))
+```
+
+Pooling is what keeps the comparison fair: judging only one method's results
+scores that method against its own definition of relevant. `judge_pool` accepts
+`existing` qrels so adding a method re-judges only the newly pooled documents.
+
+The pool is still only as wide as the methods in it — see
+[Design decisions](#design-decisions-with-evidence) for what happened when a
+genuinely different method was added late.
+
+### Serendipity: non-obvious links
+
+Retrieval optimises precision. This optimises *surprise* — pairs related enough
+to be meaningful but far enough apart that you would not have connected them.
+
+```python
+from limbic.amygdala import serendipity as ser
+
+pairs = ser.serendipity_pairs(
+    ids, embeddings,
+    metas=metas, facet_key=lambda m: m["source_type"],
+    band=(0.55, 0.82),      # the inverted-U sweet spot — CALIBRATE THIS
+    facet_bonus=0.15,       # crossing a source/era boundary is more surprising
+    top=50,
+)
+# [{"a": ..., "b": ..., "sim": 0.63, "score": 0.91}, ...]
+
+# Swanson ABC bridging: A and C aren't similar, but both relate strongly to B
+bridges = ser.abc_bridges(ids, embeddings, low=0.4, high=0.7)
+```
+
+The band is embedding-space dependent and **must** be recalibrated per model: a
+raw multilingual encoder compresses everything into a high, narrow range, while
+whitening spreads the unrelated floor down. Two measured settings:
+
+| Corpus | Embeddings | Band that worked |
+|---|---|---|
+| Whitened, domain-focused | Soft-ZCA, `whiten_epsilon=0.1` | `(0.55, 0.82)` (the default) |
+| Raw multilingual MiniLM, multi-domain personal corpus | no whitening | `(0.42, 0.74)` |
+
+Geometry only proposes candidates. Whether a link is *worth* anything is a
+separate judgment — scoring candidates on surprise and usefulness separately
+(0–3 each) rather than one blended score is what made the output usable; see
+[Design decisions](#design-decisions-with-evidence).
+
 ### SQLite connection helper
 
 ```python
@@ -740,6 +914,70 @@ store.backup("person", "42")             # timestamped backup
 
 ---
 
+### Wikidata entity resolution
+
+`amygdala.wikidata` fetches a QID you already know. This decides *which* QID a
+mention means — deterministically, with an audit record, before any LLM is
+involved.
+
+```python
+from limbic.amygdala import WikidataClient
+from limbic.hippocampus import WikidataResolver, validate_chosen_qid
+
+resolver = WikidataResolver(
+    WikidataClient(user_agent="myproject/1.0 (you@example.com)"),
+    embedder=model,                       # optional: context similarity heuristic
+    existing_kb_lookup=lookup_in_my_kb,   # optional: prefer entities you already have
+)
+
+res = resolver.resolve("Rollo", context_text="...Viking ruler of Normandy...",
+                       type_hint="person", date_hint=parse_date("860-930"),
+                       already_resolved={"William Longsword": "Q313659"})
+
+res.status       # "resolved" | "ambiguous" | "not_found"
+res.chosen_qid   # "Q57285" when resolved, None when ambiguous
+res.confidence
+res.candidates   # every ScoredCandidate with its per-heuristic breakdown
+res.reasoning
+```
+
+Five heuristics are scored independently and combined by `DEFAULT_WEIGHTS`, each
+contributing to `ScoredCandidate.scores` so a resolution is inspectable rather
+than a bare QID:
+
+| Heuristic | Weight | What it uses |
+|---|---|---|
+| `coherence` | 0.30 | Does the candidate's family/role claims (P22 father, P25 mother, P26 spouse, P40 child, P39 position, P108 employer) point at QIDs already resolved in this batch? The strongest signal, because it is the one an unrelated same-named entity cannot fake. |
+| `type` | 0.25 | Does `P31 instance of` match the `type_hint`, per the `TYPE_HINT_P31` allowlist? |
+| `description` | 0.20 | Cosine similarity between the candidate's description and `context_text`, via the `embedder` you passed. |
+| `date` | 0.15 | `amygdala.temporal.plausibility_score` of the candidate's P569/P570 (or P571/P576) dates against your `date_hint`. |
+| `rank` | 0.10 | The search API's position. A weak prior on purpose — Wikidata's rank is popularity-biased. |
+
+Pass `already_resolved={mention: qid}` to feed the coherence heuristic what the
+rest of the batch has already settled; resolving a cast list in one pass is
+markedly more accurate than resolving each name cold.
+
+Two design choices matter in practice:
+
+- **Type mismatch is a soft penalty (~0.3), not a filter.** Wikidata's class
+  hierarchy is deep and any hand-written P31 allowlist is shallow; hard-filtering
+  discards correct answers whose `instance of` is three subclasses away from what
+  you listed.
+- **Ambiguity is a status, not a guess.** Below `absolute_threshold`, or when the
+  runner-up is within `margin_ratio`, it returns `status="ambiguous"` with the
+  candidates ranked — the point at which handing the shortlist to an LLM is cheap
+  and safe. Guessing at that point is what produces confidently wrong links.
+
+Three module constants make the heuristics inspectable and overridable:
+`TYPE_HINT_P31` (the `instance of` allowlist per type hint), `COHERENCE_PROPERTIES`
+(the properties compared for context coherence), and `DEFAULT_WEIGHTS` (how the
+five scores combine). Pass `weights=` to reweight for a corpus where, say, dates
+are reliable and context is thin.
+
+`validate_chosen_qid(candidates, chosen_qid)` closes the loop after LLM
+disambiguation: it verifies the model picked from the candidate set rather than
+inventing a plausible-looking QID.
+
 ## limbic.cerebellum
 
 **LLM-assisted batch verification with budget tracking, resumable state, and multi-tier orchestration.** For when you need an LLM to verify thousands of records but want to control costs and resume interrupted runs. See [limbic/cerebellum/README.md](limbic/cerebellum/README.md) for full documentation.
@@ -837,6 +1075,7 @@ results = orchestrator.run(
 
 status = orchestrator.status(all_ids=["1", "2", "3"])
 print(status.summary())
+# OrchestratorStatus: .tier_counts, .total_cost, .remaining_items
 ```
 
 ### Audit logging
@@ -861,7 +1100,7 @@ logger.log_entry(AuditEntry(
 # Read and analyze
 entries = list(read_logs(Path("audit_logs/"), prefix="verify", since="2026-03-01"))
 summary = summarize_logs(entries)
-# summary.total_cost, summary.items_processed, summary.by_tier, summary.by_action
+# LogSummary: .total_cost, .items_processed, .error_count, .by_tier, .by_action
 
 # Extract operations grouped by type (with dedup)
 ops = extract_operations(entries, op_types=["fix_name", "merge"])
@@ -877,6 +1116,9 @@ from limbic.cerebellum.cost_log import cost_log, compute_cost
 # Standalone logging (any SDK)
 cost_log.log(project="petrarca", model="gemini/gemini-2.5-flash",
              prompt_tokens=1200, completion_tokens=340)
+# Each row is a CostRecord: project, host, model, api_key_hint, prompt/completion/
+# cached tokens, cost_usd, script, purpose — enough to attribute spend to a
+# specific script on a specific machine, not just to a project.
 
 # litellm callback (auto-captures every litellm.completion call)
 import litellm
@@ -912,6 +1154,151 @@ combined = build_batch_context(items, context_fn=my_context_builder, format="mar
 
 ---
 
+### CLI wrappers: Claude and Codex
+
+Both wrap a locally installed coding CLI rather than an API key. That is often
+the cheaper path — Codex runs under a ChatGPT subscription, Claude under a Max
+plan — and it is the only way to get an *agentic* run (tools, web search, a
+writable workspace) instead of a single completion.
+
+```python
+from limbic.cerebellum import claude_generate, ClaudeTask, claude_generate_parallel
+
+result, meta = claude_generate(
+    prompt="Classify this sentiment: I love it",
+    project="myapp", purpose="sentiment", model="haiku",
+    schema={"type": "object", "properties": {"label": {"type": "string"}}},
+)
+
+results = claude_generate_parallel(
+    [ClaudeTask(prompt=p, schema=SCHEMA) for p in prompts],
+    project="myapp", max_concurrent=4,
+)
+```
+
+Every `claude -p` invocation writes a `cost_log` row with `script="claude-cli"`,
+so subscription usage shows up in the same dashboard as API spend. The wrapper
+always passes `--no-session-persistence` and strips `CLAUDECODE` plus
+`ANTHROPIC_API_KEY` from the child environment — the key would silently switch a
+Max-plan login to metered API billing *and* break cost attribution.
+
+```python
+from limbic.cerebellum import codex_json, codex_research
+
+# Locked down: read-only sandbox, no network, no writes. Just classify/transform.
+verdict = codex_json("Is this claim supported?", schema=SCHEMA, system=RUBRIC)
+
+# Deliberately agentic: web search + a writable workspace with network egress.
+dossier = codex_research(
+    "Research X. Web-search anything ambiguous. Write findings to out.json.",
+    schema=SCHEMA, scratch_dir="/tmp/run",
+)
+```
+
+`codex_research` is the one that follows leads, and the two config flags that
+unlock it (`tools.web_search`, `sandbox_workspace_write.network_access`) are on
+by default — omit both and it quietly degrades to a shallow one-shot.
+
+Both calls run with `--ephemeral --ignore-user-config`, so they leave no rollout
+behind and read none of the host's `~/.codex` settings; pass `isolated=False` to
+`codex_research` if a run genuinely needs the host profile (a locally configured
+MCP server, say). Quota errors trip a process-local cooldown
+(`mark_unavailable_from_error`) so a cron run stops hammering a depleted
+allowance, and transient non-zero exits retry once while quota errors and
+timeouts do not.
+
+Both wrappers raise a typed error — `ClaudeCLIError` / `CodexCLIError` — for a
+missing binary, a non-zero exit, a timeout, or unparseable output, so a batch can
+distinguish "this item failed" from "the CLI is gone". `claude_is_available()`
+and `codex_is_available()` check for the binary up front, which is what a nightly
+job wants before it starts a thousand items.
+
+`strict_response_schema()` (exported as `codex_strict_response_schema`) converts
+a permissive JSON Schema into the shape
+Codex's structured output requires: `additionalProperties: false`, every
+property in `required`, formerly-optional fields made nullable.
+
+### Agent isolation (`sandbox.py`)
+
+`codex_research` exists to read material you do not control — scraped pages,
+forwarded mail, uploaded images. Prompt injection is therefore a routine
+operating condition, and these are the four guards worth having. They were
+written for a nightly pipeline that ingests public event listings and email.
+
+```python
+from limbic.cerebellum import (
+    call_slot, isolated_scratch, sanitized_environment, untrusted_payload,
+    codex_research,
+)
+
+mission = "Extract every event announced below." + untrusted_payload(
+    "scraped-page", page_html)
+
+with call_slot(), isolated_scratch() as scratch, sanitized_environment(home=scratch):
+    events = codex_research(mission, schema=SCHEMA, scratch_dir=str(scratch))
+```
+
+| Primitive | What it stops |
+|---|---|
+| `untrusted_payload(label, text)` | External text read as instructions. Delimits it with a content-derived nonce (so the payload cannot close its own block) and puts the refusal instruction *ahead* of the data, where later text cannot override it. |
+| `isolated_scratch(files=...)` | The agent reading your repository. A private 0700 directory outside the project, with an allowlist of inputs, destroyed afterwards. Attachments belong here so a hostile image never becomes a durable file. |
+| `sanitized_environment()` | An injection turning into a credential disclosure. The parent legitimately holds API keys and SMTP credentials; the child gets runtime plumbing only, and anything else needs an explicit opt-in. |
+| `call_slot()` | A fan-out bursting the auth quota. A cross-process flock gate plus a persistent daily cap that survives restarts; raises `AgentBudgetExceeded` when the day is spent, `TimeoutError` when no slot frees up. |
+
+**This is not an OS sandbox**, and is documented as such in the module: the child
+keeps whatever process and network permissions the CLI grants it. These raise the
+cost of a successful injection; they do not make one impossible. Constrain tool
+and network policy separately — for Codex that is
+`codex_research(web_search=..., network=...)`.
+
+### Windowed extraction (`windowing.py`)
+
+Asking a model to extract structured items from a long document in one call
+loses most of them. Windowing recovers them; the merge is the hard part.
+
+```python
+from limbic.cerebellum import (
+    Collection, MergeSchema, Reference, merge_windows, split_into_windows,
+)
+
+SCHEMA = MergeSchema([
+    Collection("claims", prefix="C", dedup_field="text"),
+    Collection("evidence", prefix="E", dedup_field="text",
+               references=[Reference("supports_claim", target="claims")]),
+    Collection("cases", prefix="CASE", dedup_field="name",
+               references=[Reference("claims_supported", target="claims", many=True)]),
+])
+
+per_window = [extract(w.text) for w in split_into_windows(chapter_text)]
+merged, report = merge_windows(per_window, SCHEMA, strict=False)
+
+report.duplicates_removed    # collapsed across the seams
+report.dangling              # references that still don't resolve
+```
+
+`merge_windows` is the whole pipeline, but each step is exported for the cases
+that need to interleave something: `namespace_ids(result, i, schema)`,
+`dedup_by_field(items, field)` (which returns the alias map), and
+`check_references(merged, schema, strict=...)` to re-verify after your own edits.
+`MergeReport` carries `items_before` / `items_after` per collection,
+`duplicates_removed`, the full `id_map`, and any surviving `dangling` references.
+
+Three things go wrong if you merge naively, and `merge_windows` fixes them in a
+fixed order:
+
+1. **Ids collide.** Every window numbers its own output from `C1`, `E1`, … so
+   window 2's `C1` is a different item, and its `supports_claim: "C1"` means
+   *its own*. Ids are namespaced `w{i}:` **before** concatenation; concatenating
+   first and renumbering later silently rewires references between windows.
+2. **The overlap duplicates items** — that is what it is for, but the copies
+   arrive worded slightly differently and often truncated at a window edge. Dedup
+   is word-overlap against `min(|A|, |B|)`, asymmetric so a truncated restatement
+   still matches, and the **longer** text wins.
+3. **Dropping a duplicate orphans references to it.** Dedup returns an alias map
+   (every input id → the id that survived in its place), and renumbering resolves
+   references through it. Anything still unresolvable is cleared and counted,
+   never left dangling.
+
 ## Design decisions (with evidence)
 
 Every significant design choice in limbic.amygdala was tested in controlled experiments. 23 experiments total, each with a specific hypothesis, dataset, and quantitative result:
@@ -943,6 +1330,52 @@ Every significant design choice in limbic.amygdala was tested in controlled expe
 | 23 | Knowledge map: best propagator × strategy? | **Bayesian + EIG** best overall (avg 7.2 Q→80%). Bayesian 42% faster than heuristic on chains. Post-hoc foil calibration doesn't help; Bayesian constraint propagation is the primary overclaiming defense. Batch probing maintains efficiency (5 Qs in 1 round = same as sequential). | 5 topologies × 50 trials |
 
 Experiment code is in the `experiments/` directory if you want to reproduce or extend them.
+
+### Findings from production corpora
+
+The numbered experiments above are controlled and synthetic-adjacent. These came
+out of evaluating limbic against real corpora, and two of them are **negative
+results kept deliberately** — they are the expensive things not to build.
+
+**Cross-encoder rerank is the cheap winner; LLM reranking is not worth its cost.**
+A pooled-judgment eval (38 queries, 877 graded judgments, scaled 789 → 4,668
+documents) compared three increasingly expensive LLM rerankers against the free
+cross-encoder: snippet reranking, a wide hybrid+FTS union, and reading the *full
+text* of the top 25. All three plateaued at ~0.54 nDCG@10 — tied with
+`rerank()` — while `hybrid_rerank` reached the best cheap recall at 0.606.
+Reading full documents instead of snippets bought nothing.
+
+The reason generalises: **the bottleneck is first-stage recall, not ranking.** No
+reranker can reorder a document that is not in its candidate list. Spend the
+effort on retrieval, not on re-reading what retrieval already found.
+
+**Index retrieval is scale-invariant; agentic file-reading is not.** In the same
+eval, an agent with grep over the raw files led on quality (0.741 nDCG vs 0.521
+for hybrid) but at roughly 1000× the cost and latency — and its advantage eroded
+with corpus size (recall 0.77 → 0.66 at 6× the documents) while
+`hybrid_rerank` stayed flat (0.532 → 0.534). Agentic retrieval is for deep,
+small-set, high-value tasks; the index is for everything else.
+
+**A better first-stage encoder is the lever that does work.** Swapping the
+default multilingual MiniLM for `multilingual-e5-base` lifted the best cheap
+method by +0.046 nDCG and +0.08 Recall@20 at zero marginal cost — the first cheap
+method to close on the agentic result. But e5 *regressed* on Norwegian (bilingual
+nDCG 0.442 vs MiniLM's 0.569), which is why MiniLM remains the default: it was
+chosen for cross-lingual strength (experiment 16). Treat an encoder swap as a
+per-corpus decision, and measure the bilingual case separately — an aggregate
+win can hide a language-specific regression.
+
+**Score serendipity on two axes, not one.** Judging candidate links on
+*surprising* (0–3) and *useful* (0–3) separately yielded 28/40 links scoring ≥2
+on both, with the judge correctly demoting the obvious pairs. A single blended
+"interestingness" score cannot distinguish "obvious and useful" from "surprising
+and pointless", which are the two failure modes that make a link feed unusable.
+
+**Pool against a genuinely different method.** Adding the agentic method to the
+judgment pool *lowered* every index method's score, as it should have: pooling
+only similar methods grades them against their own shared blind spots. If every
+method in your pool shares an architecture, the absolute numbers are optimistic.
+
 
 ## Common pitfalls
 
@@ -978,24 +1411,43 @@ limbic/
                rerank,               (ReferenceGraph,            orchestrator.py
                multi_list_rrf,        apply_merge,               (TieredOrchestrator,
                expand_query,          apply_delete)               VerificationTier)
-               expanded_hybrid_                                      |
-                 search             dedup.py                    audit_log.py
-    |                                (VetoMatcher,               (AuditLogger,
-  novelty.py -> VectorIndex           VetoGate,                   read_logs,
-    |                                 ExclusionList)              extract_operations)
-  cluster.py (numpy only)                                           |
-    |                               validate.py                 context.py
-  document_similarity.py             (Validator, Rule,           (ContextBuilder,
-    |                                 composable checks)          build_batch_context)
-  index.py -> search + connect()                                    |
-    |                               store.py                    cost_log.py
-  calibrate.py                       (YAMLStore, file-locked)    (CostLog, cost_log,
-    |                                                              compute_cost,
-  knowledge_map.py (pure algo)                                     dashboard, sync)
-    |
-  knowledge_map_gen.py -> llm.py
-    |
-  llm.py (Gemini/Anthropic/OpenAI)
+               type_diversity_cap,                                  |
+               expanded_hybrid_     dedup.py                    audit_log.py
+                 search              (VetoMatcher,               (AuditLogger,
+    |                                 VetoGate,                   read_logs,
+  novelty.py -> VectorIndex           ExclusionList)              extract_operations)
+    |                                                               |
+  cluster.py (numpy only)           validate.py                 context.py
+    |                                (Validator, Rule,           (ContextBuilder,
+  document_similarity.py              composable checks)          build_batch_context)
+    |                                                               |
+  index.py -> search + connect()    store.py                    cost_log.py
+    |                                (YAMLStore, file-locked)    (CostLog, cost_log,
+  calibrate.py                          |                          compute_cost,
+    |                               wikidata_resolve.py            dashboard, sync)
+  knowledge_map.py (pure algo)       (WikidataResolver,              |
+    |                                 five weighted             claude_cli.py
+  knowledge_map_gen.py -> llm.py      heuristics, audited        (generate,
+    |                                 Resolution)                 generate_parallel)
+  llm.py (Gemini/Anthropic/OpenAI)                                  |
+    |                                                           codex_cli.py
+  temporal.py (DateRange,                                        (codex_json,
+    parse_date, Allen relations)                                  codex_research)
+    |                                                               |
+  wikidata.py -> cache.py                                       sandbox.py
+    (WikidataClient, TokenBucket)                                (untrusted_payload,
+    |                                                             isolated_scratch,
+  retrieval_eval.py                                               sanitized_environment,
+    (pool -> judge -> nDCG)                                       call_slot)
+    |                                                               |
+  serendipity.py                                                windowing.py
+    (inverted-U band,                                            (split_into_windows,
+     Swanson ABC bridges)                                         merge_windows)
+
+  drive/
+  ───────
+  policy.py -> calibration_cases.json
+   (validate_plan, check_calibrations)
 ```
 
 Design principles:
@@ -1007,7 +1459,7 @@ Design principles:
 
 ## How the packages compose
 
-The three packages are independent but designed to work together:
+The three core packages are independent but designed to work together:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -1030,20 +1482,30 @@ The three packages are independent but designed to work together:
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
+`limbic.drive` sits *before* step 1 rather than inside it: given an open-ended
+request, it validates that the plan starts with one small calibration pilot
+instead of a fan-out. See [Drive](#drive-choose-the-first-move-before-the-swarm).
+
 ## Tests
 
-325 tests covering all three packages:
+606 tests:
 
 ```bash
-pip install -e ".[dev]"
+pip install -e ".[dev]"      # pulls the llm/temporal/hippocampus extras too
 python -m pytest tests/ -v
 ```
 
 | Package | Tests |
 |---------|-------|
-| limbic.amygdala | 236 |
-| limbic.hippocampus | 55 |
-| limbic.cerebellum | 34 |
+| limbic.amygdala | 361 |
+| limbic.hippocampus | 106 |
+| limbic.cerebellum | 134 |
+| limbic.drive | 5 |
+
+Ten of those hit the live Wikidata API (`test_wikidata_live.py`,
+`test_wikidata_resolve_live.py`); deselect them for an offline run. `[dev]`
+deliberately installs every optional extra — when it did not, CI ran a quietly
+smaller suite than a developer's venv and drifted red without anyone noticing.
 
 CI runs on every PR via GitHub Actions.
 
@@ -1056,6 +1518,9 @@ Limbic powers search, data curation, and knowledge management in several systems
 - **kulturperler** — a **Nordic performing arts archive** (10,000+ entities) using proposals for all data changes, cascade merges for deduplicating persons/works, tiered LLM verification of 2,400+ works across 30+ audit sessions, veto-gate dedup of fuzzy-matched person names. Total audit cost: ~$270. The DR-arkivet import scripts use `StateStore` and `AuditLogger` for resumable batch imports with JSONL audit trails, and `connect()` for all SQLite access.
 - A **reading and annotation system** using novelty scoring and `classify_pairs` to detect when new annotations overlap with existing knowledge.
 - **[claude-chat-search](https://github.com/houshuang/claude-chat-search)** — hybrid RRF search over Claude Code chat history with optional LLM query expansion via `expand_query` and `multi_list_rrf`.
+- **hvaskjer** — an unsupervised nightly culture-listings pipeline that feeds scraped pages and forwarded email to `codex_research`. The isolation primitives in `cerebellum.sandbox` come from it, and it is the reason `codex_research` is `isolated` by default.
+- **otak / hirsch-atlas** — book-length argument extraction (10 books, 101 chapters, ~10k claims) using `cerebellum.windowing` for the sliding-window extraction and cross-window merge.
+- **a personal 20-year corpus** (blog, notes, talks, transcripts, tweets) — the pooled-judgment evaluation in [Design decisions](#design-decisions-with-evidence) ran here, using `retrieval_eval` and `serendipity`.
 
 ## License
 

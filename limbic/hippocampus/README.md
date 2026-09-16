@@ -25,6 +25,7 @@ pip install "limbic[hippocampus]"
 | **dedup** | `VetoMatcher`, `VetoGate`, `ExclusionList` — composable veto-gate filtering for candidate duplicate pairs |
 | **validate** | `Validator`, `Rule` — composable validation rules that check entities and produce errors/warnings |
 | **store** | `YAMLStore` — file-locked, atomic YAML storage with typed entity access |
+| **wikidata_resolve** | `WikidataResolver`, `Resolution`, `validate_chosen_qid` — deterministic mention → QID resolution scored across five weighted heuristics, returning an audit record or `status="ambiguous"` rather than a guess |
 
 ---
 
