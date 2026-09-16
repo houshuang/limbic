@@ -2,7 +2,7 @@
 
 **Data curation toolkit: embeddings, search, proposals, and AI-assisted verification.**
 
-Three packages: `limbic.amygdala` (find patterns), `limbic.hippocampus` (manage changes), `limbic.cerebellum` (verify correctness).
+Three core packages: `limbic.amygdala` (find patterns), `limbic.hippocampus` (manage changes), `limbic.cerebellum` (verify correctness) — plus `limbic.drive`, a planning policy that runs before any of them.
 
 ## Rules of Thumb
 
@@ -144,6 +144,21 @@ Same cause — whitening spreads the distribution so novelty scores become meani
 **"NLI says 'contradiction' on obvious paraphrases"**
 Cross-encoder is noisy below 0.72 cosine. The default `classify_pairs()` cascade only runs NLI on high-cosine pairs to avoid this. Don't lower the threshold.
 
+**"My reranker isn't helping"**
+Probably not the reranker. A pooled IR eval across three increasingly expensive
+LLM rerankers (snippets, wide union, full text of top-25) found all of them tied
+with the free cross-encoder at ~0.54 nDCG: **the bottleneck is first-stage
+recall, not ranking**, and no reranker can reorder a document that isn't in its
+candidate list. Widen retrieval or change the encoder instead. Measure with
+`limbic.amygdala.retrieval_eval`.
+
+**"Should I swap to a better embedding model?"**
+Measure the languages separately. `multilingual-e5-base` beat the MiniLM default
+by +0.046 nDCG / +0.08 Recall@20 overall — while regressing on Norwegian (0.442
+vs 0.569). An aggregate win routinely hides a per-language regression, and MiniLM
+is the default precisely for its cross-lingual strength. E5-style encoders also
+need `query: ` / `passage: ` prefixes, which `EmbeddingModel` does not add for you.
+
 **"Cosine says two opposite claims are highly similar"**
 This is expected — cosine measures *topical* similarity, not agreement. Two claims about the same topic that say opposite things will score high. Use `classify_pairs()` or `nli_classify()` to distinguish agree/disagree.
 
@@ -164,6 +179,7 @@ This is expected — cosine measures *topical* similarity, not agreement. Two cl
 |---|---|---|
 | `limbic.amygdala` | `from limbic.amygdala import EmbeddingModel, VectorIndex, ...` | Embedding, search, novelty, clustering, calibration |
 | `limbic.hippocampus` | `from limbic.hippocampus import ProposalStore, ...` | Change proposals, cascade merges, dedup, validation |
-| `limbic.cerebellum` | `from limbic.cerebellum import BatchProcessor, ...` | LLM batch verification, budget tracking, audit logs |
+| `limbic.cerebellum` | `from limbic.cerebellum import BatchProcessor, ...` | LLM batch verification, budget tracking, audit logs, Claude/Codex CLI wrappers, agent isolation, windowed extraction |
+| `limbic.drive` | `from limbic.drive import validate_plan` | Calibration-first plan policy: refuse a plan that fans out before one pilot |
 
 See README.md for full API documentation with benchmarks and experiment evidence.

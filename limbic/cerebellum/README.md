@@ -25,6 +25,11 @@ pip install "limbic[llm]"
 | **orchestrator** | `TieredOrchestrator`, `VerificationTier` — multi-tier verification with auto-escalation |
 | **audit_log** | `AuditLogger`, `read_logs`, `summarize_logs` — append-only JSONL logging with daily rotation and analysis |
 | **context** | `ContextBuilder`, `build_batch_context` — structured prompt building for LLM verification calls |
+| **cost_log** | `CostLog`, `cost_log`, `compute_cost` — cross-project spend tracking with a dashboard, covering CLI subscription value as well as API spend |
+| **claude_cli** | `generate`, `generate_parallel`, `Task` — `claude -p` wrapper, every call auto-logged to `cost_log` |
+| **codex_cli** | `codex_json`, `codex_research`, `strict_response_schema` — `codex exec` wrapper: locked-down structured calls, and deliberately agentic runs with web search and network egress |
+| **sandbox** | `untrusted_payload`, `isolated_scratch`, `sanitized_environment`, `call_slot` — isolation primitives for handing untrusted material to an agentic CLI |
+| **windowing** | `split_into_windows`, `merge_windows`, `MergeSchema` — windowed LLM extraction with a cross-window merge that preserves references |
 
 ---
 

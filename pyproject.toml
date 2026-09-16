@@ -36,7 +36,10 @@ temporal = [
 ]
 dev = [
     "pytest>=7.0",
-    "pyyaml>=6.0",
+    # The optional extras are dev dependencies too: tests/test_llm.py patches the
+    # provider SDKs and tests/test_temporal.py needs edtf. Without them CI ran a
+    # quietly smaller suite than a developer's venv did, and drifted red.
+    "limbic[hippocampus,llm,temporal]",
 ]
 
 [tool.setuptools.packages.find]

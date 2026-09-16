@@ -25,7 +25,7 @@ pip install "limbic[llm]"
 | Module | What it does | Key numbers |
 |--------|-------------|-------------|
 | **embed** | Sentence embedding with 3 whitening modes, Matryoshka truncation, genericization, persistent cache | 83–452x speedup with SQLite cache; +32% nearest-neighbor separation with Soft-ZCA whitening |
-| **search** | Numpy vector search, SQLite FTS5, hybrid RRF fusion, cross-encoder reranking | +32.5% nDCG with reranking; RRF 4x more robust than convex fusion under embedding degradation |
+| **search** | Numpy vector search, SQLite FTS5, hybrid RRF fusion, cross-encoder reranking, multi-list RRF with contribution tracing, LLM query expansion, type-diversity capping | +32.5% nDCG with reranking; RRF 4x more robust than convex fusion under embedding degradation |
 | **novelty** | Multi-signal novelty scoring: global + topic-local + centroid specificity + temporal decay + NLI cascade | +17% novel/known separation with centroid specificity; NLI fixes 94% of high-cosine contradictions |
 | **cluster** | Greedy centroid clustering (batch + incremental), complete linkage, pairwise cosine, confidence-calibrated pair classification | Incremental matches batch quality at threshold >= 0.85, 1.8x faster; order-sensitive at lower thresholds |
 | **document_similarity** | Document-level thematic similarity using weighted multi-field embeddings | 94% accuracy on human-rated pairs; AUROC=0.930 on 300-pair dataset; Spearman rho=0.818 |
@@ -35,6 +35,10 @@ pip install "limbic[llm]"
 | **knowledge_map** | Adaptive knowledge probing via EIG selection with Bayesian belief propagation, batch probing, KST fringes | Converges in 5–8 questions on 20-node graphs; Bayesian propagator 42% faster than heuristic on chains |
 | **knowledge_map_gen** | LLM-powered knowledge graph generation from topic descriptions | Generates 15–50 node prerequisite DAGs |
 | **llm** | Multi-provider LLM client (Gemini, Anthropic, OpenAI) with structured output and retry | Auto-fallback, cost tracking, async + sync |
+| **temporal** | Uncertain-date parsing ("940s", "circa 942", "4th century BC", EDTF) into integer year ranges, Allen interval relations, soft plausibility scoring | Indexes as two ints; `edtf` extra optional |
+| **wikidata** | Cache-backed, rate-limited Wikidata client: search, get, batched get_many, SPARQL | 30-day payload cache, 5 req/s token bucket, maxlag-aware |
+| **retrieval_eval** | Pooled-judgment IR evaluation: pool -> LLM-judge -> nDCG / Recall / MRR / MAP, with strata | Answers "which retrieval knob actually wins?" |
+| **serendipity** | Non-obvious link finding: inverted-U similarity band, cross-facet bonus, Swanson ABC bridging | 70% of surfaced links rated surprising *and* useful |
 
 ---
 
