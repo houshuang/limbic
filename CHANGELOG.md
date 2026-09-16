@@ -4,6 +4,21 @@ All notable changes to the limbic monorepo (formerly amygdala) are documented he
 
 ---
 
+## 2026-09-16 -- Bounded parallel fan-out in amygdala.llm
+
+### Added
+- **`generate_parallel` / `generate_parallel_sync` and `LLMTask`.** Ported from
+  the `llm_providers.py` that otak and hirsch-atlas each carry a byte-identical
+  copy of — the one capability those copies had that `amygdala.llm` did not, and
+  therefore the blocker on retiring them. Results come back in input order; a
+  task that fails returns `(None, {"error", "tag"})` rather than taking the batch
+  with it, because a 300-item fan-out should not lose the 299 that worked.
+  `max_concurrent` is the only backpressure there is.
+- **`Retry-After` is honoured** when a provider sends one, in place of guessing
+  with exponential backoff. The server knows when it will be ready.
+
+---
+
 ## 2026-09-16 -- Agentic call isolation, windowed extraction, and a documentation audit
 
 ### Fixed

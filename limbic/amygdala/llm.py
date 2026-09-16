@@ -7,6 +7,7 @@ Usage:
 """
 
 import asyncio
+from dataclasses import dataclass
 import json
 import logging
 import os
@@ -134,13 +135,29 @@ async def _call_openai(model_id, sys, user, schema, max_tok, **kw):
 _PROVIDERS = {"anthropic": _call_anthropic, "gemini": _call_gemini, "openai": _call_openai}
 
 
+def _retry_after(e) -> float | None:
+    """The server's own Retry-After, if it sent one. It knows better than we do."""
+    response = getattr(e, "response", None)
+    headers = getattr(response, "headers", None)
+    if not headers:
+        return None
+    raw = headers.get("Retry-After") or headers.get("retry-after")
+    try:
+        return float(raw) if raw else None
+    except (TypeError, ValueError):
+        return None
+
+
 async def _retry_call(fn, args, retries=MAX_RETRIES, **kwargs):
     for attempt in range(retries + 1):
         try:
             return await fn(*args, **kwargs)
         except Exception as e:
             if _is_retryable(e) and attempt < retries:
-                await asyncio.sleep(BACKOFF_BASE * (4 ** attempt) + random.uniform(0, 1))
+                wait = _retry_after(e)
+                if wait is None:
+                    wait = BACKOFF_BASE * (4 ** attempt) + random.uniform(0, 1)
+                await asyncio.sleep(wait)
                 continue
             raise
 
@@ -185,6 +202,53 @@ async def generate_structured(prompt: str, schema: dict, system_prompt: str = "Y
                     "model": model, "provider": m["provider"]}
 
 
+@dataclass
+class Task:
+    """One unit of work for :func:`generate_parallel`."""
+
+    prompt: str
+    schema: dict
+    system_prompt: str = "You are a helpful assistant."
+    model: str = "gemini3-flash"
+    max_tokens: int = 8192
+    thinking_budget: int | None = None
+    tag: str = ""
+
+
+async def generate_parallel(
+    tasks: list[Task], *, max_concurrent: int = 20,
+) -> list[tuple[dict | None, dict]]:
+    """Run many ``generate_structured`` calls concurrently, bounded by a semaphore.
+
+    Returns ``(result, metadata)`` per task **in input order**. A task that fails
+    comes back as ``(None, {"error": ..., "tag": ...})`` rather than taking the
+    whole batch down with it — a fan-out of a few hundred items should not lose
+    the 299 that worked because one hit a content filter. Check for ``"error"``
+    in the metadata.
+
+    ``max_concurrent`` is the only backpressure: without it a few hundred tasks
+    open a few hundred sockets at once and the provider rate-limits all of them.
+    """
+    semaphore = asyncio.Semaphore(max_concurrent)
+
+    async def run_one(index: int, task: Task):
+        async with semaphore:
+            tag = task.tag or f"task-{index}"
+            try:
+                result, meta = await generate_structured(
+                    task.prompt, task.schema, system_prompt=task.system_prompt,
+                    model=task.model, max_tokens=task.max_tokens,
+                    thinking_budget=task.thinking_budget,
+                )
+                meta["tag"] = tag
+                return result, meta
+            except Exception as e:  # noqa: BLE001 - one task must not sink the batch
+                log.warning("generate_parallel task %s failed: %s", tag, e)
+                return None, {"error": str(e), "model": task.model, "tag": tag}
+
+    return await asyncio.gather(*(run_one(i, t) for i, t in enumerate(tasks)))
+
+
 def _run_sync(coro):
     """Run an async coroutine synchronously, handling nested event loops."""
     try:
@@ -205,3 +269,7 @@ def generate_sync(prompt: str, **kwargs) -> str:
 
 def generate_structured_sync(prompt: str, schema: dict, **kwargs) -> tuple[dict, dict]:
     return _run_sync(generate_structured(prompt, schema, **kwargs))
+
+
+def generate_parallel_sync(tasks: list[Task], **kwargs) -> list[tuple[dict | None, dict]]:
+    return _run_sync(generate_parallel(tasks, **kwargs))

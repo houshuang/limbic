@@ -30,11 +30,15 @@ from .wikidata import (
 from .document_similarity import Document, SimilarityPair, find_similar_documents, embed_documents, document_similarity_matrix
 from .calibrate import cohens_kappa, validate_llm_judge, intra_rater_reliability
 from .knowledge_map import KnowledgeGraph, BeliefState, init_beliefs, next_probe, next_probe_batch, update_beliefs, coverage_report, is_converged, calibrate_beliefs, adjust_for_calibration, knowledge_fringes
+from .llm import Task as LLMTask, generate_parallel, generate_parallel_sync
 from . import retrieval_eval
 from . import serendipity
 
 __all__ = [
     "retrieval_eval",
+    "LLMTask",
+    "generate_parallel",
+    "generate_parallel_sync",
     "serendipity",
     "EmbeddingModel",
     "VectorIndex",

@@ -606,6 +606,31 @@ Features: automatic retry with exponential backoff on 429/500/503, fallback chai
 
 ---
 
+
+### Parallel fan-out
+
+```python
+from limbic.amygdala import LLMTask, generate_parallel_sync
+
+tasks = [LLMTask(prompt=p, schema=SCHEMA, model="gemini3-flash", tag=doc_id)
+         for doc_id, p in prompts.items()]
+results = generate_parallel_sync(tasks, max_concurrent=20)
+
+for result, meta in results:          # input order, always
+    if result is None:
+        log.warning("failed: %s — %s", meta["tag"], meta["error"])
+```
+
+Results come back in input order, and a task that fails returns
+`(None, {"error": ..., "tag": ...})` instead of taking the batch with it — a
+fan-out of 300 items should not lose the 299 that worked because one hit a
+content filter. `max_concurrent` is the only backpressure: without it, a few
+hundred tasks open a few hundred sockets and the provider rate-limits all of
+them at once.
+
+Retries honour a `Retry-After` header when the provider sends one, and fall back
+to exponential backoff with jitter when it doesn't.
+
 ## SQLite connection helper (`index.py`)
 
 ```python

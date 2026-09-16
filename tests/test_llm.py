@@ -164,3 +164,79 @@ class TestFallback:
         assert result == {"capital": "Paris"}
         assert calls == ["gpt-5.6-luna", "gpt-5.6-terra"]
         assert meta["model"] == "terra"
+
+
+# ---------------------------------------------------------------------------
+# Bounded parallel fan-out
+# ---------------------------------------------------------------------------
+
+
+class TestGenerateParallel:
+    """Ported from otak's llm_providers, which had the one thing limbic lacked."""
+
+    def _tasks(self, n):
+        return [llm.Task(prompt=f"p{i}", schema=SCHEMA, tag=f"t{i}") for i in range(n)]
+
+    def test_results_come_back_in_input_order(self, monkeypatch):
+        async def fake(prompt, schema, **kw):
+            await asyncio.sleep(0.02 if prompt == "p0" else 0)   # finish out of order
+            return {"capital": prompt}, {"total_cost_usd": 0.0}
+        monkeypatch.setattr(llm, "generate_structured", fake)
+        out = _run(llm.generate_parallel(self._tasks(3)))
+        assert [r["capital"] for r, _ in out] == ["p0", "p1", "p2"]
+
+    def test_one_failure_does_not_sink_the_batch(self, monkeypatch):
+        async def fake(prompt, schema, **kw):
+            if prompt == "p1":
+                raise RuntimeError("content filter")
+            return {"capital": prompt}, {"total_cost_usd": 0.0}
+        monkeypatch.setattr(llm, "generate_structured", fake)
+        out = _run(llm.generate_parallel(self._tasks(3)))
+        assert out[0][0] is not None and out[2][0] is not None
+        assert out[1][0] is None
+        assert "content filter" in out[1][1]["error"]
+        assert out[1][1]["tag"] == "t1"
+
+    def test_concurrency_is_bounded(self, monkeypatch):
+        peak = {"now": 0, "max": 0}
+
+        async def fake(prompt, schema, **kw):
+            peak["now"] += 1
+            peak["max"] = max(peak["max"], peak["now"])
+            await asyncio.sleep(0.01)
+            peak["now"] -= 1
+            return {"capital": prompt}, {"total_cost_usd": 0.0}
+
+        monkeypatch.setattr(llm, "generate_structured", fake)
+        _run(llm.generate_parallel(self._tasks(20), max_concurrent=3))
+        assert peak["max"] <= 3
+
+    def test_tag_defaults_to_index(self, monkeypatch):
+        async def fake(prompt, schema, **kw):
+            return {"capital": prompt}, {}
+        monkeypatch.setattr(llm, "generate_structured", fake)
+        out = _run(llm.generate_parallel([llm.Task(prompt="p", schema=SCHEMA)]))
+        assert out[0][1]["tag"] == "task-0"
+
+
+class TestRetryAfter:
+    """A 429 carries the server's own backoff; guessing ignores it."""
+
+    def test_header_is_used(self):
+        e = Exception()
+        e.response = SimpleNamespace(headers={"Retry-After": "7"})
+        assert llm._retry_after(e) == 7.0
+
+    def test_lowercase_header(self):
+        e = Exception()
+        e.response = SimpleNamespace(headers={"retry-after": "2.5"})
+        assert llm._retry_after(e) == 2.5
+
+    @pytest.mark.parametrize("headers", [{}, {"Retry-After": "soon"}, {"Retry-After": ""}])
+    def test_unusable_header_falls_back_to_backoff(self, headers):
+        e = Exception()
+        e.response = SimpleNamespace(headers=headers)
+        assert llm._retry_after(e) is None
+
+    def test_no_response_attribute(self):
+        assert llm._retry_after(Exception("plain")) is None
