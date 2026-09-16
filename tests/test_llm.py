@@ -65,6 +65,9 @@ def _openai_response(content: str):
 class TestOpenAICallShape:
     """json_object mode is rejected by the API unless the messages mention JSON."""
 
+    def setup_method(self):
+        pytest.importorskip("openai")
+
     def test_structured_call_mentions_json_and_schema(self):
         create = AsyncMock(return_value=_openai_response('{"capital": "Paris"}'))
         with patch("openai.AsyncOpenAI") as mk:
@@ -101,6 +104,9 @@ class TestOpenAICallShape:
 
 class TestGeminiTokenAccounting:
     """Gemini bills thinking tokens as output but reports them in a separate counter."""
+
+    def setup_method(self):
+        pytest.importorskip("google.genai")
 
     def test_thinking_tokens_counted_as_output(self):
         response = SimpleNamespace(
