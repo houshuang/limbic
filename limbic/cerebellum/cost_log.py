@@ -31,6 +31,7 @@ import json
 import logging
 import os
 import platform
+import re
 import sqlite3
 import uuid
 from dataclasses import dataclass
@@ -58,7 +59,10 @@ CREATE TABLE IF NOT EXISTS llm_costs (
     cost_usd    REAL DEFAULT 0.0,
     script      TEXT DEFAULT '',
     purpose     TEXT DEFAULT '',
-    metadata    TEXT DEFAULT '{}'
+    metadata    TEXT DEFAULT '{}',
+    cache_hit   INTEGER DEFAULT 0,
+    outcome     TEXT DEFAULT NULL,
+    packet_id   TEXT DEFAULT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_costs_ts ON llm_costs(ts);
@@ -66,6 +70,28 @@ CREATE INDEX IF NOT EXISTS idx_costs_project ON llm_costs(project);
 CREATE INDEX IF NOT EXISTS idx_costs_model ON llm_costs(model);
 CREATE INDEX IF NOT EXISTS idx_costs_host ON llm_costs(host);
 """
+
+# Columns added after the original schema shipped. `CREATE TABLE IF NOT EXISTS`
+# above is a no-op against an existing database file, so an older `llm_costs`
+# table needs these added explicitly. Guarded by `PRAGMA table_info` so it is
+# safe to run against every connection, every time (idempotent). The
+# `idx_costs_outcome` index is created here too, *after* the column is
+# guaranteed to exist — putting it in `_SCHEMA` instead would break on an
+# older DB, where `executescript` runs before the ALTER TABLE below and
+# `CREATE INDEX ... (outcome)` fails with "no such column".
+_MIGRATION_COLUMNS: dict[str, str] = {
+    "cache_hit": "INTEGER DEFAULT 0",
+    "outcome": "TEXT DEFAULT NULL",
+    "packet_id": "TEXT DEFAULT NULL",
+}
+
+
+def _migrate_columns(conn: sqlite3.Connection) -> None:
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(llm_costs)")}
+    for col, decl in _MIGRATION_COLUMNS.items():
+        if col not in existing:
+            conn.execute(f"ALTER TABLE llm_costs ADD COLUMN {col} {decl}")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_costs_outcome ON llm_costs(outcome)")
 
 # ---------------------------------------------------------------------------
 # Default DB path
@@ -80,6 +106,21 @@ def _default_db_path() -> Path:
 
 def _detect_host() -> str:
     return os.environ.get("COST_LOG_HOST", platform.node().split(".")[0])
+
+
+def _parse_since(spec: str) -> str:
+    """Parse a relative window like "30d" / "12h" / "45m" into an ISO cutoff.
+
+    Accepts a bare integer as days, for convenience. Used by the `report
+    --since` CLI flag and `multi_group_summary`.
+    """
+    spec = spec.strip()
+    m = re.match(r"^(\d+)\s*([dhm]?)$", spec)
+    if not m:
+        raise ValueError(f"can't parse --since {spec!r}; use e.g. 30d, 12h, 45m")
+    n, unit = int(m.group(1)), (m.group(2) or "d")
+    delta = {"d": timedelta(days=n), "h": timedelta(hours=n), "m": timedelta(minutes=n)}[unit]
+    return (datetime.now(timezone.utc) - delta).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 # ---------------------------------------------------------------------------
@@ -147,6 +188,43 @@ def compute_cost(model: str, prompt_tokens: int, completion_tokens: int,
         return _fallback_cost(model, prompt_tokens, completion_tokens)
 
 
+class UnknownModelPriceError(ValueError):
+    """Raised by `price_for()` when a model has no known per-token price and strict=True."""
+
+
+def price_for(model: str, *, strict: bool = True) -> tuple[float, float]:
+    """Return `(input_price_per_1M, output_price_per_1M)` USD for a model.
+
+    Tries litellm's pricing database first, then the built-in
+    `_FALLBACK_PRICES` table. Unlike `compute_cost`, which silently computes
+    $0 for an unpriced model (a caller that doesn't check for `None` logs a
+    real call as free), this raises by default. Otak carried a private price
+    table 5-7x too low for months because nothing forced the question; this
+    is the guard against a repeat. Pass `strict=False` to get `(0.0, 0.0)`
+    with a logged warning instead of raising — e.g. for a best-effort budget
+    estimate where a $0 fallback is an acceptable, visible degradation.
+    """
+    try:
+        import litellm
+        info = litellm.get_model_info(model)
+        inp = info.get("input_cost_per_token")
+        out = info.get("output_cost_per_token")
+        if inp is not None and out is not None:
+            return float(inp) * 1_000_000, float(out) * 1_000_000
+    except Exception:
+        pass
+    prices = _FALLBACK_PRICES.get(model) or _FALLBACK_PRICES.get(model.rsplit("/", 1)[-1])
+    if prices:
+        return prices
+    if strict:
+        raise UnknownModelPriceError(
+            f"no known price for model {model!r} — pass strict=False, or add "
+            "it to cost_log._FALLBACK_PRICES if it's a real, priced model"
+        )
+    log.warning("no known price for model %r; treating as $0/1M (strict=False)", model)
+    return (0.0, 0.0)
+
+
 # ---------------------------------------------------------------------------
 # Core logger
 # ---------------------------------------------------------------------------
@@ -167,6 +245,9 @@ class CostRecord:
     script: str
     purpose: str
     metadata: dict
+    cache_hit: bool = False
+    outcome: str | None = None
+    packet_id: str | None = None
 
 
 class CostLog:
@@ -195,6 +276,7 @@ class CostLog:
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA busy_timeout=30000")
         conn.executescript(_SCHEMA)
+        _migrate_columns(conn)
         conn.commit()
         self._conn = conn
         return conn
@@ -204,8 +286,18 @@ class CostLog:
             cached_tokens: int = 0, cost_usd: float | None = None,
             api_key_hint: str = "", host: str | None = None,
             script: str = "", purpose: str = "",
-            metadata: dict[str, Any] | None = None) -> CostRecord:
-        """Log an LLM call.  If cost_usd is None, computes it via litellm."""
+            metadata: dict[str, Any] | None = None,
+            cache_hit: bool = False, outcome: str | None = None,
+            packet_id: str | None = None) -> CostRecord:
+        """Log an LLM call.  If cost_usd is None, computes it via litellm.
+
+        `cache_hit`, `outcome`, and `packet_id` are optional ledger columns:
+        `cache_hit` marks a `cached_call` response-cache hit (cost_usd should
+        be 0 for those); `outcome` is normally set later via
+        `record_outcome()` once the caller knows whether the result was used;
+        `packet_id` links the row to a `cerebellum.packet.Packet` (reserved
+        for that not-yet-built feature — nullable, no current writer).
+        """
 
         if cost_usd is None:
             cost_usd = compute_cost(model, prompt_tokens, completion_tokens,
@@ -225,6 +317,9 @@ class CostLog:
             script=script,
             purpose=purpose,
             metadata=metadata or {},
+            cache_hit=cache_hit,
+            outcome=outcome,
+            packet_id=packet_id,
         )
 
         conn = self._connect()
@@ -232,16 +327,49 @@ class CostLog:
             """INSERT INTO llm_costs
                (id, ts, project, host, model, api_key_hint,
                 prompt_tokens, completion_tokens, cached_tokens,
-                cost_usd, script, purpose, metadata)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                cost_usd, script, purpose, metadata, cache_hit, outcome, packet_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (record.id, record.ts, record.project, record.host,
              record.model, record.api_key_hint,
              record.prompt_tokens, record.completion_tokens, record.cached_tokens,
              record.cost_usd, record.script, record.purpose,
-             json.dumps(record.metadata)),
+             json.dumps(record.metadata), int(record.cache_hit),
+             record.outcome, record.packet_id),
         )
         conn.commit()
         return record
+
+    def record_outcome(self, call_id: str, outcome: str, detail: str = "") -> bool:
+        """Set the `outcome` of an existing ledger row (applied/no_op/rejected/held/error).
+
+        This is the missing half of the ledger the audit called out: without
+        it, cost per useful change can't be computed, only cost per call.
+        `detail` (optional free text) is merged into the row's `metadata`
+        JSON under `outcome_detail` rather than adding another column.
+        Returns True if a row was found and updated.
+        """
+        conn = self._connect()
+        if detail:
+            row = conn.execute(
+                "SELECT metadata FROM llm_costs WHERE id = ?", (call_id,)
+            ).fetchone()
+            if row is None:
+                return False
+            try:
+                meta = json.loads(row["metadata"] or "{}")
+            except json.JSONDecodeError:
+                meta = {}
+            meta["outcome_detail"] = detail
+            cur = conn.execute(
+                "UPDATE llm_costs SET outcome = ?, metadata = ? WHERE id = ?",
+                (outcome, json.dumps(meta), call_id),
+            )
+        else:
+            cur = conn.execute(
+                "UPDATE llm_costs SET outcome = ? WHERE id = ?", (outcome, call_id)
+            )
+        conn.commit()
+        return cur.rowcount > 0
 
     # -----------------------------------------------------------------------
     # litellm callback
@@ -355,6 +483,57 @@ class CostLog:
         """, params).fetchall()
         return [dict(r) for r in rows]
 
+    _MULTI_GROUP_COLUMNS = {
+        "project", "model", "host", "api_key_hint", "script", "purpose",
+        "outcome", "cache_hit",
+    }
+
+    def multi_group_summary(self, *, by: list[str], since: str | None = None) -> list[dict]:
+        """Aggregate costs grouped by any combination of columns, with an
+        `outcome`-aware yield metric: `cost_per_applied` (cost_usd / count of
+        rows with outcome='applied' in that group; None if the group has no
+        applied rows). This is the report the audit was missing — without
+        `outcome`, cost per useful change can't be computed, only cost per
+        call. Also reports `cache_hit_rate` per group.
+        """
+        cols = [c.strip() for c in by if c.strip()]
+        if not cols:
+            raise ValueError("by must name at least one column")
+        bad = set(cols) - self._MULTI_GROUP_COLUMNS
+        if bad:
+            raise ValueError(f"unknown group column(s) {sorted(bad)}; use one of "
+                             f"{sorted(self._MULTI_GROUP_COLUMNS)}")
+
+        conn = self._connect()
+        clauses, params = [], []
+        if since:
+            clauses.append("ts >= ?")
+            params.append(since)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        group_cols = ", ".join(f"COALESCE({c}, '')" for c in cols)
+        select_cols = ", ".join(f"COALESCE({c}, '') AS {c}" for c in cols)
+        rows = conn.execute(f"""
+            SELECT {select_cols},
+                   COUNT(*) AS calls,
+                   SUM(prompt_tokens) AS prompt_tokens,
+                   SUM(completion_tokens) AS completion_tokens,
+                   SUM(cached_tokens) AS cached_tokens,
+                   SUM(cost_usd) AS cost_usd,
+                   AVG(cache_hit) AS cache_hit_rate,
+                   SUM(CASE WHEN outcome = 'applied' THEN 1 ELSE 0 END) AS applied_count
+            FROM llm_costs{where}
+            GROUP BY {group_cols}
+            ORDER BY cost_usd DESC
+        """, params).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["cost_per_applied"] = (
+                d["cost_usd"] / d["applied_count"] if d["applied_count"] else None
+            )
+            out.append(d)
+        return out
+
     def total(self, *, days: int | None = None) -> float:
         """Total USD spend."""
         conn = self._connect()
@@ -405,6 +584,11 @@ class CostLog:
 # ---------------------------------------------------------------------------
 
 cost_log = CostLog()
+
+
+def record_outcome(call_id: str, outcome: str, detail: str = "") -> bool:
+    """Module-level convenience: `cost_log.record_outcome(...)` on the singleton."""
+    return cost_log.record_outcome(call_id, outcome, detail)
 
 
 # ---------------------------------------------------------------------------
@@ -988,6 +1172,11 @@ def _cli():
     rpt.add_argument("--days", type=int, default=7, help="Look-back window (default 7)")
     rpt.add_argument("--group-by", default="project",
                      choices=["project", "model", "host", "api_key_hint", "script"])
+    rpt.add_argument("--by", default=None,
+                     help="Comma-separated columns for a multi-column report, e.g. "
+                          "project,purpose,outcome. Overrides --group-by/--days.")
+    rpt.add_argument("--since", default=None,
+                     help="Relative window for --by, e.g. 30d, 12h, 45m")
     rpt.add_argument("--json", action="store_true", help="JSON output")
 
     # -- sync --
@@ -1006,6 +1195,35 @@ def _cli():
     ds.add_argument("--port", type=int, default=8043)
 
     args = parser.parse_args()
+
+    if args.cmd == "report" and args.by:
+        cl = CostLog()
+        cols = [c.strip() for c in args.by.split(",") if c.strip()]
+        since = _parse_since(args.since) if args.since else None
+        rows = cl.multi_group_summary(by=cols, since=since)
+        if args.json:
+            print(json.dumps({"by": cols, "since": args.since, "rows": rows},
+                             indent=2, default=str))
+            return
+        if not rows:
+            print("  (no data)")
+            return
+        window = f"since {args.since}" if args.since else "all time"
+        print(f"\n  LLM costs by {', '.join(cols)} — {window}")
+        print(f"  DB: {cl.db_path}\n")
+        col_w = 18
+        header = "".join(f"{c:<{col_w}}" for c in cols)
+        print(f"  {header}{'Calls':>8} {'Total tok':>12} {'Cache%':>8} {'Cost':>10} {'$/applied':>10}")
+        print(f"  {'-'*col_w*len(cols)} {'-'*8} {'-'*12} {'-'*8} {'-'*10} {'-'*10}")
+        for r in rows:
+            total_tokens = r["prompt_tokens"] + r["completion_tokens"] + r["cached_tokens"]
+            grp = "".join(f"{str(r[c]) or '(none)':<{col_w}}" for c in cols)
+            cache_pct = 100 * (r["cache_hit_rate"] or 0.0)
+            per_applied = f"${r['cost_per_applied']:.4f}" if r["cost_per_applied"] is not None else "-"
+            print(f"  {grp}{r['calls']:>8} {total_tokens:>12,} {cache_pct:>7.1f}% "
+                  f"${r['cost_usd']:>9.4f} {per_applied:>10}")
+        print()
+        return
 
     if args.cmd == "report":
         cl = CostLog()

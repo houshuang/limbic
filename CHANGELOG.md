@@ -4,6 +4,65 @@ All notable changes to the limbic monorepo (formerly amygdala) are documented he
 
 ---
 
+## 2026-09-20 -- Response cache, outcome-bearing ledger, and session forensics
+
+The 20 Sep 2026 `llm-pipeline-audit` found that consumers only adopt limbic
+where it is one import and one call, and that the pieces that would actually
+save money were missing: no response cache despite the hashes already being
+computed, no `outcome` field so cost per useful change couldn't be measured,
+a silent `project="limbic"` default, and no visibility into interactive
+agent-session spend (which the ledger never sees). This release closes those
+gaps as plain functions, not new frameworks.
+
+### Added
+- **`cerebellum.calls.cached_call`.** A thin wrapper around `claude_cli.generate`
+  (or any callable with the same shape) that caches by
+  `sha256(model, system, prompt, schema, version)` in a small SQLite store
+  (`~/.local/share/limbic/llm_cache.db` by default, via `amygdala.connect`).
+  A hit costs $0 and a `cache_hit=1` ledger row instead of a subprocess call.
+  `cache=True|False|"refresh"`, `ttl_days`, and `replicates=n, agree=k` for
+  independent-read agreement (returns a `Held` result on disagreement rather
+  than trusting a single confidence score — the audit found exact agreement
+  between two reads lifted precision 0.71 -> 0.97, while three-way agreement
+  was only 62.8%). `purpose` is a required argument (empty on ~40% of rows
+  per the audit); an empty `project` is inferred from the git root rather
+  than silently defaulting, which is what produced 25,642 unattributable
+  "limbic" rows in `amygdala.llm.generate_structured`. Never holds the
+  SQLite write lock across the model call (read -> release -> call -> write).
+- **`cost_log` ledger gained `cache_hit`, `outcome`, and `packet_id` columns**,
+  added via an idempotent `ALTER TABLE` migration guarded by
+  `PRAGMA table_info` (safe against an existing database with the old
+  schema). `CostLog.record_outcome(call_id, outcome, detail="")` sets
+  `outcome` (applied/no_op/rejected/held/error) after the fact, once the
+  caller knows whether the result was used — the field the ledger needed to
+  answer "cost per useful change" instead of only "cost per call".
+- **`cost_log.price_for(model)`.** Raises `UnknownModelPriceError` for an
+  unpriced model instead of the silent-$0 path that let Otak carry a price
+  table 5-7x too low for months. `strict=False` opts back into the old
+  best-effort behaviour.
+- **`python -m limbic.cerebellum.cost_log report --by project,purpose,outcome --since 30d`.**
+  A multi-column breakdown (`CostLog.multi_group_summary`) with cache-hit
+  rate and `cost_per_applied` per group, alongside the existing single-column
+  `--group-by` report.
+- **`limbic.cerebellum.forensics`**, ported from the audit's prototype
+  scripts (`~/src/research/llm-pipeline-audit/data/`). `cost_log` only sees
+  calls made *through* limbic; this is the read-only forensic layer over the
+  interactive Claude Code / Codex session transcripts where most spend
+  actually happens. Two counting rules made structural: never trust a
+  session's cumulative token counter (a forked Codex subagent inherits its
+  parent's cumulative count; a resumed session can reset it) — sum
+  `last_token_usage` deltas instead; and dedupe Claude JSONL by
+  `message.id` before summing `usage`, since a streamed response repeats the
+  same id across several lines. `python -m limbic.cerebellum.forensics
+  codex|claude [--since 30d] [--project-by cwd|paths] [--session FILE --attrib]`.
+
+### Changed
+- `CostLog.log()` gained optional `cache_hit`, `outcome`, `packet_id`
+  keyword arguments (all default to the previous behaviour; existing callers
+  are unaffected).
+
+---
+
 ## 2026-09-16 -- Bounded parallel fan-out in amygdala.llm
 
 ### Added

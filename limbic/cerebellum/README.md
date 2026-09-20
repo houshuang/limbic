@@ -25,11 +25,85 @@ pip install "limbic[llm]"
 | **orchestrator** | `TieredOrchestrator`, `VerificationTier` — multi-tier verification with auto-escalation |
 | **audit_log** | `AuditLogger`, `read_logs`, `summarize_logs` — append-only JSONL logging with daily rotation and analysis |
 | **context** | `ContextBuilder`, `build_batch_context` — structured prompt building for LLM verification calls |
-| **cost_log** | `CostLog`, `cost_log`, `compute_cost` — cross-project spend tracking with a dashboard, covering CLI subscription value as well as API spend |
+| **cost_log** | `CostLog`, `cost_log`, `compute_cost`, `price_for`, `record_outcome` — cross-project spend tracking with a dashboard, an outcome-bearing ledger, and a strict per-model price lookup |
+| **calls** | `cached_call`, `Held`, `CallMeta` — response-cache + replicate-agreement wrapper around a generate transport, so a repeated call costs $0 |
 | **claude_cli** | `generate`, `generate_parallel`, `Task` — `claude -p` wrapper, every call auto-logged to `cost_log` |
 | **codex_cli** | `codex_json`, `codex_research`, `strict_response_schema` — `codex exec` wrapper: locked-down structured calls, and deliberately agentic runs with web search and network egress |
 | **sandbox** | `untrusted_payload`, `isolated_scratch`, `sanitized_environment`, `call_slot` — isolation primitives for handing untrusted material to an agentic CLI |
 | **windowing** | `split_into_windows`, `merge_windows`, `MergeSchema` — windowed LLM extraction with a cross-window merge that preserves references |
+| **forensics** | `scan_codex_sessions`, `scan_claude_sessions`, `attrib_session` — read-only token-usage forensics over interactive session transcripts, which `cost_log` never sees |
+
+---
+
+## Caching a repeated call (`calls.py`)
+
+`claude_cli.generate` already computes `prompt_sha256` / `system_sha256` /
+`schema_sha256` for every call; `cached_call` is what actually uses them.
+A repeated `(model, system, prompt, schema, version)` call is a cache hit:
+no subprocess, `cost_usd=0`, and a ledger row with `cache_hit=1`.
+
+```python
+from limbic.cerebellum import cached_call
+
+result, meta = cached_call(
+    "Classify sentiment: I love it",
+    project="petrarca", purpose="sentiment",
+    schema={"type": "object", "properties": {"label": {"type": "string"}}},
+)
+print(meta.cache_hit, meta.cost_usd)   # False, 0.0381 (first call)
+
+result, meta = cached_call(   # identical call
+    "Classify sentiment: I love it",
+    project="petrarca", purpose="sentiment",
+    schema={"type": "object", "properties": {"label": {"type": "string"}}},
+)
+print(meta.cache_hit, meta.cost_usd)   # True, 0.0
+
+# Disagreement-as-a-signal: 3 independent reads, need 2 to agree.
+result, meta = cached_call(
+    "Is this a duplicate?", project="skard", purpose="dedup",
+    replicates=3, agree=2, cache=False,
+)
+from limbic.cerebellum import Held
+if isinstance(result, Held):
+    print(result.reason, result.results)   # e.g. "2/3 replicates agreed, needed 2"
+
+# Later, once you know whether the result was actually used:
+from limbic.cerebellum import record_outcome
+record_outcome(meta.call_id, "applied")
+```
+
+`purpose` is required and `project` is inferred from the git root when
+omitted — see the module docstring in `calls.py` for why both are refusals
+rather than silent defaults.
+
+---
+
+## Session forensics (`forensics.py`)
+
+`cost_log` only sees calls made *through* limbic. Interactive Claude Code /
+Codex sessions — where most spend actually happens — are invisible to it.
+`forensics` reads their transcripts directly, with the counting rules that
+make that safe (see the module docstring for the forked-subagent and
+resumed-session traps this avoids).
+
+```python
+from limbic.cerebellum.forensics import scan_codex_sessions, scan_claude_sessions, parse_since
+
+codex_sessions = scan_codex_sessions(since=parse_since("30d"))
+for s in codex_sessions[:5]:
+    print(s.path.name, s.project_by_cwd, s.input_tokens, s.requests_over_150k)
+
+claude_sessions = scan_claude_sessions(since=parse_since("30d"))
+for s in claude_sessions[:5]:
+    print(s.path.name, s.totals("main"), s.totals("sidechain"))
+```
+
+```bash
+python -m limbic.cerebellum.forensics codex --since 30d --project-by cwd
+python -m limbic.cerebellum.forensics claude --since 30d
+python -m limbic.cerebellum.forensics codex --session <rollout.jsonl> --attrib
+```
 
 ---
 

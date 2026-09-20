@@ -10,7 +10,16 @@ from .orchestrator import (
 )
 from .audit_log import AuditEntry, AuditLogger, LogSummary, read_logs, extract_operations, summarize_logs
 from .context import ContextBuilder, build_batch_context
-from .cost_log import CostLog, CostRecord, cost_log, compute_cost
+from .cost_log import (
+    CostLog,
+    CostRecord,
+    cost_log,
+    compute_cost,
+    price_for,
+    record_outcome,
+    UnknownModelPriceError,
+)
+from .calls import cached_call, Held, CallMeta
 from .claude_cli import (
     ClaudeCLIError,
     Task as ClaudeTask,
@@ -68,6 +77,12 @@ __all__ = [
     "CostRecord",
     "cost_log",
     "compute_cost",
+    "price_for",
+    "record_outcome",
+    "UnknownModelPriceError",
+    "cached_call",
+    "Held",
+    "CallMeta",
     "ClaudeCLIError",
     "ClaudeTask",
     "claude_generate",
