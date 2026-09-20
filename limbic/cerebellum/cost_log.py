@@ -371,6 +371,21 @@ class CostLog:
         conn.commit()
         return cur.rowcount > 0
 
+    def set_packet_id(self, call_id: str, packet_id: str) -> bool:
+        """Link an existing ledger row to the `cerebellum.packet.Packet` it paid for.
+
+        The column was reserved with no writer; `run_packets` is the writer.
+        With it, `report --by purpose,outcome` can be narrowed to one packet's
+        whole history — the dry run, the real call, the split halves after a
+        truncation — which is what makes "did we already pay for this?"
+        answerable before replanning a batch.
+        """
+        conn = self._connect()
+        cur = conn.execute(
+            "UPDATE llm_costs SET packet_id = ? WHERE id = ?", (packet_id, call_id))
+        conn.commit()
+        return cur.rowcount > 0
+
     # -----------------------------------------------------------------------
     # litellm callback
     # -----------------------------------------------------------------------
