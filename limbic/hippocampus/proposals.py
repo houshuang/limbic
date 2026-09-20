@@ -165,7 +165,13 @@ def _safe_filename(proposal_id: str, title: str) -> str:
 
 
 class ProposalStore:
-    """Manages proposals on disk across lifecycle directories."""
+    """Manages proposals on disk across lifecycle directories.
+
+    This is the filing cabinet, not the lock: it has no preimage check, so an
+    `approved` status here is a string in a file, not a guarantee that the
+    record still looks the way the proposer saw it. Use
+    `limbic.hippocampus.apply.apply_proposal` for the write itself.
+    """
 
     def __init__(self, base_dir: str | Path) -> None:
         self.base = Path(base_dir)
