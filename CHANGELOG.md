@@ -63,6 +63,59 @@ gaps as plain functions, not new frameworks.
 
 ---
 
+## 2026-09-20 -- HTTP transports, fixed double-logging, and subagent forensics
+
+Review follow-up on the response cache above. `claude -p` adds roughly 9-17K
+harness tokens per call, the wrong transport for the cheap, high-volume
+workers (Kulturbase's Luna campaigns, skard's packet runner) that POST
+directly to a provider API and never reach the ledger. Fixing that surfaced a
+real cost-doubling bug in `cached_call` itself.
+
+### Added
+- **`cached_call(transport="openai"|"gemini")`.** Built-in HTTP transports —
+  stdlib `urllib` only, no `openai` or `google-genai` SDK dependency
+  (`google-genai` fails to import on at least one project's arm64-macOS
+  Python build). OpenAI via the Responses API with strict `json_schema`
+  structured output; Gemini via REST `generateContent` with a local
+  null-union schema stripper. Both self-log to `cost_log` through
+  `price_for()`, so an unpriced model logs a visible $0 with a warning
+  instead of failing the call.
+- **`limbic.cerebellum.forensics` now finds Claude Code subagents.** A
+  Task-tool subagent's turns are not inline `isSidechain: true` lines in the
+  parent's own transcript — they live in
+  `<session-id>/subagents/agent-*.jsonl` beside it. The scanner missed this
+  entirely (reported 0 subagent tokens on real sessions with a dozen
+  subagents each) until fixed to scan that directory and fold it into
+  `sidechain_by_model`. Also reports each subagent's "entrance fee" (its
+  first request's input+cache-creation+cache-read total — a real 30-day scan
+  came in at a 51.5K median, matching the audit's 49.8K).
+
+### Fixed
+- **`cached_call` was double-logging every cache miss with the `claude_cli`
+  transport**, since `claude_cli.generate()` already writes its own
+  `cost_log` row and `cached_call` then wrote a second one carrying the same
+  cost — silently doubling every reported total for the default transport.
+  `claude_cli.generate()` (and both new HTTP transports) now return a
+  `call_id` in their metadata; `cached_call` logs only when a transport
+  didn't already (`calls._log_call`). Caught by a test that actually counted
+  ledger rows for the real transport, which the first round's tests didn't.
+- **`limbic.cerebellum.__init__` no longer re-exports the `cost_log`
+  singleton.** `from .cost_log import ..., cost_log, ...` rebinds the
+  *package* attribute `limbic.cerebellum.cost_log` from the submodule to
+  that instance, so `import limbic.cerebellum.cost_log` silently returned the
+  instance rather than the module. No consumer was affected (alif, petrarca,
+  otak, dragoman, nrk all use the fully-qualified
+  `from limbic.cerebellum.cost_log import cost_log`, which resolves via
+  `sys.modules` and was never shadowed) — confirmed by grep before removing
+  the re-export.
+- A test-only artifact: an earlier version of the `cached_call` test suite
+  exercised the real `claude_cli` transport without patching
+  `claude_cli.cost_log`, which briefly wrote fake rows into the real
+  production ledger (`~/.local/share/limbic/llm_costs.db`). Deleted by id;
+  the fixture now patches both bindings.
+
+---
+
 ## 2026-09-16 -- Bounded parallel fan-out in amygdala.llm
 
 ### Added

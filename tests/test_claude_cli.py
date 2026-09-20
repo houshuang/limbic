@@ -98,6 +98,9 @@ class TestGenerateHappyPath:
         rows = tmp_cost_log.query()
         assert len(rows) == 1
         row = rows[0]
+        # `call_id` lets a composing caller (cached_call) recover the row this
+        # call already wrote instead of logging a second, cost-doubling row.
+        assert meta["call_id"] == row["id"]
         assert row["project"] == "testproj"
         assert row["model"] == "claude-haiku-4-5-20251001"
         assert row["script"] == "claude-cli"
@@ -184,6 +187,9 @@ class TestGenerateHappyPath:
         haiku_meta = json.loads(by_model["claude-haiku-4-5-20251001"]["metadata"])
         assert haiku_meta["session_id"] == sonnet_meta["session_id"]
         assert "web_search_requests" not in haiku_meta  # 0 is omitted
+
+        # call_id points at the first model's row (insertion order: haiku first).
+        assert meta["call_id"] == by_model["claude-haiku-4-5-20251001"]["id"]
 
     def test_falls_back_to_top_level_usage_when_modelUsage_missing(self, tmp_cost_log):
         response = _single_model_response()

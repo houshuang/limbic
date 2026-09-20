@@ -7,15 +7,26 @@ from unittest.mock import patch
 
 import pytest
 
-from limbic.cerebellum import calls
+from limbic.cerebellum import calls, claude_cli
 from limbic.cerebellum.calls import CallMeta, Held, cached_call
 from limbic.cerebellum.cost_log import CostLog
 
 
 @pytest.fixture
 def tmp_cost_log(tmp_path, monkeypatch):
+    """Redirect every `cost_log` binding a transport could log through.
+
+    `calls.py` and `claude_cli.py` each hold their own `from .cost_log import
+    cost_log` binding. A test that exercises the real `claude_cli` transport
+    (not a fake) writes through claude_cli's binding, not calls' — missing
+    this once wrote 4 rows of fake $0.001 "smoke" calls into the real
+    production ledger (~/.local/share/limbic/llm_costs.db), since that test
+    only patched `calls.cost_log`. Patch both from a single fixture so this
+    can't happen again.
+    """
     fresh = CostLog(db_path=tmp_path / "costs.db")
     monkeypatch.setattr(calls, "cost_log", fresh)
+    monkeypatch.setattr(claude_cli, "cost_log", fresh)
     return fresh
 
 
@@ -262,3 +273,11 @@ class TestTransport:
             result, meta = cached_call("ping", project="p", purpose="smoke", cache_db_path=cache_db)
         assert result == "pong"
         assert meta.model == "claude-haiku-4-5-20251001"
+
+        # claude_cli.generate() self-logs; cached_call must not log a second,
+        # cost-doubling row for the same call — exactly one row, and
+        # meta.call_id must point at the real one so record_outcome works.
+        rows = tmp_cost_log.query()
+        assert len(rows) == 1
+        assert meta.call_id == rows[0]["id"]
+        assert rows[0]["cost_usd"] == pytest.approx(0.001)

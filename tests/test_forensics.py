@@ -295,3 +295,84 @@ class TestClaudeSessions:
         _write_jsonl(tmp_path / "-Users-stian-src-skard" / "b.jsonl", [_claude_assistant("m2", "claude-opus-5", u)])
         sessions = scan_claude_sessions(tmp_path)
         assert len(sessions) == 2
+
+
+class TestClaudeSubagents:
+    """Subagent transcripts live at <project-dir>/<session-id>/subagents/agent-*.jsonl,
+    not as inline isSidechain lines in the main file — verified against real
+    transcripts under ~/.claude/projects/.../<session-id>/subagents/."""
+
+    def _write_session_with_subagents(self, tmp_path, session_id, main_lines, subagent_files):
+        project_dir = tmp_path / "-Users-stian-src-otak"
+        _write_jsonl(project_dir / f"{session_id}.jsonl", main_lines)
+        for name, lines in subagent_files.items():
+            _write_jsonl(project_dir / session_id / "subagents" / f"{name}.jsonl", lines)
+        return project_dir / f"{session_id}.jsonl"
+
+    def test_subagent_file_counted_as_sidechain_for_the_parent(self, tmp_path):
+        main_usage = {"input_tokens": 2, "cache_creation_input_tokens": 0,
+                     "cache_read_input_tokens": 1000, "output_tokens": 30}
+        sub_usage = {"input_tokens": 2, "cache_creation_input_tokens": 55806,
+                    "cache_read_input_tokens": 0, "output_tokens": 279}
+        main_path = self._write_session_with_subagents(
+            tmp_path, "sess-1",
+            main_lines=[_claude_assistant("m1", "claude-opus-5", main_usage)],
+            subagent_files={
+                "agent-apresenter-audit-e419ba7": [
+                    {"type": "user", "isSidechain": True, "agentId": "apresenter-audit-e419ba7"},
+                    _claude_assistant("sub1", "claude-opus-5", sub_usage, sidechain=True),
+                ],
+            },
+        )
+        stats = scan_claude_session(main_path)
+        assert len(stats.subagents) == 1
+        sub = stats.subagents[0]
+        assert sub.agent_id == "apresenter-audit-e419ba7"
+        assert sub.model == "claude-opus-5"
+        # entrance fee = input + cache_creation + cache_read of its first request
+        assert sub.first_turn_context == 2 + 55806 + 0
+
+        # The subagent's usage is folded into sidechain_by_model for the parent.
+        assert stats.sidechain_by_model["claude-opus-5"]["cache_creation_tokens"] == 55806
+        assert stats.totals("main")["input_tokens"] == 2
+        assert stats.totals("sidechain")["input_tokens"] == 2
+
+    def test_multiple_subagents_and_no_subagents_dir(self, tmp_path):
+        u = {"input_tokens": 1, "cache_creation_input_tokens": 100,
+             "cache_read_input_tokens": 0, "output_tokens": 1}
+        main_path = self._write_session_with_subagents(
+            tmp_path, "sess-2",
+            main_lines=[_claude_assistant("m1", "claude-opus-5", u)],
+            subagent_files={
+                "agent-a": [_claude_assistant("sa1", "claude-haiku-4-5-20251001", u, sidechain=True)],
+                "agent-b": [_claude_assistant("sb1", "claude-haiku-4-5-20251001", u, sidechain=True)],
+            },
+        )
+        stats = scan_claude_session(main_path)
+        assert len(stats.subagents) == 2
+        assert {s.agent_id for s in stats.subagents} == {"a", "b"}
+        assert stats.sidechain_by_model["claude-haiku-4-5-20251001"]["requests"] == 2
+
+    def test_session_without_subagents_dir_has_empty_list(self, tmp_path):
+        u = {"input_tokens": 1, "cache_creation_input_tokens": 0,
+             "cache_read_input_tokens": 0, "output_tokens": 1}
+        f = tmp_path / "sess3.jsonl"
+        _write_jsonl(f, [_claude_assistant("m1", "claude-opus-5", u)])
+        stats = scan_claude_session(f)
+        assert stats.subagents == []
+        assert stats.sidechain_by_model == {}
+
+    def test_scan_claude_sessions_does_not_double_count_subagent_files_as_sessions(self, tmp_path):
+        u = {"input_tokens": 1, "cache_creation_input_tokens": 0,
+             "cache_read_input_tokens": 0, "output_tokens": 1}
+        self._write_session_with_subagents(
+            tmp_path, "sess-4",
+            main_lines=[_claude_assistant("m1", "claude-opus-5", u)],
+            subagent_files={"agent-x": [_claude_assistant("sx1", "claude-opus-5", u, sidechain=True)]},
+        )
+        # scan_claude_sessions globs one level deep under the project dir, so
+        # the subagents/*.jsonl files (two levels deeper) must not appear as
+        # their own top-level "sessions".
+        sessions = scan_claude_sessions(tmp_path)
+        assert len(sessions) == 1
+        assert sessions[0].subagents[0].agent_id == "x"

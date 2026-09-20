@@ -24,6 +24,16 @@ if skipped:
 2. **Claude Code JSONL repeats the same `message.id`** across several lines
    while a response streams — summing `message.usage` without deduping by
    id multiplies token counts by however many chunks the message took.
+3. **Claude Code subagent transcripts are not inline.** A Task-tool subagent's
+   turns are NOT `isSidechain: true` lines mixed into the parent session's own
+   `<session-id>.jsonl` — they live in separate files under
+   `<session-id>/subagents/agent-*.jsonl` (each line still carries
+   `isSidechain: true` and an `agentId`). A scan that only reads the main
+   transcript will report zero subagent tokens even on a session that spawned
+   a dozen of them. Each subagent's own opening turn size (input + cache
+   creation + cache read of its first request) is its "entrance fee" — the
+   cost of establishing its context before it does any useful work; the audit
+   measured a 49.8K median.
 
 Usage:
 
@@ -44,6 +54,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import statistics
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -248,6 +259,15 @@ def scan_codex_sessions(
 # ---------------------------------------------------------------------------
 
 @dataclass
+class SubagentStats:
+    path: Path
+    agent_id: str | None = None
+    model: str | None = None
+    first_turn_context: int = 0  # "entrance fee": input+cache_creation+cache_read of its first request
+    by_model: dict[str, dict[str, int]] = field(default_factory=dict)
+
+
+@dataclass
 class ClaudeSessionStats:
     path: Path
     start: datetime | None = None
@@ -255,6 +275,7 @@ class ClaudeSessionStats:
     # model -> {"requests":..,"input_tokens":..,"cache_creation_tokens":..,"cache_read_tokens":..,"output_tokens":..}
     main_by_model: dict[str, dict[str, int]] = field(default_factory=dict)
     sidechain_by_model: dict[str, dict[str, int]] = field(default_factory=dict)
+    subagents: list[SubagentStats] = field(default_factory=list)
 
     def totals(self, which: Literal["main", "sidechain", "all"] = "all") -> dict[str, int]:
         buckets = []
@@ -269,22 +290,26 @@ class ClaudeSessionStats:
         return dict(out)
 
 
-_USAGE_FIELDS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")
+def _scan_usage_lines(path: Path) -> tuple[dict[str, Counter], dict[str, Counter], datetime | None, str | None, int | None]:
+    """One pass over a transcript file's `assistant` usage lines.
 
-
-def scan_claude_session(path: str | Path) -> ClaudeSessionStats:
-    """Parse one Claude Code transcript JSONL file.
-
-    Dedups by `message.id` (a streamed response repeats the same id across
-    several lines with identical `usage`), and splits `isSidechain` rows
-    (subagent turns) from the main thread.
+    Returns `(non_sidechain_by_model, sidechain_by_model, start, cwd,
+    first_usage_context)`. `first_usage_context` is the
+    input+cache_creation+cache_read total of the file's first deduped usage
+    event, regardless of sidechain status — the "entrance fee" when the
+    caller passes a subagent file. Dedups by `message.id` (a streamed
+    response repeats the same id across several lines with identical
+    `usage`), and splits `isSidechain` rows from the rest — used both for a
+    main transcript (whose own sidechain lines, if any, are an older-format
+    inline representation) and for a subagent file (where every line is
+    already `isSidechain: true`).
     """
-    path = Path(path)
-    cwd: str | None = None
-    start: datetime | None = None
     seen_ids: set[str] = set()
-    main: dict[str, Counter] = {}
+    non_side: dict[str, Counter] = {}
     side: dict[str, Counter] = {}
+    start: datetime | None = None
+    cwd: str | None = None
+    first_context: int | None = None
 
     with open(path, errors="ignore") as f:
         for line in f:
@@ -314,8 +339,12 @@ def scan_claude_session(path: str | Path) -> ClaudeSessionStats:
                 if message_id in seen_ids:
                     continue
                 seen_ids.add(message_id)
+            context = (usage.get("input_tokens", 0) + usage.get("cache_creation_input_tokens", 0)
+                      + usage.get("cache_read_input_tokens", 0))
+            if first_context is None:
+                first_context = context
             model = message.get("model", "unknown")
-            bucket = side if d.get("isSidechain") else main
+            bucket = side if d.get("isSidechain") else non_side
             row = bucket.setdefault(model, Counter())
             row["requests"] += 1
             row["input_tokens"] += usage.get("input_tokens", 0)
@@ -323,19 +352,67 @@ def scan_claude_session(path: str | Path) -> ClaudeSessionStats:
             row["cache_read_tokens"] += usage.get("cache_read_input_tokens", 0)
             row["output_tokens"] += usage.get("output_tokens", 0)
 
+    return non_side, side, start, cwd, first_context
+
+
+def _merge_model_counters(*sources: dict[str, Counter]) -> dict[str, Counter]:
+    out: dict[str, Counter] = {}
+    for src in sources:
+        for model, counter in src.items():
+            out.setdefault(model, Counter()).update(counter)
+    return out
+
+
+def scan_claude_session(path: str | Path) -> ClaudeSessionStats:
+    """Parse one Claude Code transcript JSONL file, plus its subagents.
+
+    A Task-tool subagent's turns are NOT inline `isSidechain: true` lines in
+    the main file — they live in `<session-id>/subagents/agent-*.jsonl`
+    beside it (`<session-id>` derived from the main file's own stem). Each
+    subagent file is scanned and folded into `sidechain_by_model`, and its
+    per-subagent stats (including the "entrance fee") are kept in
+    `.subagents`. Any *inline* `isSidechain: true` lines found in the main
+    file itself (an older format, if it exists) are folded in too.
+    """
+    path = Path(path)
+    main_by_model, inline_side_by_model, start, cwd, _ = _scan_usage_lines(path)
+
+    subagents: list[SubagentStats] = []
+    sidechain_sources = [inline_side_by_model]
+    subagents_dir = path.parent / path.stem / "subagents"
+    if subagents_dir.is_dir():
+        for sub_path in sorted(subagents_dir.glob("agent-*.jsonl")):
+            sub_non_side, sub_side, _, _, entrance_fee = _scan_usage_lines(sub_path)
+            combined = _merge_model_counters(sub_non_side, sub_side)
+            agent_id = sub_path.stem
+            if agent_id.startswith("agent-"):
+                agent_id = agent_id[len("agent-"):]
+            subagents.append(SubagentStats(
+                path=sub_path, agent_id=agent_id, model=next(iter(combined), None),
+                first_turn_context=entrance_fee or 0,
+                by_model={m: dict(c) for m, c in combined.items()},
+            ))
+            sidechain_sources.append(combined)
+
+    sidechain_by_model = _merge_model_counters(*sidechain_sources)
+
     return ClaudeSessionStats(
         path=path, start=start, cwd=cwd,
-        main_by_model={m: dict(c) for m, c in main.items()},
-        sidechain_by_model={m: dict(c) for m, c in side.items()},
+        main_by_model={m: dict(c) for m, c in main_by_model.items()},
+        sidechain_by_model={m: dict(c) for m, c in sidechain_by_model.items()},
+        subagents=subagents,
     )
 
 
 def scan_claude_sessions(
     root: str | Path = DEFAULT_CLAUDE_ROOT, *, since: datetime | None = None,
 ) -> list[ClaudeSessionStats]:
-    """Scan every transcript JSONL under `root` (default `~/.claude/projects`),
-    one folder per project (folder name is the cwd with `/` -> `-`), one file
-    per session."""
+    """Scan every top-level transcript JSONL under `root` (default
+    `~/.claude/projects`), one folder per project (folder name is the cwd
+    with `/` -> `-`), one file per session. `*/*.jsonl` matches only the main
+    transcripts — a session's own `<session-id>/subagents/*.jsonl` files are
+    two levels deeper and are picked up per-session by `scan_claude_session`,
+    not double-counted as their own top-level sessions here."""
     root = Path(root)
     out = []
     for f in sorted(root.glob("*/*.jsonl")):
@@ -484,16 +561,29 @@ def _print_claude_report(sessions: list[ClaudeSessionStats], *, top: int) -> Non
     print(f"\n  Claude Code sessions: {len(sessions)}\n")
     by_model: Counter = Counter()
     main_total = side_total = 0
+    entrance_fees: list[int] = []
+    n_subagents = 0
     for s in sessions:
         main_t = s.totals("main")
         side_t = s.totals("sidechain")
         main_total += main_t.get("input_tokens", 0) + main_t.get("cache_read_tokens", 0)
         side_total += side_t.get("input_tokens", 0) + side_t.get("cache_read_tokens", 0)
-        for model, row in {**s.main_by_model, **s.sidechain_by_model}.items():
+        for model, row in _merge_model_counters(s.main_by_model, s.sidechain_by_model).items():
             by_model[model] += row.get("input_tokens", 0) + row.get("cache_read_tokens", 0)
+        n_subagents += len(s.subagents)
+        entrance_fees.extend(sub.first_turn_context for sub in s.subagents if sub.first_turn_context)
 
-    print(f"  Main-thread tokens (input+cache-read): {main_total:,}")
-    print(f"  Sidechain/subagent tokens:             {side_total:,}\n")
+    print(f"  Main-thread tokens (input+cache-read):    {main_total:,}")
+    print(f"  Sidechain/subagent tokens (input+cache-read): {side_total:,}")
+    if main_total + side_total:
+        pct_subagent = 100 * side_total / (main_total + side_total)
+        print(f"  Subagent share: {pct_subagent:.1f}%")
+    print(f"  Subagents: {n_subagents}")
+    if entrance_fees:
+        print(f"  Subagent entrance fee (first-turn context): median {statistics.median(entrance_fees):,.0f}"
+              f"  mean {statistics.mean(entrance_fees):,.0f}"
+              f"  max {max(entrance_fees):,}")
+    print()
     print(f"  {'Model':<30} {'Tokens (input+cache-read)':>28}")
     for model, n in by_model.most_common():
         print(f"  {model:<30} {n:>28,}")
@@ -503,9 +593,12 @@ def _print_claude_report(sessions: list[ClaudeSessionStats], *, top: int) -> Non
         return t.get("input_tokens", 0) + t.get("cache_read_tokens", 0)
 
     top_sessions = sorted(sessions, key=_session_total, reverse=True)[:top]
-    print(f"\n  Top {len(top_sessions)} sessions by input+cache-read tokens:")
+    print(f"\n  Top {len(top_sessions)} sessions by input+cache-read tokens (main+subagent):")
     for s in top_sessions:
-        print(f"    {_session_total(s):>12,}  {claude_project_dir(s.path):<50} {s.path.name}")
+        side = s.totals("sidechain")
+        side_n = side.get("input_tokens", 0) + side.get("cache_read_tokens", 0)
+        print(f"    {_session_total(s):>12,}  (subagent {side_n:>11,}, {len(s.subagents):>3} agents)  "
+              f"{claude_project_dir(s.path):<45} {s.path.name}")
     print()
 
 

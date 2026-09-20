@@ -127,7 +127,7 @@ def log_cli_usage(
     purpose: str = "",
     requested_model: str = "",
     extra_metadata: dict[str, Any] | None = None,
-) -> None:
+) -> list:
     """Public helper: write cost_log rows from a `claude -p --output-format json` response.
 
     Used by `generate()` internally, and also by projects that call `claude -p`
@@ -138,6 +138,11 @@ def log_cli_usage(
     `usage` + `total_cost_usd` if `modelUsage` is missing (older CLI versions).
     `requested_model` is stored in metadata and used as the row's model when
     `modelUsage` is absent.
+
+    Returns the `CostRecord`(s) written (one per model touched, in iteration
+    order), so a caller composing this wrapper as a `cached_call` transport
+    can recover the primary row's id instead of `cached_call` logging a
+    second, cost-doubling row of its own — see `calls.py`'s `_log_call`.
     """
     session_id = response.get("session_id")
     base_metadata: dict[str, Any] = {
@@ -153,6 +158,7 @@ def log_cli_usage(
     if response.get("is_error"):
         base_metadata["failed"] = True
 
+    records = []
     model_usage = response.get("modelUsage") or {}
     if model_usage:
         for model_id, usage in model_usage.items():
@@ -164,7 +170,7 @@ def log_cli_usage(
             if cache_creation:
                 metadata["cache_creation_tokens"] = cache_creation
             try:
-                cost_log.log(
+                records.append(cost_log.log(
                     project=project,
                     model=model_id,
                     prompt_tokens=int(usage.get("inputTokens", 0) or 0),
@@ -174,14 +180,14 @@ def log_cli_usage(
                     script="claude-cli",
                     purpose=purpose,
                     metadata=metadata,
-                )
+                ))
             except Exception as e:
                 log.warning("cost_log.log failed for session %s: %s", session_id, e)
-        return
+        return records
 
     usage = response.get("usage") or {}
     try:
-        cost_log.log(
+        records.append(cost_log.log(
             project=project,
             model=requested_model,
             prompt_tokens=int(usage.get("input_tokens", 0) or 0),
@@ -191,9 +197,10 @@ def log_cli_usage(
             script="claude-cli",
             purpose=purpose,
             metadata=base_metadata,
-        )
+        ))
     except Exception as e:
         log.warning("cost_log.log failed for session %s: %s", session_id, e)
+    return records
 
 
 def _debug_file_metadata(session_id: str | None) -> dict[str, Any]:
@@ -420,11 +427,12 @@ def generate(
         except json.JSONDecodeError:
             response = None
 
+    logged_records: list = []
     if isinstance(response, dict):
         response_meta = dict(invocation_meta)
         response_meta.update(_debug_file_metadata(response.get("session_id")))
         response_meta["returncode"] = proc.returncode
-        log_cli_usage(
+        logged_records = log_cli_usage(
             response,
             project=project,
             purpose=purpose,
@@ -474,6 +482,10 @@ def generate(
         "duration_s": round(elapsed, 1),
         "session_id": response.get("session_id"),
         "model": first_model,
+        # The primary (first) cost_log row this call already wrote — present
+        # so a caller composing `generate` as a transport (e.g. `cached_call`)
+        # doesn't log a second, cost-doubling row for the same call.
+        "call_id": logged_records[0].id if logged_records else None,
     }
     return result, metadata
 

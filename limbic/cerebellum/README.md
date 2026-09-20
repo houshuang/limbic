@@ -77,6 +77,28 @@ record_outcome(meta.call_id, "applied")
 omitted — see the module docstring in `calls.py` for why both are refusals
 rather than silent defaults.
 
+By default `cached_call` shells out to `claude -p`, the wrong transport for a
+small, high-volume classification call (roughly 9-17K harness tokens of fixed
+overhead per call). For a cheap worker loop, swap the transport instead of
+hand-rolling the HTTP call:
+
+```python
+result, meta = cached_call(
+    "Classify: I love it", project="skard", purpose="sentiment",
+    schema={"type": "object", "properties": {"label": {"type": "string"}}},
+    transport="openai", model="gpt-5.4-mini",   # or transport="gemini", model="gemini-2.5-flash"
+)
+```
+
+Both `openai` and `gemini` are stdlib-`urllib` REST calls (no SDK import —
+`google-genai` fails to import on at least one project's arm64-macOS Python
+build) and self-log to `cost_log` the same as `claude_cli.generate` does;
+`cached_call` detects that and does not log a second row for the same call.
+Any other callable with the shape `(prompt, *, project, purpose, system,
+schema, model, **kwargs) -> (result, meta)` works as `transport=` too — self-
+logging is optional, but if your callable does log, return its ledger row id
+as `meta["call_id"]` so `cached_call` doesn't double it.
+
 ---
 
 ## Session forensics (`forensics.py`)
@@ -84,8 +106,8 @@ rather than silent defaults.
 `cost_log` only sees calls made *through* limbic. Interactive Claude Code /
 Codex sessions — where most spend actually happens — are invisible to it.
 `forensics` reads their transcripts directly, with the counting rules that
-make that safe (see the module docstring for the forked-subagent and
-resumed-session traps this avoids).
+make that safe (see the module docstring for the forked-subagent,
+resumed-session, and Claude subagent-file traps this avoids).
 
 ```python
 from limbic.cerebellum.forensics import scan_codex_sessions, scan_claude_sessions, parse_since
@@ -96,8 +118,18 @@ for s in codex_sessions[:5]:
 
 claude_sessions = scan_claude_sessions(since=parse_since("30d"))
 for s in claude_sessions[:5]:
-    print(s.path.name, s.totals("main"), s.totals("sidechain"))
+    print(s.path.name, s.totals("main"), s.totals("sidechain"), len(s.subagents))
+    for sub in s.subagents:
+        print("  subagent", sub.agent_id, sub.model, "entrance fee", sub.first_turn_context)
 ```
+
+A Claude Code Task-tool subagent's turns live in
+`<session-id>/subagents/agent-*.jsonl` beside the main transcript, not as
+inline `isSidechain` lines in it — `scan_claude_session` finds that directory
+automatically and folds it into `.sidechain_by_model` and `.subagents`, with
+each subagent's "entrance fee" (its first request's
+input+cache-creation+cache-read total, the cost of establishing its context
+before doing any useful work).
 
 ```bash
 python -m limbic.cerebellum.forensics codex --since 30d --project-by cwd
