@@ -1,6 +1,13 @@
 """Hippocampus - proposal system, cascade merges, deduplication, and data validation."""
 
+from .apply import (
+    MISSING, apply_proposal, enum_member, regex, wikidata_exists, wikidata_type_is,
+)
 from .proposals import Proposal, Change, ProposalStore
+from .resolve import (
+    Card, Index, build_index, candidates, fold, name_keys, open_index,
+    slot_enum, text_candidates, unslot,
+)
 from .cascade import ReferenceSpec, ReferenceGraph, find_references, apply_merge, apply_delete
 from .dedup import (
     VetoGate, CandidatePair, ExclusionList, VetoMatcher,
@@ -19,6 +26,22 @@ from .wikidata_resolve import (
 )
 
 __all__ = [
+    "MISSING",
+    "apply_proposal",
+    "enum_member",
+    "regex",
+    "wikidata_exists",
+    "wikidata_type_is",
+    "Card",
+    "Index",
+    "build_index",
+    "open_index",
+    "candidates",
+    "text_candidates",
+    "fold",
+    "name_keys",
+    "slot_enum",
+    "unslot",
     "Proposal",
     "Change",
     "ProposalStore",

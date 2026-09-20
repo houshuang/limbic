@@ -4,6 +4,90 @@ All notable changes to the limbic monorepo (formerly amygdala) are documented he
 
 ---
 
+## 2026-09-20 -- Packets, entity resolution, and the write boundary
+
+Wave 2 of the `llm-pipeline-audit` response. The audit found limbic is adopted
+only where it is one import and one call — `hippocampus.ProposalStore`,
+extracted *from* Kulturbase, has zero consumers including Kulturbase — so
+everything here is a plain function usable in ten lines. No base classes to
+subclass, no registries, no config objects.
+
+Three things proven in real projects the same day, lifted into the library:
+skard's stateless packet runner (measured 95x cheaper than the same work inside
+a tool-using subagent), Kulturbase's `kb_resolve` (recall@1 0.93, false-match
+rate 0.000 on 200 negatives), and the preimage-checked apply that governance
+found to be the only proposal mechanism that ever refused a bad write.
+
+### Added
+
+- **`hippocampus.resolve`.** Entity resolution over a SQLite sidecar index.
+  `fold(text, lang)` with two Nordic spellings — the character map runs *before*
+  NFKD, or "Zauberflöte" can never produce "zauberfloete"; `name_keys` covering
+  inversion, particles and the Norwegian genitive; `build_index(conn_or_path,
+  rows, kind)`; `candidates(index, query, k, kind, hints)` returning compact
+  cards with a match type and score; `text_candidates` for literal presence in
+  a passage; `slot_enum(cards, n_slots)` / `unslot(items, slot_map)`. Hints
+  rerank and never filter. The near-miss fuzzy layer is **off by default** and
+  capped below the confidence threshold when on: folding and token-set matching
+  recovered only 5% of one campaign's 5,194 held unmatched names, so fuzziness
+  is rarely the recall gap, and it is the layer that manufactures
+  plausible-looking wrong answers.
+- **`cerebellum.packet`.** `make_packet(static_prefix, body, schema, *,
+  prompt_version)` returns a frozen dict whose `input_sha256` covers the prefix
+  hash — editing a shared mutable prefix file later silently invalidated a
+  batch that had already been paid for. `run_packets(...)` on top of
+  `cached_call`: dry-run by default, budgets that refuse rather than finish,
+  every call ledgered (failures included) with `packet_id` and `outcome`, and
+  truncation answered by a split-once hook rather than by re-asking.
+  `probe(packets, n=50, yield_fn=..., min_yield=...)` raises `LowYield` — the
+  cheapest fix for the governance-to-yield inversion (12.3k lines of machinery
+  around 0 writes, while a plain join next door produced 2,336 of 2,342
+  proposals). `lint_packet` warns when the schema varies across the batch
+  (measured 0% cached input; a fixed slot enum on the same batch measured 58%),
+  when the shared prefix is under the ~1,024-token provider cache minimum
+  (below it, caching cost 9.7% *more*), when a body field is derivable, and
+  when a packet is past ~25 items. Plus `validate_quotes` (exact substring,
+  whitespace collapse only), `union_passes` (adding name-accounting to a coding
+  call lost 66 known entities — run separate passes and merge), and
+  `unmatched_names` / `corpus_lowercase_words`, the deterministic recall scan
+  whose common-noun filter is the corpus's own lower-case vocabulary.
+- **`hippocampus.apply.apply_proposal`.** Field whitelist, exact preimage check
+  where `MISSING` (absent key) is distinct from `None` (explicit null),
+  validators, atomic write, and a receipt emitted on every attempt including
+  refusals. Never partial. Validators: `enum_member`, `regex`,
+  `wikidata_exists`, and `wikidata_type_is(expected)` — the one existence
+  checks miss, which is not a small gap: of 901 work QIDs audited in one
+  catalogue, **198 pointed at something that was not that work**, and every one
+  passed an existence check (*Et dukkehjem* resolved to Ramon Llull).
+- **`CostLog.set_packet_id`,** giving the reserved `packet_id` column a writer,
+  so one packet's whole history — dry run, real call, post-truncation halves —
+  is answerable before replanning a batch.
+- **Skills** `packet-worker`, `thin-worker-brief` and `coordinator-hygiene`,
+  plus `docs/new-data-project-checklist.md` (the tiered Tier 0/1/2 checklist,
+  each item tagged CODE with its enforcing function or PROSE, with a "when NOT
+  to adopt" line per tier). Module docs in `docs/resolve.md`, `docs/packet.md`
+  and `docs/apply.md`.
+
+### Changed
+
+- `ProposalStore`'s docstring now points at `apply_proposal`: the store is the
+  filing cabinet, not the lock — it has no preimage check, so an `approved`
+  status in it is a string in a file.
+
+### Fixed
+
+- **`tests/conftest.py` now refuses production databases.** Two agents polluted
+  the real cost ledger (`~/.local/share/limbic/llm_costs.db`) by running the
+  suite on 20 Sep 2026: `cost_log` is a module-level singleton that resolves
+  its path at *import* time, so a fixture setting `COST_LOG_DB` is already too
+  late. The environment variables are now set at conftest module import, every
+  test gets its own ledger and cache file, and `sqlite3.connect` raises on any
+  path under `~/.local/share/limbic`. Tested in
+  `tests/test_ledger_isolation.py` — the guard is load-bearing, so it has its
+  own tests.
+
+---
+
 ## 2026-09-20 -- Response cache, outcome-bearing ledger, and session forensics
 
 The 20 Sep 2026 `llm-pipeline-audit` found that consumers only adopt limbic

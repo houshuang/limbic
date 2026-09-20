@@ -30,6 +30,19 @@ from .cost_log import (
     UnknownModelPriceError,
 )
 from .calls import cached_call, Held, CallMeta, TransportError
+from .packet import (
+    LowYield,
+    Packet,
+    corpus_lowercase_words,
+    estimate_tokens,
+    lint_packet,
+    make_packet,
+    probe,
+    run_packets,
+    union_passes,
+    unmatched_names,
+    validate_quotes,
+)
 from .claude_cli import (
     ClaudeCLIError,
     Task as ClaudeTask,
@@ -90,6 +103,17 @@ __all__ = [
     "record_outcome",
     "UnknownModelPriceError",
     "cached_call",
+    "LowYield",
+    "Packet",
+    "corpus_lowercase_words",
+    "estimate_tokens",
+    "lint_packet",
+    "make_packet",
+    "probe",
+    "run_packets",
+    "union_passes",
+    "unmatched_names",
+    "validate_quotes",
     "Held",
     "CallMeta",
     "TransportError",

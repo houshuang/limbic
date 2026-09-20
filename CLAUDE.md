@@ -114,6 +114,41 @@ for proposal in store.list_approved():
     apply_merge(graph, proposal.source_id, proposal.target_id, ...)
 ```
 
+### Apply a codebook / extract / classify over N documents
+
+Do not spawn agents as coders: one traced packet cost 3.8M tokens as a
+tool-using subagent and ≈40K as one stateless call. Probe the yield before
+building anything — a campaign with 12.3k lines of machinery produced 0 writes
+while a plain join next door produced 2,336 of 2,342 proposals.
+
+```python
+from limbic.hippocampus.resolve import build_index, text_candidates, slot_enum, unslot
+from limbic.cerebellum.packet import make_packet, lint_packet, probe, run_packets
+
+index = build_index("kb.idx", rows, kind="person")
+cards = text_candidates(index, page_text, k=40)          # code retrieves, model picks
+fragment, slot_map = slot_enum(cards, n_slots=40)        # fixed slots: schema identical per batch
+packets = [make_packet(PREFIX, body, SCHEMA, prompt_version="v1") for body in bodies]
+print(lint_packet(packets))                              # caching + derivable-field warnings
+probe(packets, n=50, yield_fn=lambda r: len(r["items"]), min_yield=0.2,
+      project="p", purpose="code", execute=True)         # raises LowYield: do not scale
+run_packets(packets, project="p", purpose="code", max_calls=200,
+            max_tokens=2_000_000, split=halve, execute=True)
+```
+
+Then write through the boundary, never directly:
+
+```python
+from limbic.hippocampus.apply import MISSING, apply_proposal, wikidata_type_is
+
+apply_proposal(path, {"wikidata_id": qid}, preimage={"wikidata_id": MISSING},
+               allowed_fields={"wikidata_id"}, validators=[wikidata_type_is("work")],
+               receipt=Path("receipts.jsonl"))
+```
+
+See `docs/packet.md`, `docs/resolve.md`, `docs/apply.md`, and
+`docs/new-data-project-checklist.md` before starting a new data project.
+
 ### LLM-verified batch processing with budget control
 
 ```python
@@ -191,8 +226,8 @@ This is expected — cosine measures *topical* similarity, not agreement. Two cl
 | Package | Import | Purpose |
 |---|---|---|
 | `limbic.amygdala` | `from limbic.amygdala import EmbeddingModel, VectorIndex, ...` | Embedding, search, novelty, clustering, calibration |
-| `limbic.hippocampus` | `from limbic.hippocampus import ProposalStore, ...` | Change proposals, cascade merges, dedup, validation |
-| `limbic.cerebellum` | `from limbic.cerebellum import BatchProcessor, ...` | LLM batch verification, budget tracking, audit logs, Claude/Codex CLI wrappers, agent isolation, windowed extraction |
+| `limbic.hippocampus` | `from limbic.hippocampus import apply_proposal, candidates, ...` | Entity resolution, the preimage-checked write boundary, cascade merges, dedup, validation |
+| `limbic.cerebellum` | `from limbic.cerebellum import make_packet, run_packets, ...` | Stateless packets, response cache, cost ledger, LLM batch verification, Claude/Codex CLI wrappers, agent isolation, windowed extraction |
 | `limbic.drive` | `from limbic.drive import validate_plan` | Calibration-first plan policy: refuse a plan that fans out before one pilot |
 
 See README.md for full API documentation with benchmarks and experiment evidence.
