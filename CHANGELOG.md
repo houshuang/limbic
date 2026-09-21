@@ -19,6 +19,29 @@ for its folding primitives (gold-set rows identical).
 
 ### Added
 
+- **A Codex cost adapter.** `codex_cli.py` used to say, in its own module
+  docstring, that Codex calls "are not written to `cost_log` — there is no
+  Codex cost adapter". An audit of one consumer found 1.28 billion tokens in
+  eight days, all of it through this transport and none of it in any ledger.
+  Both `codex_json` and `codex_research` now pass `--json`, parse the per-turn
+  usage out of Codex's event stream (`parse_usage`), and write one row per
+  attempt — including failed and timed-out attempts, where an agent loop's
+  worst spending hides. New `project=`/`purpose=`/`packet_id=` attribute the
+  row; `project` falls back to `$LIMBIC_CODEX_PROJECT`, then the git root, then
+  a conspicuous `"unattributed"` rather than failing a call whose tokens are
+  already spent. `cost_log=False` or `LIMBIC_CODEX_COST_LOG=0` turns it off.
+  Verified against the real shape from codex-cli 0.153.4 on 2026-09-21:
+  `{"type":"turn.completed","usage":{"input_tokens":…,"cached_input_tokens":…,
+  "output_tokens":…,"reasoning_output_tokens":…}}`, recorded as a test fixture.
+- **`billing_mode` and `notional_cost_usd` on the ledger.** A subscription call
+  burns real tokens and spends no money; one number cannot hold both. A
+  `subscription` row carries `cost_usd = 0` — `log()` refuses it otherwise —
+  and the API-equivalent estimate in `notional_cost_usd`. Every reader that
+  predates the column therefore keeps returning real spend, and a reader that
+  wants the other figure has to name it and so has to label it:
+  `total_notional()`, `notional_cost_usd` in both summaries,
+  `notional_cost_per_applied`, and its own dashboard section. An unpriced model
+  logs its tokens with a NULL notional rather than an invented $0.
 - **`cached_call(request=, cache_key=)`.** A fully built provider body is posted
   as its exact bytes through the openai/gemini transports, the response cache
   is keyed on those bytes (or on the caller's own key), the raw response comes
@@ -55,6 +78,10 @@ for its folding primitives (gold-set rows identical).
 
 ### Fixed
 
+- **`merge_from` copies the columns both ledgers have.** It was
+  `INSERT ... SELECT *`, which fails on the column count the moment a host runs
+  an older limbic than the machine merging its rows — stranding every remote
+  row over one new field. Columns the remote lacks take local defaults.
 - **A folded key only meets a key from the same spelling table.** "Bø" expands
   to "boe", which is also what the different name "Bøe" drops to, so the folded
   layer linked them at 0.97. Each indexed key records the table that produced

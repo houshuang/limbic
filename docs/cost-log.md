@@ -80,6 +80,63 @@ repriced.
 `cost_log.log(ts=...)` accepts an explicit timestamp so a backfilled call keeps
 its own date instead of the date you noticed it was missing.
 
+## Subscription calls: `billing_mode` and `notional_cost_usd`
+
+A Codex call under a ChatGPT plan, or a `claude -p` call under Max, burns real
+tokens and spends no money. Both facts matter, and folding them into one number
+loses one of them. So a row says which kind it is:
+
+| `billing_mode` | `cost_usd` | `notional_cost_usd` |
+|---|---|---|
+| `billed` (default) | the money | `NULL` |
+| `subscription` | `0`, enforced | what the same tokens would cost on the API |
+
+```python
+cost_log.log(project="hvaskjer", model="gpt-5.5", purpose="enrich",
+             prompt_tokens=14_169, completion_tokens=5, cached_tokens=4_480,
+             cost_usd=0.0, billing_mode="subscription",
+             notional_cost_usd=cost_for("gpt-5.5", 14_169, 5, 4_480))
+```
+
+`log()` refuses a subscription row with a non-zero `cost_usd`. That is the
+guard the whole split exists for: every reader that predates the column — this
+module's `total()`, an older limbic on another host, an ad-hoc
+`SELECT SUM(cost_usd)` — keeps returning real spend without knowing anything
+changed. To see the other figure you have to name it, and therefore label it:
+`total_notional()`, `notional_cost_usd` in both summaries,
+`notional_cost_per_applied` in `multi_group_summary`, and its own section in the
+dashboard. A model with no known price logs its tokens with
+`notional_cost_usd = NULL` rather than an invented $0.
+
+Rows written before this column existed read as `billed` with no notional
+figure, which is what they were.
+
+`merge_from` copies only the columns both databases have, so a host still on an
+older limbic merges fine and picks up local defaults for the rest.
+
+### Codex
+
+`cerebellum.codex_cli` writes these rows for you. Both `codex_json` and
+`codex_research` pass `--json`, parse the per-turn usage out of Codex's event
+stream, and log one row per attempt — including failed and timed-out attempts,
+which is where an agent loop's worst spending hides:
+
+```python
+codex_research(mission, project="hvaskjer", purpose="enrich", scratch_dir=run)
+```
+
+`project` falls back to `$LIMBIC_CODEX_PROJECT` and then to the enclosing git
+repo's name; it lands as `"unattributed"` if neither exists, rather than failing
+a call that has already burned its tokens. `cost_log=False` per call, or
+`LIMBIC_CODEX_COST_LOG=0`, turns capture off and drops the `--json` flag with
+it. A ledger that is locked or unwritable is logged and ignored — the model's
+answer is already in hand.
+
+One assumption worth knowing: `input_tokens` is read as *including*
+`cached_input_tokens`, and `output_tokens` as including reasoning tokens, which
+is the OpenAI Responses convention that `cost_for` already expects. If Codex
+ever changes that, every notional figure moves.
+
 ## Reading it back
 
 ```bash
@@ -89,7 +146,8 @@ python -m limbic.cerebellum.cost_log dashboard        # local web view
 ```
 
 In Python: `query(...)`, `summary(group_by=...)`, `multi_group_summary(by=[...])`,
-`total(days=...)`. `merge_from(path)` folds another machine's ledger in;
+`total(days=...)`, `total_notional(days=...)`. Both summaries accept
+`billing_mode` as a group column. `merge_from(path)` folds another machine's ledger in;
 `sync_from_remote(host, remote_db)` fetches one over ssh first.
 
 ## What the ledger cannot see: `cerebellum.forensics`

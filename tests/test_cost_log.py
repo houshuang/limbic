@@ -291,3 +291,135 @@ class TestCachedInputPricing:
                completion_tokens=200, cached_tokens=4096)
         rows = {r["id"]: r["cost_usd"] for r in CostLog(db_path=tmp_path / "c.db").query()}
         assert rows[old.id] == pytest.approx(full_rate)
+
+
+# ---------------------------------------------------------------------------
+# Subscription rows: notional dollars that must never read as spend
+# ---------------------------------------------------------------------------
+
+_PRE_BILLING_MODE_SCHEMA = """
+CREATE TABLE llm_costs (
+    id TEXT PRIMARY KEY, ts TEXT NOT NULL, project TEXT NOT NULL,
+    host TEXT NOT NULL, model TEXT NOT NULL, api_key_hint TEXT DEFAULT '',
+    prompt_tokens INTEGER DEFAULT 0, completion_tokens INTEGER DEFAULT 0,
+    cached_tokens INTEGER DEFAULT 0, cost_usd REAL DEFAULT 0.0,
+    script TEXT DEFAULT '', purpose TEXT DEFAULT '', metadata TEXT DEFAULT '{}',
+    cache_hit INTEGER DEFAULT 0, outcome TEXT DEFAULT NULL, packet_id TEXT DEFAULT NULL
+);
+"""
+
+
+class TestBillingMode:
+    def test_rows_written_before_the_column_existed_read_as_billed(self, tmp_path):
+        db = tmp_path / "old.db"
+        conn = sqlite3.connect(db)
+        conn.executescript(_PRE_BILLING_MODE_SCHEMA)
+        conn.execute(
+            "INSERT INTO llm_costs (id, ts, project, host, model, cost_usd) "
+            "VALUES ('old1', '2026-01-01T00:00:00Z', 'skard', 'mac', 'gpt-5.4-mini', 1.25)")
+        conn.commit()
+        conn.close()
+
+        cl = CostLog(db_path=db)
+        row = cl.query()[0]
+        assert row["billing_mode"] == "billed"
+        assert row["notional_cost_usd"] is None
+        assert cl.total() == pytest.approx(1.25)
+
+    def test_a_subscription_row_spends_nothing(self, tmp_path):
+        cl = CostLog(db_path=tmp_path / "c.db")
+        cl.log(project="hvaskjer", model="gpt-5.4-mini", prompt_tokens=10_000,
+               completion_tokens=500, cost_usd=0.0, billing_mode="subscription",
+               notional_cost_usd=0.01, purpose="enrich")
+        cl.log(project="hvaskjer", model="gpt-5.4-mini", prompt_tokens=1_000,
+               completion_tokens=100, purpose="adjudicate")
+
+        assert cl.total() == pytest.approx(cost_for("gpt-5.4-mini", 1_000, 100))
+        assert cl.total_notional() == pytest.approx(0.01)
+
+    def test_notional_dollars_cannot_reach_cost_usd(self, tmp_path):
+        cl = CostLog(db_path=tmp_path / "c.db")
+        with pytest.raises(ValueError, match="spends no money"):
+            cl.log(project="hvaskjer", model="gpt-5.4-mini", cost_usd=0.01,
+                   billing_mode="subscription")
+
+    def test_unknown_billing_mode_is_refused(self, tmp_path):
+        cl = CostLog(db_path=tmp_path / "c.db")
+        with pytest.raises(ValueError, match="billing_mode"):
+            cl.log(project="x", model="gpt-5.4-mini", billing_mode="free")
+
+    def test_summaries_report_the_two_separately(self, tmp_path):
+        cl = CostLog(db_path=tmp_path / "c.db")
+        cl.log(project="hvaskjer", model="gpt-5.4-mini", purpose="enrich",
+               prompt_tokens=10_000, completion_tokens=500, cost_usd=0.0,
+               billing_mode="subscription", notional_cost_usd=0.04, outcome="applied")
+        cl.log(project="hvaskjer", model="gpt-5.4-mini", purpose="enrich",
+               prompt_tokens=1_000, completion_tokens=100, outcome="applied")
+
+        grouped = {r["grp"]: r for r in cl.summary(group_by="billing_mode")}
+        assert grouped["subscription"]["cost_usd"] == 0.0
+        assert grouped["subscription"]["notional_cost_usd"] == pytest.approx(0.04)
+        assert grouped["billed"]["notional_cost_usd"] == 0.0
+
+        multi = {r["billing_mode"]: r for r in cl.multi_group_summary(by=["billing_mode"])}
+        assert multi["subscription"]["cost_per_applied"] == 0.0
+        assert multi["subscription"]["notional_cost_per_applied"] == pytest.approx(0.04)
+
+    def test_dashboard_keeps_notional_out_of_the_api_total(self, tmp_path):
+        from limbic.cerebellum.cost_log import _build_summary
+
+        cl = CostLog(db_path=tmp_path / "c.db")
+        cl.log(project="hvaskjer", model="gpt-5.4-mini", prompt_tokens=10_000,
+               completion_tokens=500, cost_usd=0.0, billing_mode="subscription",
+               notional_cost_usd=0.04, script="codex_cli.codex_research")
+        cl.log(project="skard", model="gpt-5.4-mini", prompt_tokens=1_000,
+               completion_tokens=100)
+
+        out = _build_summary(cl, days=None)
+        assert out["api"]["calls"] == 1
+        assert out["api"]["cost_usd"] == pytest.approx(cost_for("gpt-5.4-mini", 1_000, 100))
+        assert out["subscription"]["calls"] == 1
+        assert out["subscription"]["notional_usd"] == pytest.approx(0.04)
+        assert out["subscription"]["prompt_tokens"] == 10_000
+
+    def test_dashboard_counts_unpriced_subscription_calls(self, tmp_path):
+        from limbic.cerebellum.cost_log import _build_summary
+
+        cl = CostLog(db_path=tmp_path / "c.db")
+        cl.log(project="hvaskjer", model="mystery-model", prompt_tokens=10, cost_usd=0.0,
+               billing_mode="subscription", notional_cost_usd=None)
+        assert _build_summary(cl, days=None)["subscription"]["unpriced_calls"] == 1
+
+
+class TestMergeAcrossSchemaVersions:
+    def test_a_remote_on_the_older_schema_still_merges(self, tmp_path):
+        """A host running an older limbic writes a narrower table; `SELECT *`
+        across the two fails on the column count and strands every row."""
+        remote = tmp_path / "remote.db"
+        conn = sqlite3.connect(remote)
+        conn.executescript(_PRE_BILLING_MODE_SCHEMA)
+        conn.execute(
+            "INSERT INTO llm_costs (id, ts, project, host, model, cost_usd, purpose) "
+            "VALUES ('r1', '2026-01-01T00:00:00Z', 'hvaskjer', 'alif', 'gpt-5.4-mini', 2.5, 'enrich')")
+        conn.commit()
+        conn.close()
+
+        cl = CostLog(db_path=tmp_path / "local.db")
+        assert cl.merge_from(remote) == 1
+        row = cl.query()[0]
+        assert row["purpose"] == "enrich"
+        assert row["billing_mode"] == "billed"
+        assert cl.total() == pytest.approx(2.5)
+
+    def test_merging_twice_is_still_idempotent(self, tmp_path):
+        remote = tmp_path / "remote.db"
+        source = CostLog(db_path=remote)
+        source.log(project="hvaskjer", model="gpt-5.4-mini", prompt_tokens=100,
+                   cost_usd=0.0, billing_mode="subscription", notional_cost_usd=0.02)
+        source.close()
+
+        cl = CostLog(db_path=tmp_path / "local.db")
+        assert cl.merge_from(remote) == 1
+        assert cl.merge_from(remote) == 0
+        assert cl.query()[0]["billing_mode"] == "subscription"
+        assert cl.total_notional() == pytest.approx(0.02)

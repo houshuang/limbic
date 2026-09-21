@@ -16,14 +16,24 @@ Both return parsed JSON when given a schema (via Codex's ``--output-schema`` +
 ``--output-last-message``), or raw text otherwise. Both strip ``CLAUDECODE`` so
 nested invocation from inside a Claude Code session doesn't inherit parent state.
 
-Codex is free under the user's ChatGPT subscription, so (unlike claude_cli)
-these calls are not written to ``cost_log`` — there is no Codex cost adapter.
+Codex is free under the user's ChatGPT subscription, so no money is billed per
+token — but the tokens are real, and where they go was invisible: an audit of
+one project found 1.28 billion tokens in eight days, none of it in any ledger,
+because every call went through this transport. So both entry points now ask
+Codex for its event stream (``--json``), parse the per-turn usage, and write one
+``cost_log`` row per attempt with ``billing_mode="subscription"``: ``cost_usd``
+is 0 (nothing was spent) and ``notional_cost_usd`` carries what the same tokens
+would have cost on the API. See ``docs/cost-log.md``.
+
+Set ``LIMBIC_CODEX_COST_LOG=0``, or pass ``cost_log=False``, to turn the whole
+thing off — the call then runs exactly as it did before, ``--json`` and all.
 
 Usage::
 
     from limbic.cerebellum.codex_cli import codex_json, codex_research
 
-    out = codex_json("Classify sentiment of: I love it", schema=SCHEMA)
+    out = codex_json("Classify sentiment of: I love it", schema=SCHEMA,
+                     project="myapp", purpose="sentiment")
 
     dossier = codex_research(
         "Research X. Web-search anything ambiguous. Write findings to out.json.",
@@ -34,6 +44,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import os
 import shutil
 import signal
@@ -41,8 +52,11 @@ import subprocess
 import tempfile
 import threading
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 DEFAULT_MODEL = os.environ.get("LIMBIC_CODEX_MODEL", "gpt-5.5")
 DEFAULT_REASONING = os.environ.get("LIMBIC_CODEX_REASONING", "medium")
@@ -62,7 +76,18 @@ _DISABLED_REASON = ""
 
 
 class CodexCLIError(RuntimeError):
-    """Raised when `codex exec` is missing, exits non-zero, times out, or returns malformed output."""
+    """Raised when `codex exec` is missing, exits non-zero, times out, or returns malformed output.
+
+    Carries whatever output the run produced before it failed, so a caller (and
+    the usage logger) can still read the token counts of an attempt that died
+    after the model had already worked. Both default to "" — `str(exc)` is
+    unchanged, so existing `except CodexCLIError` handlers are unaffected.
+    """
+
+    def __init__(self, message: str, *, stdout: str = "", stderr: str = ""):
+        super().__init__(message)
+        self.stdout = stdout
+        self.stderr = stderr
 
 
 def is_available() -> bool:
@@ -96,6 +121,246 @@ def temporarily_disabled() -> bool:
 
 def disabled_reason() -> str:
     return _DISABLED_REASON
+
+
+# ---------------------------------------------------------------------------
+# Usage capture — `codex exec --json` events to a cost_log row
+# ---------------------------------------------------------------------------
+
+# Whether this process has seen the CLI reject `--json`. Flipped once, then the
+# flag is simply never passed again (see `_run`).
+_JSON_EVENTS_SUPPORTED = True
+
+
+def cost_log_enabled() -> bool:
+    """Whether usage capture is on. Read live, so a caller can toggle it."""
+    return os.environ.get("LIMBIC_CODEX_COST_LOG", "1").strip().lower() not in (
+        "0", "false", "no", "off")
+
+
+@dataclass
+class CodexUsage:
+    """Token counts for one `codex exec` run."""
+
+    input_tokens: int = 0
+    cached_input_tokens: int = 0
+    cache_write_input_tokens: int = 0
+    output_tokens: int = 0
+    reasoning_output_tokens: int = 0
+    turns: int = 0
+    thread_id: str = ""
+    found: bool = False
+
+
+# Alternate spellings seen across Codex CLI versions, newest first. A key the
+# running CLI doesn't emit is simply absent.
+_USAGE_ALIASES: dict[str, tuple[str, ...]] = {
+    "input_tokens": ("input_tokens", "prompt_tokens", "input"),
+    "cached_input_tokens": ("cached_input_tokens", "cached_tokens",
+                            "cache_read_input_tokens"),
+    "cache_write_input_tokens": ("cache_write_input_tokens",
+                                 "cache_creation_input_tokens"),
+    "output_tokens": ("output_tokens", "completion_tokens", "output"),
+    "reasoning_output_tokens": ("reasoning_output_tokens", "reasoning_tokens"),
+}
+
+
+def _pick(block: dict, names: tuple[str, ...]) -> int:
+    for name in names:
+        value = block.get(name)
+        if isinstance(value, bool):  # a stray flag is not a token count
+            continue
+        if isinstance(value, (int, float)):
+            return int(value)
+    return 0
+
+
+def _iter_events(stdout: str):
+    for line in (stdout or "").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict):
+            yield event
+
+
+def parse_usage(stdout: str) -> CodexUsage:
+    """Token usage from the JSONL that `codex exec --json` writes to stdout.
+
+    The shape, captured from codex-cli 0.153.4 on 2026-09-21::
+
+        {"type": "thread.started", "thread_id": "01a0c404-…"}
+        {"type": "turn.started"}
+        {"type": "item.completed", "item": {"id": "item_0",
+         "type": "agent_message", "text": "ok"}}
+        {"type": "turn.completed", "usage": {"input_tokens": 14169,
+         "cached_input_tokens": 4480, "cache_write_input_tokens": 0,
+         "output_tokens": 5, "reasoning_output_tokens": 0}}
+
+    `input_tokens` includes `cached_input_tokens`, and `output_tokens` includes
+    `reasoning_output_tokens` — the OpenAI Responses convention, which is also
+    what `cost_for` assumes of its `prompt_tokens`/`cached_tokens` arguments.
+
+    Per-turn `usage` blocks are **summed**: one `codex exec` is normally one
+    turn, but `exec resume` adds more. Older CLIs emit a running
+    `msg.info.total_token_usage` instead, which is cumulative for the whole
+    thread — that form **replaces** rather than adds, or a long run would be
+    counted once per event. `found` distinguishes "no tokens" from "this CLI
+    told us nothing", which is what keeps a zero row honest.
+    """
+    usage = CodexUsage()
+    cumulative: dict | None = None
+    for event in _iter_events(stdout):
+        thread_id = event.get("thread_id")
+        if isinstance(thread_id, str) and thread_id and not usage.thread_id:
+            usage.thread_id = thread_id
+
+        block = event.get("usage")
+        if isinstance(block, dict):
+            usage.turns += 1
+            usage.found = True
+            for attr, names in _USAGE_ALIASES.items():
+                setattr(usage, attr, getattr(usage, attr) + _pick(block, names))
+            continue
+
+        info = event.get("msg")
+        info = info.get("info") if isinstance(info, dict) else None
+        if isinstance(info, dict) and isinstance(info.get("total_token_usage"), dict):
+            cumulative = info["total_token_usage"]
+
+    if cumulative is not None and not usage.found:
+        usage.found = True
+        usage.turns = max(usage.turns, 1)
+        for attr, names in _USAGE_ALIASES.items():
+            setattr(usage, attr, _pick(cumulative, names))
+    return usage
+
+
+def final_message(stdout: str) -> str:
+    """The agent's last message, recovered from `--json` event output.
+
+    Only used when `--output-last-message` produced nothing. Returns "" if the
+    stream holds no agent message, so the caller can fall back to raw stdout
+    exactly as it did before event capture existed.
+    """
+    text = ""
+    for event in _iter_events(stdout):
+        item = event.get("item")
+        if isinstance(item, dict) and item.get("type") == "agent_message":
+            if isinstance(item.get("text"), str):
+                text = item["text"]
+            continue
+        msg = event.get("msg")
+        if isinstance(msg, dict) and msg.get("type") == "agent_message":
+            for key in ("message", "text"):
+                if isinstance(msg.get(key), str):
+                    text = msg[key]
+                    break
+    return text.strip()
+
+
+@dataclass
+class _LogContext:
+    """What a run needs to attribute its own ledger row."""
+
+    model: str
+    script: str
+    project: str = ""
+    purpose: str = ""
+    packet_id: str | None = None
+    enabled: bool = True
+    metadata: dict = field(default_factory=dict)
+
+
+_PROJECT_CACHE: dict[str, str] = {}
+
+
+def _project(explicit: str) -> str:
+    """Attribution tag for a ledger row: explicit, else env, else the git root.
+
+    Falls back to "unattributed" rather than raising, unlike `calls._infer_project`
+    — this runs *after* a call has already burned its tokens, and a failure to
+    name the project must not take the result down with it. The name is
+    deliberately conspicuous: an unattributed row is a bug to fix, not a row to
+    quietly fold into some other project's total.
+    """
+    if explicit:
+        return explicit
+    env = os.environ.get("LIMBIC_CODEX_PROJECT", "").strip()
+    if env:
+        return env
+    cwd = os.getcwd()
+    if cwd not in _PROJECT_CACHE:
+        try:
+            from .calls import _infer_project
+            _PROJECT_CACHE[cwd] = _infer_project()
+        except Exception:
+            _PROJECT_CACHE[cwd] = "unattributed"
+    return _PROJECT_CACHE[cwd]
+
+
+def _log_usage(ctx: _LogContext | None, usage: CodexUsage, *,
+               duration_ms: int, error: str = "") -> None:
+    """Write one subscription row for a `codex exec` attempt. Never raises.
+
+    Called on the success path *and* on every failed attempt — a timeout that
+    burned 300k tokens before dying is exactly the spend the audit went looking
+    for, and a failed attempt with no usage at all still leaves a zero-token row
+    with an error marker so the attempt itself is countable.
+    """
+    if ctx is None or not ctx.enabled or not cost_log_enabled():
+        return
+    try:
+        from .cost_log import UnknownModelPriceError, cost_for, cost_log
+
+        try:
+            notional = cost_for(ctx.model, usage.input_tokens, usage.output_tokens,
+                                usage.cached_input_tokens, strict=True)
+        except UnknownModelPriceError:
+            # Tokens are still worth recording; an invented price is not.
+            notional = None
+
+        metadata = dict(ctx.metadata)
+        metadata.update({
+            "transport": "codex_cli",
+            "billing": "chatgpt_subscription",
+            "duration_ms": duration_ms,
+            "turns": usage.turns,
+        })
+        if usage.thread_id:
+            metadata["thread_id"] = usage.thread_id
+        if usage.reasoning_output_tokens:
+            metadata["reasoning_output_tokens"] = usage.reasoning_output_tokens
+        if usage.cache_write_input_tokens:
+            metadata["cache_write_input_tokens"] = usage.cache_write_input_tokens
+        if notional is None:
+            metadata["notional_cost"] = f"unknown price for model {ctx.model}"
+        if not usage.found:
+            metadata["usage"] = "no usage events in output"
+        if error:
+            metadata["error"] = error[:500]
+
+        cost_log.log(
+            project=_project(ctx.project),
+            model=ctx.model,
+            prompt_tokens=usage.input_tokens,
+            completion_tokens=usage.output_tokens,
+            cached_tokens=usage.cached_input_tokens,
+            cost_usd=0.0,
+            billing_mode="subscription",
+            notional_cost_usd=notional,
+            script=ctx.script,
+            purpose=ctx.purpose,
+            metadata=metadata,
+            packet_id=ctx.packet_id,
+            outcome="error" if error else None,
+        )
+    except Exception as failure:  # the call already happened; bookkeeping must not undo it
+        log.warning("codex usage ledger write failed (%s): %s", ctx.purpose, failure)
 
 
 def _codex_env() -> dict:
@@ -237,12 +502,40 @@ def _join_readers(readers: list[threading.Thread], budget: float) -> None:
         reader.join(timeout=max(0.0, deadline - time.monotonic()))
 
 
+def _rejects_json_flag(proc: subprocess.CompletedProcess) -> bool:
+    """Whether this exit is the CLI refusing to parse `--json`, not a model failure.
+
+    An argument-parse failure costs nothing and happens before any model runs,
+    so retrying without the flag is free. Without this check, a host on a Codex
+    build predating `--json` would have every call fail the moment it picked up
+    this version of limbic.
+    """
+    text = ((proc.stderr or "") + (proc.stdout or "")).lower()
+    if "--json" not in text:
+        return False
+    return any(m in text for m in (
+        "unexpected argument", "unrecognized", "unknown flag", "invalid option",
+        "unknown option",
+    ))
+
+
 def _run(cmd: list[str], timeout: int) -> subprocess.CompletedProcess:
     """Run `codex exec` with bounded output and a process-group kill on timeout."""
     if not is_available():
         raise CodexCLIError("codex CLI not available — install from https://github.com/openai/codex and run `codex auth`")
     if temporarily_disabled():
         raise CodexCLIError(f"codex CLI temporarily disabled (quota): {_DISABLED_REASON}")
+    proc = _spawn(cmd, timeout)
+    if proc.returncode != 0 and "--json" in cmd and _rejects_json_flag(proc):
+        global _JSON_EVENTS_SUPPORTED
+        _JSON_EVENTS_SUPPORTED = False
+        log.warning("codex CLI does not support --json; retrying without it. "
+                    "Token usage will not be logged for this process.")
+        proc = _spawn([a for a in cmd if a != "--json"], timeout)
+    return proc
+
+
+def _spawn(cmd: list[str], timeout: int) -> subprocess.CompletedProcess:
     try:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -299,7 +592,8 @@ def _run(cmd: list[str], timeout: int) -> subprocess.CompletedProcess:
             except (OSError, ValueError):
                 pass
     if timed_out:
-        raise CodexCLIError(f"codex CLI timed out after {timeout}s")
+        raise CodexCLIError(f"codex CLI timed out after {timeout}s",
+                            stdout=out.get(), stderr=err.get())
     return subprocess.CompletedProcess(cmd, proc.returncode, out.get(), err.get())
 
 
@@ -313,7 +607,8 @@ def _finish(proc: subprocess.CompletedProcess, output_path: str | None, schema: 
         # error is at the END — keep the tail, not just the head.
         if len(err) > 700:
             err = err[:200] + " […] " + err[-500:]
-        raise CodexCLIError(f"codex CLI exit {proc.returncode}: {err}")
+        raise CodexCLIError(f"codex CLI exit {proc.returncode}: {err}",
+                            stdout=proc.stdout or "", stderr=proc.stderr or "")
     text = ""
     if output_path:
         try:
@@ -321,12 +616,17 @@ def _finish(proc: subprocess.CompletedProcess, output_path: str | None, schema: 
         except OSError:
             text = ""
     if not text:
-        text = (proc.stdout or "").strip()
+        # With `--json` stdout is an event stream, so the old raw-stdout fallback
+        # would hand back JSONL instead of the answer. Recover the agent's last
+        # message from the events; if there are none, fall through to the
+        # pre-event-capture behaviour unchanged.
+        text = final_message(proc.stdout or "") or (proc.stdout or "").strip()
     if schema is None:
         return text
     parsed = _parse_json(text)
     if parsed is None:
-        raise CodexCLIError(f"codex CLI returned unparseable JSON: {text[:300]}")
+        raise CodexCLIError(f"codex CLI returned unparseable JSON: {text[:300]}",
+                            stdout=proc.stdout or "", stderr=proc.stderr or "")
     return parsed
 
 
@@ -340,18 +640,31 @@ def _is_transient(err: CodexCLIError) -> bool:
     return "codex CLI exit" in msg or "unparseable JSON" in msg
 
 
-def _exec(cmd: list[str], timeout: int, output_path: str | None, schema: dict | None) -> Any:
+def _exec(cmd: list[str], timeout: int, output_path: str | None,
+          schema: dict | None, ctx: _LogContext | None = None) -> Any:
     """Run + parse with automatic retry on transient failures (a flaky `codex exec`
     non-zero exit or garbled output). Quota errors and timeouts do NOT retry: quota
     needs its cooldown, and a timeout retry would double the stage's worst case.
+
+    Every attempt gets its own ledger row — a retried call spent its first
+    attempt's tokens too.
     """
     for attempt in range(RETRIES + 1):
+        started = time.monotonic()
         try:
-            return _finish(_run(cmd, timeout), output_path, schema)
+            proc = _run(cmd, timeout)
+            result = _finish(proc, output_path, schema)
         except CodexCLIError as e:
+            _log_usage(ctx, parse_usage(getattr(e, "stdout", "")),
+                       duration_ms=int((time.monotonic() - started) * 1000),
+                       error=str(e))
             if attempt >= RETRIES or not _is_transient(e):
                 raise
             time.sleep(5 * (attempt + 1))
+            continue
+        _log_usage(ctx, parse_usage(proc.stdout or ""),
+                   duration_ms=int((time.monotonic() - started) * 1000))
+        return result
 
 
 def codex_json(
@@ -363,26 +676,41 @@ def codex_json(
     reasoning: str | None = None,
     timeout: int = 120,
     sandbox: str = "read-only",
+    project: str = "",
+    purpose: str = "",
+    packet_id: str | None = None,
+    cost_log: bool = True,
 ) -> Any:
     """Locked-down, single-shot structured generation. Returns parsed JSON (if
     ``schema`` given) or text. No web, no file writes — just classify/transform.
+
+    ``project``/``purpose``/``packet_id`` attribute the usage row this writes;
+    ``project`` falls back to ``$LIMBIC_CODEX_PROJECT`` and then the enclosing
+    git repo's name. ``cost_log=False`` (or ``LIMBIC_CODEX_COST_LOG=0``) skips
+    the row and the ``--json`` flag it needs.
     """
+    resolved_model = model or DEFAULT_MODEL
+    ctx = _LogContext(model=resolved_model, script="codex_cli.codex_json",
+                      project=project, purpose=purpose, packet_id=packet_id,
+                      enabled=cost_log)
     schema_path = output_path = None
     try:
         with tempfile.NamedTemporaryFile("w", suffix=".out", delete=False) as of:
             output_path = of.name
-        cmd = ["codex", "exec", "--model", model or DEFAULT_MODEL,
+        cmd = ["codex", "exec", "--model", resolved_model,
                "--sandbox", sandbox, "--skip-git-repo-check", "--ephemeral",
                "--ignore-user-config", "--color", "never",
                "--output-last-message", output_path,
                "-c", f'model_reasoning_effort="{reasoning or DEFAULT_REASONING}"']
+        if cost_log and cost_log_enabled() and _JSON_EVENTS_SUPPORTED:
+            cmd.append("--json")
         if schema is not None:
             with tempfile.NamedTemporaryFile("w", suffix=".schema.json", delete=False) as sf:
                 json.dump(strict_response_schema(schema), sf, ensure_ascii=False)
                 schema_path = sf.name
             cmd += ["--output-schema", schema_path]
         cmd.append(f"{system}\n\n{prompt}" if system else prompt)
-        return _exec(cmd, timeout, output_path, schema)
+        return _exec(cmd, timeout, output_path, schema, ctx)
     finally:
         for p in (schema_path, output_path):
             if p:
@@ -405,6 +733,10 @@ def codex_research(
     web_search: bool = True,
     network: bool = True,
     isolated: bool = True,
+    project: str = "",
+    purpose: str = "",
+    packet_id: str | None = None,
+    cost_log: bool = True,
 ) -> Any:
     """Agentic Codex run: web search + writable workspace with network egress.
 
@@ -432,17 +764,27 @@ def codex_research(
     on a developer machine can include ``service_tier``, ``notify``,
     ``personality`` and any configured MCP servers. Pass ``isolated=False`` when
     the run genuinely needs those.
+
+    ``project``/``purpose``/``packet_id``/``cost_log`` behave as in
+    ``codex_json``. This is the call worth attributing: an agentic run reading
+    web pages for ten minutes is where the tokens actually go.
     """
+    resolved_model = model or DEFAULT_MODEL
+    ctx = _LogContext(model=resolved_model, script="codex_cli.codex_research",
+                      project=project, purpose=purpose, packet_id=packet_id,
+                      enabled=cost_log)
     schema_path = output_path = None
     try:
         with tempfile.NamedTemporaryFile("w", suffix=".out", delete=False) as of:
             output_path = of.name
-        cmd = ["codex", "exec", "--model", model or DEFAULT_MODEL,
+        cmd = ["codex", "exec", "--model", resolved_model,
                "--sandbox", "workspace-write", "--skip-git-repo-check", "--color", "never",
                "--output-last-message", output_path,
                "-c", f'model_reasoning_effort="{reasoning or DEFAULT_REASONING}"']
         if isolated:
             cmd[2:2] = ["--ephemeral", "--ignore-user-config"]
+        if cost_log and cost_log_enabled() and _JSON_EVENTS_SUPPORTED:
+            cmd.append("--json")
         if web_search:
             cmd += ["-c", "tools.web_search=true"]
         if network:
@@ -463,7 +805,7 @@ def codex_research(
                 schema_path = sf.name
             cmd += ["--output-schema", schema_path]
         cmd.append(mission)
-        return _exec(cmd, timeout, output_path, schema)
+        return _exec(cmd, timeout, output_path, schema, ctx)
     finally:
         for p in (schema_path, output_path):
             if p:

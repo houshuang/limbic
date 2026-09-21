@@ -62,7 +62,9 @@ CREATE TABLE IF NOT EXISTS llm_costs (
     metadata    TEXT DEFAULT '{}',
     cache_hit   INTEGER DEFAULT 0,
     outcome     TEXT DEFAULT NULL,
-    packet_id   TEXT DEFAULT NULL
+    packet_id   TEXT DEFAULT NULL,
+    billing_mode TEXT DEFAULT 'billed',
+    notional_cost_usd REAL DEFAULT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_costs_ts ON llm_costs(ts);
@@ -83,7 +85,26 @@ _MIGRATION_COLUMNS: dict[str, str] = {
     "cache_hit": "INTEGER DEFAULT 0",
     "outcome": "TEXT DEFAULT NULL",
     "packet_id": "TEXT DEFAULT NULL",
+    "billing_mode": "TEXT DEFAULT 'billed'",
+    "notional_cost_usd": "REAL DEFAULT NULL",
 }
+
+# How a row's money is to be read.
+#
+#   billed       — real money left an account. `cost_usd` is that money.
+#   subscription — the call was covered by a flat-rate plan (Codex under a
+#                  ChatGPT subscription), so no per-token money was spent.
+#                  `cost_usd` is 0 and `notional_cost_usd` holds what the same
+#                  tokens would have cost on the API, which is an *estimate of
+#                  value, not of spend*.
+#
+# Keeping the notional figure out of `cost_usd` is the whole point of the
+# split: every existing reader — this module's `total()`, the dashboard, an
+# older limbic on another host, an ad-hoc `SELECT SUM(cost_usd)` — keeps
+# returning real spend without knowing the column exists. A reader that wants
+# the subscription figure has to ask for it by name, and therefore has to
+# label it.
+BILLING_MODES = frozenset({"billed", "subscription"})
 
 
 def _migrate_columns(conn: sqlite3.Connection) -> None:
@@ -341,6 +362,8 @@ class CostRecord:
     cache_hit: bool = False
     outcome: str | None = None
     packet_id: str | None = None
+    billing_mode: str = "billed"
+    notional_cost_usd: float | None = None
 
 
 class CostLog:
@@ -382,6 +405,8 @@ class CostLog:
             metadata: dict[str, Any] | None = None,
             cache_hit: bool = False, outcome: str | None = None,
             packet_id: str | None = None,
+            billing_mode: str = "billed",
+            notional_cost_usd: float | None = None,
             ts: str | datetime | None = None) -> CostRecord:
         """Log an LLM call.  If cost_usd is None, computes it via litellm.
 
@@ -397,7 +422,24 @@ class CostLog:
         `record_outcome()` once the caller knows whether the result was used;
         `packet_id` links the row to a `cerebellum.packet.Packet` (reserved
         for that not-yet-built feature — nullable, no current writer).
+
+        `billing_mode` is `"billed"` (default) or `"subscription"`; see
+        `BILLING_MODES`. A subscription row must carry `cost_usd=0` — it is
+        refused otherwise, because a notional figure that reached `cost_usd`
+        would be indistinguishable from money in every existing total. Put the
+        API-equivalent estimate in `notional_cost_usd`, or leave it `None` when
+        the model has no known price.
         """
+        if billing_mode not in BILLING_MODES:
+            raise ValueError(
+                f"billing_mode must be one of {sorted(BILLING_MODES)}, got {billing_mode!r}")
+        if billing_mode == "subscription":
+            if cost_usd is None:
+                cost_usd = 0.0
+            elif cost_usd:
+                raise ValueError(
+                    "a subscription row spends no money: pass cost_usd=0 and put the "
+                    "API-equivalent figure in notional_cost_usd")
 
         if cost_usd is None:
             cost_usd = compute_cost(model, prompt_tokens, completion_tokens,
@@ -420,6 +462,8 @@ class CostLog:
             cache_hit=cache_hit,
             outcome=outcome,
             packet_id=packet_id,
+            billing_mode=billing_mode,
+            notional_cost_usd=notional_cost_usd,
         )
 
         conn = self._connect()
@@ -427,14 +471,16 @@ class CostLog:
             """INSERT INTO llm_costs
                (id, ts, project, host, model, api_key_hint,
                 prompt_tokens, completion_tokens, cached_tokens,
-                cost_usd, script, purpose, metadata, cache_hit, outcome, packet_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                cost_usd, script, purpose, metadata, cache_hit, outcome, packet_id,
+                billing_mode, notional_cost_usd)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (record.id, record.ts, record.project, record.host,
              record.model, record.api_key_hint,
              record.prompt_tokens, record.completion_tokens, record.cached_tokens,
              record.cost_usd, record.script, record.purpose,
              json.dumps(record.metadata), int(record.cache_hit),
-             record.outcome, record.packet_id),
+             record.outcome, record.packet_id,
+             record.billing_mode, record.notional_cost_usd),
         )
         conn.commit()
         return record
@@ -567,8 +613,14 @@ class CostLog:
 
     def summary(self, *, days: int | None = None, since: str | None = None,
                 group_by: str = "project") -> list[dict]:
-        """Aggregate costs grouped by project, model, host, or api_key_hint."""
-        valid = {"project", "model", "host", "api_key_hint", "script"}
+        """Aggregate costs grouped by project, model, host, or api_key_hint.
+
+        `cost_usd` is real spend only. Subscription-covered calls contribute 0
+        to it and their API-equivalent estimate to `notional_cost_usd`, which
+        is reported beside it and never folded in — group by `billing_mode` to
+        see the split.
+        """
+        valid = {"project", "model", "host", "api_key_hint", "script", "billing_mode"}
         if group_by not in valid:
             raise ValueError(f"group_by must be one of {valid}")
 
@@ -590,6 +642,7 @@ class CostLog:
                    SUM(completion_tokens) AS completion_tokens,
                    SUM(cached_tokens) AS cached_tokens,
                    SUM(cost_usd) AS cost_usd,
+                   COALESCE(SUM(notional_cost_usd), 0) AS notional_cost_usd,
                    MIN(ts) AS first_call,
                    MAX(ts) AS last_call
             FROM llm_costs{where}
@@ -600,7 +653,7 @@ class CostLog:
 
     _MULTI_GROUP_COLUMNS = {
         "project", "model", "host", "api_key_hint", "script", "purpose",
-        "outcome", "cache_hit",
+        "outcome", "cache_hit", "billing_mode",
     }
 
     def multi_group_summary(self, *, by: list[str], since: str | None = None) -> list[dict]:
@@ -634,6 +687,7 @@ class CostLog:
                    SUM(completion_tokens) AS completion_tokens,
                    SUM(cached_tokens) AS cached_tokens,
                    SUM(cost_usd) AS cost_usd,
+                   COALESCE(SUM(notional_cost_usd), 0) AS notional_cost_usd,
                    AVG(cache_hit) AS cache_hit_rate,
                    SUM(CASE WHEN outcome = 'applied' THEN 1 ELSE 0 END) AS applied_count
             FROM llm_costs{where}
@@ -646,21 +700,42 @@ class CostLog:
             d["cost_per_applied"] = (
                 d["cost_usd"] / d["applied_count"] if d["applied_count"] else None
             )
+            # A subscription group's `cost_per_applied` is honestly 0 — no money
+            # moved — which makes an expensive agent loop look free next to a
+            # billed one. This is the figure that makes the two comparable.
+            d["notional_cost_per_applied"] = (
+                d["notional_cost_usd"] / d["applied_count"] if d["applied_count"] else None
+            )
             out.append(d)
         return out
 
     def total(self, *, days: int | None = None) -> float:
-        """Total USD spend."""
+        """Total USD spend — real money only.
+
+        Subscription-covered rows carry `cost_usd = 0`, so they cannot inflate
+        this. `total_notional()` reports what they would have cost on the API.
+        """
+        return self._total("cost_usd", days)
+
+    def total_notional(self, *, days: int | None = None) -> float:
+        """API-equivalent USD for subscription-covered calls. Not spend.
+
+        Report it beside `total()` under its own label; adding the two gives a
+        number that is neither the bill nor the value of anything.
+        """
+        return self._total("notional_cost_usd", days)
+
+    def _total(self, column: str, days: int | None) -> float:
         conn = self._connect()
         if days:
             cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime(
                 "%Y-%m-%dT%H:%M:%SZ")
             row = conn.execute(
-                "SELECT COALESCE(SUM(cost_usd), 0) FROM llm_costs WHERE ts >= ?",
+                f"SELECT COALESCE(SUM({column}), 0) FROM llm_costs WHERE ts >= ?",
                 (cutoff,)).fetchone()
         else:
             row = conn.execute(
-                "SELECT COALESCE(SUM(cost_usd), 0) FROM llm_costs").fetchone()
+                f"SELECT COALESCE(SUM({column}), 0) FROM llm_costs").fetchone()
         return float(row[0])
 
     # -----------------------------------------------------------------------
@@ -672,14 +747,30 @@ class CostLog:
 
         Uses INSERT OR IGNORE on the UUID primary key, so rows that already
         exist are skipped.  Returns number of new rows inserted.
+
+        Only the columns both databases have are copied; the rest take their
+        local defaults. A host still on an older limbic writes a narrower table,
+        and `SELECT *` across the two then fails on the column count — which
+        would strand every remote row rather than the one new field.
         """
         conn = self._connect()
         remote = str(remote_db_path)
         conn.execute("ATTACH DATABASE ? AS remote", (remote,))
         try:
-            cursor = conn.execute("""
-                INSERT OR IGNORE INTO llm_costs
-                SELECT * FROM remote.llm_costs
+            local_cols = [r["name"] for r in conn.execute("PRAGMA table_info(llm_costs)")]
+            remote_cols = {r["name"] for r in conn.execute("PRAGMA remote.table_info(llm_costs)")}
+            shared = [c for c in local_cols if c in remote_cols]
+            if not shared:
+                raise sqlite3.OperationalError(
+                    f"{remote} has no llm_costs columns in common with the local ledger")
+            missing = [c for c in local_cols if c not in remote_cols]
+            if missing:
+                log.info("merging %s without %s (older schema); local defaults apply",
+                         remote, ", ".join(missing))
+            cols = ", ".join(shared)
+            cursor = conn.execute(f"""
+                INSERT OR IGNORE INTO llm_costs ({cols})
+                SELECT {cols} FROM remote.llm_costs
             """)
             count = cursor.rowcount
             conn.commit()
@@ -827,6 +918,9 @@ _DASHBOARD_HTML = """\
 <div class="spacer"></div>
 <div class="section-label">Claude CLI Usage (subscription)</div>
 <div class="totals" id="cli-totals"></div>
+<div class="spacer"></div>
+<div class="section-label">Subscription Usage (notional — not billed)</div>
+<div class="totals" id="sub-totals"></div>
 
 <div class="grid">
   <div class="panel chart-panel">
@@ -860,6 +954,18 @@ _DASHBOARD_HTML = """\
   <div class="panel wide">
     <h2>CLI by Purpose <span class="badge badge-cli">CLI</span></h2>
     <table id="cli-by-purpose"></table>
+  </div>
+  <div class="panel">
+    <h2>Subscription by Project <span class="badge badge-cli">NOTIONAL</span></h2>
+    <table id="sub-by-project"></table>
+  </div>
+  <div class="panel">
+    <h2>Subscription by Model <span class="badge badge-cli">NOTIONAL</span></h2>
+    <table id="sub-by-model"></table>
+  </div>
+  <div class="panel wide">
+    <h2>Subscription by Purpose <span class="badge badge-cli">NOTIONAL</span></h2>
+    <table id="sub-by-purpose"></table>
   </div>
   <div class="panel wide">
     <h2>Recent Calls</h2>
@@ -927,6 +1033,20 @@ async function reload() {
     <div class="total-card cli-card"><div class="label">Total Duration</div><div class="value cli">${d.cli.duration_min}m</div></div>
   `;
 
+  // Subscription totals. `notional_usd` is what these tokens would have cost
+  // on the API — it is deliberately not added to the API total anywhere.
+  const sub = d.subscription || {calls: 0, notional_usd: 0, prompt_tokens: 0,
+    completion_tokens: 0, cached_tokens: 0, total_tokens: 0, unpriced_calls: 0,
+    by_project: [], by_model: [], by_purpose: []};
+  $('sub-totals').innerHTML = `
+    <div class="total-card cli-card"><div class="label">Notional (not billed)</div><div class="value cli">${fmt(sub.notional_usd)}</div></div>
+    <div class="total-card cli-card"><div class="label">Calls</div><div class="value cli">${sub.calls.toLocaleString()}</div></div>
+    <div class="total-card cli-card"><div class="label">Input Tokens</div><div class="value cli">${fmtK(sub.prompt_tokens)}</div></div>
+    <div class="total-card cli-card"><div class="label">Cached Input</div><div class="value cli">${fmtK(sub.cached_tokens)}</div></div>
+    <div class="total-card cli-card"><div class="label">Output Tokens</div><div class="value cli">${fmtK(sub.completion_tokens)}</div></div>
+    <div class="total-card cli-card"><div class="label">Unpriced Calls</div><div class="value cli">${sub.unpriced_calls.toLocaleString()}</div></div>
+  `;
+
   $('db-path').textContent = d.db_path;
   $('last-sync').textContent = 'Last sync: ' + (d.last_sync || 'never');
 
@@ -947,6 +1067,18 @@ async function reload() {
   ]);
 
   // CLI tables
+  const subCols = [
+    ['Name', r => r.grp, ''],
+    ['Calls', r => r.calls.toLocaleString(), 'num'],
+    ['Input', r => fmtK(r.prompt_tokens), 'num'],
+    ['Cached', r => fmtK(r.cached_tokens), 'num'],
+    ['Output', r => fmtK(r.completion_tokens), 'num'],
+    ['Notional', r => fmt(r.notional_usd), 'num'],
+  ];
+  renderTable('sub-by-project', sub.by_project, subCols);
+  renderTable('sub-by-model', sub.by_model, subCols);
+  renderTable('sub-by-purpose', sub.by_purpose, subCols);
+
   renderTable('cli-by-project', d.cli.by_project, [
     ['Name', r => r.grp, ''],
     ['Sessions', r => r.sessions.toLocaleString(), 'num'],
@@ -978,7 +1110,7 @@ async function reload() {
   const recent = await api('recent?days=' + days);
   renderTable('recent', recent.slice(0, 20), [
     ['Time', r => r.ts.slice(5, 16).replace('T', ' '), ''],
-    ['Src', r => r.script === 'claude-cli' ? 'CLI' : 'API', ''],
+    ['Src', r => r.billing_mode === 'subscription' ? 'SUB' : (r.script === 'claude-cli' ? 'CLI' : 'API'), ''],
     ['Project', r => r.project, ''],
     ['Purpose', r => r.purpose || '', ''],
     ['Model', r => r.model.replace('gemini/', ''), ''],
@@ -1040,10 +1172,13 @@ def _build_summary(cl: CostLog, days: int | None) -> dict:
             "%Y-%m-%dT%H:%M:%SZ")
         clauses.append("ts >= ?")
         params.append(cutoff)
-    api_where = (" WHERE " + " AND ".join(clauses + ["script != 'claude-cli'"])
-                 if clauses else " WHERE script != 'claude-cli'")
-    cli_where = (" WHERE " + " AND ".join(clauses + ["script = 'claude-cli'"])
-                 if clauses else " WHERE script = 'claude-cli'")
+    # Three disjoint buckets. `billed` is the only one that is money: a
+    # subscription row lands in `sub_where` and is kept out of every API
+    # aggregate, so the "API Cost" headline stays a bill.
+    billed = "COALESCE(billing_mode, 'billed') != 'subscription'"
+    api_where = " WHERE " + " AND ".join(clauses + [billed, "script != 'claude-cli'"])
+    cli_where = " WHERE " + " AND ".join(clauses + [billed, "script = 'claude-cli'"])
+    sub_where = " WHERE " + " AND ".join(clauses + ["COALESCE(billing_mode, 'billed') = 'subscription'"])
 
     def _grouped(where, params, group_col):
         rows = conn.execute(f"""
@@ -1118,6 +1253,32 @@ def _build_summary(cl: CostLog, days: int | None) -> dict:
         ORDER BY cost_usd DESC
     """, params).fetchall()
 
+    # Subscription aggregates (Codex under a ChatGPT plan, and anything else
+    # that logs billing_mode='subscription'). `notional_usd` is an
+    # API-equivalent estimate, never added to the API total.
+    sub_row = conn.execute(f"""
+        SELECT COUNT(*) AS calls,
+               COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+               COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+               COALESCE(SUM(cached_tokens), 0) AS cached_tokens,
+               COALESCE(SUM(prompt_tokens + completion_tokens), 0) AS total_tokens,
+               COALESCE(SUM(notional_cost_usd), 0) AS notional_usd,
+               SUM(CASE WHEN notional_cost_usd IS NULL THEN 1 ELSE 0 END) AS unpriced_calls
+        FROM llm_costs{sub_where}
+    """, params).fetchone()
+
+    def _sub_grouped(group_col):
+        rows = conn.execute(f"""
+            SELECT {group_col} AS grp, COUNT(*) AS calls,
+                   SUM(prompt_tokens) AS prompt_tokens,
+                   SUM(completion_tokens) AS completion_tokens,
+                   SUM(cached_tokens) AS cached_tokens,
+                   COALESCE(SUM(notional_cost_usd), 0) AS notional_usd
+            FROM llm_costs{sub_where}
+            GROUP BY {group_col} ORDER BY notional_usd DESC
+        """, params).fetchall()
+        return [dict(r) for r in rows]
+
     return {
         "api": {
             "cost_usd": api_row["cost_usd"],
@@ -1140,6 +1301,18 @@ def _build_summary(cl: CostLog, days: int | None) -> dict:
             "by_project": [dict(r) for r in cli_by_project],
             "by_model": [dict(r) for r in cli_by_model],
             "by_purpose": [dict(r) for r in cli_by_purpose],
+        },
+        "subscription": {
+            "calls": sub_row["calls"],
+            "prompt_tokens": sub_row["prompt_tokens"],
+            "completion_tokens": sub_row["completion_tokens"],
+            "cached_tokens": sub_row["cached_tokens"],
+            "total_tokens": sub_row["total_tokens"],
+            "notional_usd": sub_row["notional_usd"],
+            "unpriced_calls": sub_row["unpriced_calls"] or 0,
+            "by_project": _sub_grouped("project"),
+            "by_model": _sub_grouped("model"),
+            "by_purpose": _sub_grouped("COALESCE(purpose, '')"),
         },
         "db_path": str(cl.db_path),
         "last_sync": _last_sync_time(),
@@ -1210,7 +1383,11 @@ def _serve_dashboard(port: int = 8042, open_browser: bool = True):
 
             elif parsed.path == "/api/daily":
                 conn = cl._connect()
-                clauses = ["script != 'claude-cli'"]
+                # "Daily API Cost" is a spend chart, so subscription rows —
+                # whose cost_usd is 0 by construction — stay out of it rather
+                # than adding flat zero-height series per project.
+                clauses = ["script != 'claude-cli'",
+                           "COALESCE(billing_mode, 'billed') != 'subscription'"]
                 params = []
                 if days:
                     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime(

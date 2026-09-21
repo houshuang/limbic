@@ -532,7 +532,7 @@ total = sum(r["cost_usd"] for r in records)
 # python -m limbic.cerebellum.cost_log sync --host alif
 ```
 
-DB location: `COST_LOG_DB` env var or `~/.local/share/limbic/llm_costs.db`. Includes a web dashboard (`python -m limbic.cerebellum.cost_log dashboard`, port 8042) that splits API spend (billed) from Claude CLI usage (Max-plan subscription value), remote sync from servers, and CLI reporting.
+DB location: `COST_LOG_DB` env var or `~/.local/share/limbic/llm_costs.db`. Includes a web dashboard (`python -m limbic.cerebellum.cost_log dashboard`, port 8042) that splits API spend (billed) from Claude CLI usage (Max-plan subscription value) and from `billing_mode="subscription"` rows (Codex under a ChatGPT plan, reported as notional dollars and never summed into spend), remote sync from servers, and CLI reporting.
 
 ## CLI wrappers (`claude_cli.py`, `codex_cli.py`)
 
@@ -578,6 +578,12 @@ dossier = codex_research(
 `codex_research` is the one that follows leads, and the two config flags that
 unlock it (`tools.web_search`, `sandbox_workspace_write.network_access`) are on
 by default — omit both and it quietly degrades to a shallow one-shot.
+
+Both Codex entry points also write a `cost_log` row per attempt, parsed from
+`codex exec --json`'s event stream: `billing_mode="subscription"`,
+`cost_usd=0`, and the API-equivalent figure in `notional_cost_usd`. Pass
+`project=`/`purpose=` to attribute it; `cost_log=False` or
+`LIMBIC_CODEX_COST_LOG=0` turns it off. See [`docs/cost-log.md`](../../docs/cost-log.md).
 
 Both calls run with `--ephemeral --ignore-user-config`, so they leave no rollout
 behind and read none of the host's `~/.codex/config.toml`. That never changes

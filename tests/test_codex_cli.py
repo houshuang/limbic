@@ -5,7 +5,9 @@ Retry/quota behaviour lives in tests/test_cerebellum.py::TestCodexCLIRetry.
 
 from __future__ import annotations
 
+import json
 import os
+import sqlite3
 import subprocess
 import sys
 import textwrap
@@ -220,3 +222,247 @@ class TestRunSubprocess:
         monkeypatch.setattr(cc.shutil, "which", lambda name: None)
         with pytest.raises(cc.CodexCLIError, match="not available"):
             cc._run(["codex"], timeout=5)
+
+
+# ---------------------------------------------------------------------------
+# Usage capture → cost ledger
+# ---------------------------------------------------------------------------
+
+# Recorded verbatim from codex-cli 0.153.4 on 2026-09-21 (`codex exec --json
+# --model gpt-5.5 --sandbox read-only ... 'Reply with exactly: ok'`), with the
+# thread id replaced. This is the contract everything below is testing against.
+REAL_EVENTS = "\n".join([
+    '{"type":"thread.started","thread_id":"00000000-0000-0000-0000-000000000000"}',
+    '{"type":"turn.started"}',
+    '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"ok"}}',
+    '{"type":"turn.completed","usage":{"input_tokens":14169,"cached_input_tokens":4480,'
+    '"cache_write_input_tokens":0,"output_tokens":5,"reasoning_output_tokens":0}}',
+])
+
+
+@pytest.fixture(autouse=True)
+def reset_json_support(monkeypatch):
+    """`--json` support is a process-wide latch; don't let one test set it for the next."""
+    monkeypatch.setattr(cc, "_JSON_EVENTS_SUPPORTED", True)
+
+
+@pytest.fixture
+def ledger():
+    from limbic.cerebellum.cost_log import cost_log
+    return cost_log
+
+
+def _stub_run(monkeypatch, stdout, *, returncode=0, stderr=""):
+    def _run(cmd, timeout):
+        return subprocess.CompletedProcess(args=cmd, returncode=returncode,
+                                           stdout=stdout, stderr=stderr)
+    monkeypatch.setattr(cc, "_run", _run)
+
+
+class TestParseUsage:
+    def test_real_recorded_shape(self):
+        usage = cc.parse_usage(REAL_EVENTS)
+        assert usage.found
+        assert usage.input_tokens == 14169
+        assert usage.cached_input_tokens == 4480
+        assert usage.output_tokens == 5
+        assert usage.turns == 1
+        assert usage.thread_id == "00000000-0000-0000-0000-000000000000"
+
+    def test_per_turn_blocks_are_summed(self):
+        stream = REAL_EVENTS + "\n" + (
+            '{"type":"turn.completed","usage":{"input_tokens":100,'
+            '"cached_input_tokens":10,"output_tokens":7,"reasoning_output_tokens":3}}')
+        usage = cc.parse_usage(stream)
+        assert (usage.input_tokens, usage.output_tokens, usage.turns) == (14269, 12, 2)
+        assert usage.reasoning_output_tokens == 3
+
+    def test_cumulative_old_schema_replaces_rather_than_adds(self):
+        """`total_token_usage` is a running total; summing it counts a long run
+        once per event."""
+        stream = "\n".join([
+            '{"id":"0","msg":{"type":"token_count","info":{"total_token_usage":'
+            '{"input_tokens":100,"cached_input_tokens":0,"output_tokens":10}}}}',
+            '{"id":"1","msg":{"type":"token_count","info":{"total_token_usage":'
+            '{"input_tokens":250,"cached_input_tokens":40,"output_tokens":30}}}}',
+        ])
+        usage = cc.parse_usage(stream)
+        assert (usage.input_tokens, usage.cached_input_tokens, usage.output_tokens) == (250, 40, 30)
+        assert usage.found
+
+    def test_plain_text_output_reports_nothing_found(self):
+        usage = cc.parse_usage("ok\nnot json at all\n")
+        assert not usage.found
+        assert usage.input_tokens == 0
+
+    def test_unparseable_lines_are_skipped(self):
+        usage = cc.parse_usage("{not json\n" + REAL_EVENTS + "\ntrailing noise")
+        assert usage.input_tokens == 14169
+
+
+class TestFinalMessage:
+    def test_recovers_the_agent_message(self):
+        assert cc.final_message(REAL_EVENTS) == "ok"
+
+    def test_last_message_wins(self):
+        stream = REAL_EVENTS + "\n" + (
+            '{"type":"item.completed","item":{"id":"item_1","type":"agent_message",'
+            '"text":"final answer"}}')
+        assert cc.final_message(stream) == "final answer"
+
+    def test_no_events_is_empty_so_the_caller_can_fall_back(self):
+        assert cc.final_message("plain text answer") == ""
+
+    def test_finish_prefers_the_event_message_over_raw_jsonl(self):
+        proc = subprocess.CompletedProcess(args=["codex"], returncode=0,
+                                           stdout=REAL_EVENTS, stderr="")
+        assert cc._finish(proc, None, None) == "ok"
+
+    def test_finish_still_falls_back_to_raw_stdout(self):
+        proc = subprocess.CompletedProcess(args=["codex"], returncode=0,
+                                           stdout="  plain answer  ", stderr="")
+        assert cc._finish(proc, None, None) == "plain answer"
+
+
+class TestUsageLogging:
+    def test_success_writes_one_subscription_row(self, monkeypatch, ledger):
+        _stub_run(monkeypatch, REAL_EVENTS)
+        assert cc.codex_json("hi", project="demo", purpose="classify") == "ok"
+
+        rows = ledger.query()
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["billing_mode"] == "subscription"
+        assert row["cost_usd"] == 0.0          # no money moved
+        assert row["notional_cost_usd"] > 0    # but the tokens were worth something
+        assert (row["prompt_tokens"], row["cached_tokens"], row["completion_tokens"]) == (14169, 4480, 5)
+        assert row["project"] == "demo"
+        assert row["purpose"] == "classify"
+        assert row["script"] == "codex_cli.codex_json"
+        assert json.loads(row["metadata"])["transport"] == "codex_cli"
+
+    def test_notional_matches_the_api_price_of_the_same_tokens(self, monkeypatch, ledger):
+        from limbic.cerebellum.cost_log import cost_for
+        _stub_run(monkeypatch, REAL_EVENTS)
+        cc.codex_json("hi", model="gpt-5.4-mini", project="demo")
+        assert ledger.query()[0]["notional_cost_usd"] == pytest.approx(
+            cost_for("gpt-5.4-mini", 14169, 5, 4480))
+
+    def test_notional_is_never_added_to_real_spend(self, monkeypatch, ledger):
+        _stub_run(monkeypatch, REAL_EVENTS)
+        cc.codex_json("hi", model="gpt-5.4-mini", project="demo")
+        assert ledger.total() == 0.0
+        assert ledger.total_notional() > 0
+        by_mode = {r["grp"]: r for r in ledger.summary(group_by="billing_mode")}
+        assert by_mode["subscription"]["cost_usd"] == 0.0
+        assert by_mode["subscription"]["notional_cost_usd"] > 0
+
+    def test_unknown_model_logs_tokens_with_no_price(self, monkeypatch, ledger):
+        _stub_run(monkeypatch, REAL_EVENTS)
+        cc.codex_json("hi", model="totally-made-up-model-xyz", project="demo")
+        row = ledger.query()[0]
+        assert row["notional_cost_usd"] is None
+        assert row["prompt_tokens"] == 14169
+        assert "unknown price" in json.loads(row["metadata"])["notional_cost"]
+
+    def test_failed_call_leaves_a_zero_token_error_row(self, monkeypatch, ledger):
+        _stub_run(monkeypatch, "", returncode=1, stderr="stream error: disconnected")
+        monkeypatch.setattr(cc, "RETRIES", 0)
+        with pytest.raises(cc.CodexCLIError):
+            cc.codex_json("hi", project="demo", purpose="classify")
+
+        row = ledger.query()[0]
+        assert row["outcome"] == "error"
+        assert row["prompt_tokens"] == 0
+        assert row["billing_mode"] == "subscription"
+        meta = json.loads(row["metadata"])
+        assert "disconnected" in meta["error"]
+        assert meta["usage"] == "no usage events in output"
+
+    def test_a_timeout_still_bills_the_tokens_it_burned(self, monkeypatch, ledger):
+        def _run(cmd, timeout):
+            raise cc.CodexCLIError("codex CLI timed out after 900s", stdout=REAL_EVENTS)
+        monkeypatch.setattr(cc, "_run", _run)
+        with pytest.raises(cc.CodexCLIError):
+            cc.codex_research("mission", project="demo")
+
+        row = ledger.query()[0]
+        assert row["prompt_tokens"] == 14169
+        assert row["outcome"] == "error"
+        assert row["script"] == "codex_cli.codex_research"
+
+    def test_every_retried_attempt_gets_its_own_row(self, monkeypatch, ledger):
+        calls = {"n": 0}
+
+        def _run(cmd, timeout):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return subprocess.CompletedProcess(cmd, 1, "", "transient blip")
+            return subprocess.CompletedProcess(cmd, 0, REAL_EVENTS, "")
+
+        monkeypatch.setattr(cc, "_run", _run)
+        monkeypatch.setattr(cc.time, "sleep", lambda s: None)
+        assert cc.codex_json("hi", project="demo") == "ok"
+        assert len(ledger.query()) == 2
+
+    def test_a_broken_ledger_does_not_break_the_call(self, monkeypatch, ledger):
+        _stub_run(monkeypatch, REAL_EVENTS)
+
+        def _explode(**kwargs):
+            raise sqlite3.OperationalError("database is locked")
+
+        monkeypatch.setattr(ledger, "log", _explode)
+        assert cc.codex_json("hi", project="demo") == "ok"
+
+    def test_opt_out_writes_nothing_and_drops_the_flag(self, monkeypatch, ledger, captured_cmd):
+        assert cc.codex_json("hi", project="demo", cost_log=False) == "ok"
+        assert "--json" not in captured_cmd[0]
+        assert ledger.query() == []
+
+    def test_env_kill_switch(self, monkeypatch, ledger, captured_cmd):
+        monkeypatch.setenv("LIMBIC_CODEX_COST_LOG", "0")
+        cc.codex_json("hi", project="demo")
+        assert "--json" not in captured_cmd[0]
+        assert ledger.query() == []
+
+    def test_json_flag_is_on_by_default_for_both_entry_points(self, captured_cmd):
+        cc.codex_json("hi", project="demo")
+        cc.codex_research("mission", project="demo")
+        assert all("--json" in cmd for cmd in captured_cmd)
+        assert captured_cmd[0][-1] == "hi"        # still the last argument
+        assert captured_cmd[1][-1] == "mission"
+
+
+class TestJsonFlagUnsupported:
+    """A Codex build predating `--json` must not take every call down with it."""
+
+    def test_rejection_retries_without_the_flag(self, monkeypatch):
+        seen: list[list[str]] = []
+
+        def _spawn(cmd, timeout):
+            seen.append(list(cmd))
+            if "--json" in cmd:
+                return subprocess.CompletedProcess(
+                    cmd, 2, "", "error: unexpected argument '--json' found")
+            return subprocess.CompletedProcess(cmd, 0, "ok", "")
+
+        monkeypatch.setattr(cc.shutil, "which", lambda name: "/usr/bin/codex")
+        monkeypatch.setattr(cc, "_spawn", _spawn)
+        assert cc.codex_json("hi", project="demo") == "ok"
+        assert len(seen) == 2
+        assert "--json" not in seen[1]
+        assert cc._JSON_EVENTS_SUPPORTED is False
+
+    def test_a_real_failure_is_not_mistaken_for_a_flag_problem(self, monkeypatch):
+        seen: list[list[str]] = []
+
+        def _spawn(cmd, timeout):
+            seen.append(list(cmd))
+            return subprocess.CompletedProcess(cmd, 1, "", "model error: overloaded")
+
+        monkeypatch.setattr(cc.shutil, "which", lambda name: "/usr/bin/codex")
+        monkeypatch.setattr(cc, "_spawn", _spawn)
+        proc = cc._run(["codex", "exec", "--json"], timeout=5)
+        assert proc.returncode == 1
+        assert len(seen) == 1
+        assert cc._JSON_EVENTS_SUPPORTED is True
