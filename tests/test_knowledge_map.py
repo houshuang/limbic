@@ -12,17 +12,17 @@ from limbic.amygdala.knowledge_map import (
 # ── Fixtures ──────────────────────────────────────────────
 
 
-def _loro_graph():
-    """Small knowledge graph modeling the Loro Mirror system."""
+def _baking_graph():
+    """Small knowledge graph modeling the sourdough baking process."""
     return KnowledgeGraph(nodes=[
-        {"id": "crdt", "title": "CRDTs & Eventual Consistency", "level": 1, "obscurity": 3, "prerequisites": []},
-        {"id": "react_basics", "title": "React Component Model", "level": 1, "obscurity": 1, "prerequisites": []},
-        {"id": "mirror", "title": "Loro Mirror", "level": 2, "obscurity": 4, "prerequisites": ["crdt"]},
-        {"id": "handles", "title": "Handle Hierarchy", "level": 2, "obscurity": 4, "prerequisites": ["mirror"]},
-        {"id": "use_sync", "title": "useSyncExternalStore", "level": 2, "obscurity": 3, "prerequisites": ["react_basics"]},
-        {"id": "selector", "title": "useLoroDocSelector", "level": 3, "obscurity": 5, "prerequisites": ["handles", "use_sync"]},
-        {"id": "mutations", "title": "Mutation Patterns", "level": 2, "obscurity": 4, "prerequisites": ["mirror"]},
-        {"id": "lifecycle", "title": "Full Request Lifecycle", "level": 3, "obscurity": 5, "prerequisites": ["selector", "mutations"]},
+        {"id": "wild_yeast", "title": "Wild Yeast & Fermentation", "level": 1, "obscurity": 3, "prerequisites": []},
+        {"id": "kneading", "title": "Basic Kneading Technique", "level": 1, "obscurity": 1, "prerequisites": []},
+        {"id": "starter", "title": "Maintaining a Sourdough Starter", "level": 2, "obscurity": 4, "prerequisites": ["wild_yeast"]},
+        {"id": "levain_build", "title": "Building a Levain", "level": 2, "obscurity": 4, "prerequisites": ["starter"]},
+        {"id": "windowpane_test", "title": "Windowpane Gluten Test", "level": 2, "obscurity": 3, "prerequisites": ["kneading"]},
+        {"id": "shaping", "title": "Shaping for Oven Spring", "level": 3, "obscurity": 5, "prerequisites": ["levain_build", "windowpane_test"]},
+        {"id": "hydration_ratio", "title": "Adjusting Hydration Ratio", "level": 2, "obscurity": 4, "prerequisites": ["starter"]},
+        {"id": "full_bake_lifecycle", "title": "Full Bake Lifecycle", "level": 3, "obscurity": 5, "prerequisites": ["shaping", "hydration_ratio"]},
     ])
 
 
@@ -40,20 +40,20 @@ def _simple_chain():
 
 class TestKnowledgeGraph:
     def test_get_node(self):
-        g = _loro_graph()
-        assert g.get("mirror")["title"] == "Loro Mirror"
+        g = _baking_graph()
+        assert g.get("starter")["title"] == "Maintaining a Sourdough Starter"
         assert g.get("nonexistent") is None
 
     def test_children(self):
-        g = _loro_graph()
-        children = g.children_of("crdt")
-        assert "mirror" in children
-        assert "react_basics" not in children
+        g = _baking_graph()
+        children = g.children_of("wild_yeast")
+        assert "starter" in children
+        assert "kneading" not in children
 
     def test_prerequisites(self):
-        g = _loro_graph()
-        assert g.prerequisites_of("selector") == ["handles", "use_sync"]
-        assert g.prerequisites_of("crdt") == []
+        g = _baking_graph()
+        assert g.prerequisites_of("shaping") == ["levain_build", "windowpane_test"]
+        assert g.prerequisites_of("wild_yeast") == []
 
     def test_empty_graph(self):
         g = KnowledgeGraph(nodes=[])
@@ -81,10 +81,10 @@ class TestEntropy:
 
 class TestInitBeliefs:
     def test_uses_obscurity(self):
-        g = _loro_graph()
+        g = _baking_graph()
         state = init_beliefs(g)
         # obscurity 1 → 0.42, obscurity 5 → 0.10
-        assert state.beliefs["react_basics"] > state.beliefs["lifecycle"]
+        assert state.beliefs["kneading"] > state.beliefs["full_bake_lifecycle"]
 
     def test_custom_prior(self):
         g = _simple_chain()
@@ -92,7 +92,7 @@ class TestInitBeliefs:
         assert all(p == 0.5 for p in state.beliefs.values())
 
     def test_all_nodes_have_beliefs(self):
-        g = _loro_graph()
+        g = _baking_graph()
         state = init_beliefs(g)
         assert set(state.beliefs.keys()) == {n["id"] for n in g.nodes}
 
@@ -138,13 +138,13 @@ class TestNextProbe:
         assert next_probe(g, state) is None
 
     def test_question_type_recognition_first(self):
-        g = _loro_graph()
+        g = _baking_graph()
         state = init_beliefs(g, prior_fn=lambda n: 0.5)
         probe = next_probe(g, state)
         assert probe["question_type"] == "recognition"
 
     def test_includes_remaining_count(self):
-        g = _loro_graph()
+        g = _baking_graph()
         state = init_beliefs(g, prior_fn=lambda n: 0.5)
         probe = next_probe(g, state)
         assert probe["remaining"] == 8  # all uncertain
@@ -302,20 +302,20 @@ class TestEIGStrategy:
 
 class TestNextProbeBatch:
     def test_returns_requested_count(self):
-        g = _loro_graph()
+        g = _baking_graph()
         state = init_beliefs(g, prior_fn=lambda n: 0.5)
         probes = next_probe_batch(g, state, n=3)
         assert len(probes) == 3
 
     def test_all_different_nodes(self):
-        g = _loro_graph()
+        g = _baking_graph()
         state = init_beliefs(g, prior_fn=lambda n: 0.5)
         probes = next_probe_batch(g, state, n=4)
         ids = [p["node_id"] for p in probes]
         assert len(set(ids)) == len(ids)
 
     def test_does_not_mutate_original_state(self):
-        g = _loro_graph()
+        g = _baking_graph()
         state = init_beliefs(g, prior_fn=lambda n: 0.5)
         original_beliefs = dict(state.beliefs)
         original_assessed = set(state.assessed)
@@ -391,7 +391,7 @@ class TestCoverageReport:
 
 class TestConvergence:
     def test_not_converged_initially(self):
-        g = _loro_graph()
+        g = _baking_graph()
         state = init_beliefs(g, prior_fn=lambda n: 0.5)
         assert not is_converged(state)
 
@@ -438,9 +438,9 @@ class TestSerialization:
 
 
 class TestFullScenario:
-    def test_loro_mirror_scenario(self):
-        """Simulate probing a React developer who doesn't know CRDTs."""
-        g = _loro_graph()
+    def test_baking_scenario(self):
+        """Simulate probing a baker who knows kneading but not fermentation science."""
+        g = _baking_graph()
         state = init_beliefs(g)
 
         # Probe loop
@@ -453,21 +453,21 @@ class TestFullScenario:
             nid = probe["node_id"]
             node = g.get(nid)
 
-            # Simulate: knows React stuff, doesn't know CRDT stuff
-            react_nodes = {"react_basics", "use_sync"}
-            if nid in react_nodes:
+            # Simulate: knows basic technique, doesn't know fermentation science
+            technique_nodes = {"kneading", "windowpane_test"}
+            if nid in technique_nodes:
                 update_beliefs(g, state, nid, "solid")
-            elif nid in {"crdt"}:
+            elif nid in {"wild_yeast"}:
                 update_beliefs(g, state, nid, "heard_of")
             else:
                 update_beliefs(g, state, nid, "none")
             questions_asked += 1
 
         report = coverage_report(g, state)
-        # Should have identified React knowledge and CRDT gaps
+        # Should have identified kneading knowledge and fermentation gaps
         known_ids = {e["id"] for e in report["known"]}
         unknown_ids = {e["id"] for e in report["unknown"]}
-        assert "react_basics" in known_ids
+        assert "kneading" in known_ids
         assert questions_asked < 10  # propagation should speed things up
 
 
