@@ -111,7 +111,7 @@ class Held:
 class CallMeta:
     """Metadata returned alongside every `cached_call` result."""
 
-    call_id: str
+    call_id: str | None  # None when the ledger write failed after a billed call
     cache_hit: bool
     cost_usd: float
     model: str
@@ -175,10 +175,26 @@ def _extract_cost(meta: dict) -> float:
     return 0.0
 
 
+def _log_billed(**row: Any) -> str | None:
+    """Write a ledger row for a call that has already been billed.
+
+    The response is in hand and paid for by the time this runs, so a ledger
+    that is locked or unwritable must not take the response down with it:
+    the failure is logged and the caller gets `call_id=None`. The provider's
+    response id in the transport metadata is enough to backfill the row.
+    """
+    try:
+        return cost_log.log(**row).id
+    except Exception as failure:
+        log.warning("cost ledger write failed after a billed call (%s): %s",
+                    row.get("purpose"), failure)
+        return None
+
+
 def _log_call(
     raw_meta: dict, *, project: str, purpose: str, model: str, cost_usd: float,
     cache_hit: bool, metadata: dict,
-) -> str:
+) -> str | None:
     """Log a cost_log row for a transport call, unless the transport already
     logged one itself.
 
@@ -194,11 +210,10 @@ def _log_call(
     existing = raw_meta.get("call_id")
     if existing:
         return existing
-    record = cost_log.log(
+    return _log_billed(
         project=project, model=model, purpose=purpose, script="cached_call",
         cost_usd=cost_usd, cache_hit=cache_hit, metadata=metadata,
     )
-    return record.id
 
 
 # ---------------------------------------------------------------------------
@@ -352,14 +367,14 @@ def _openai_generate(
     cost_usd = cost_for(model, input_tokens, output_tokens, cached_tokens, strict=False)
 
     response_id = data.get("id")
-    record = cost_log.log(
+    call_id = _log_billed(
         project=project, model=model, purpose=purpose, script="cached_call.openai",
         prompt_tokens=input_tokens, completion_tokens=output_tokens, cached_tokens=cached_tokens,
         cost_usd=cost_usd, packet_id=packet_id,
         metadata={**extra, "duration_s": round(duration_s, 2), "response_id": response_id},
     )
     return result, {
-        "cost": cost_usd, "model": model, "call_id": record.id, "duration_s": duration_s,
+        "cost": cost_usd, "model": model, "call_id": call_id, "duration_s": duration_s,
         "input_tokens": input_tokens, "output_tokens": output_tokens, "cached_tokens": cached_tokens,
         "response_id": response_id,
     }
@@ -455,14 +470,14 @@ def _gemini_generate(
     cost_usd = cost_for(model, input_tokens, output_tokens, cached_tokens, strict=False)
 
     response_id = data.get("responseId")
-    record = cost_log.log(
+    call_id = _log_billed(
         project=project, model=model, purpose=purpose, script="cached_call.gemini",
         prompt_tokens=input_tokens, completion_tokens=output_tokens, cached_tokens=cached_tokens,
         cost_usd=cost_usd, packet_id=packet_id,
         metadata={**extra, "duration_s": round(duration_s, 2), "response_id": response_id},
     )
     return result, {
-        "cost": cost_usd, "model": model, "call_id": record.id, "duration_s": duration_s,
+        "cost": cost_usd, "model": model, "call_id": call_id, "duration_s": duration_s,
         "input_tokens": input_tokens, "output_tokens": output_tokens, "cached_tokens": cached_tokens,
         "response_id": response_id,
     }
@@ -609,14 +624,14 @@ def cached_call(
             conn.close()
             result = json.loads(row["result_json"])
             stored_meta = json.loads(row["meta_json"])
-            record = cost_log.log(
+            hit_id = _log_billed(
                 project=project, model=model, purpose=purpose, script="cached_call",
                 cost_usd=0.0, cache_hit=True,
                 packet_id=transport_kwargs.get("packet_id"),
                 metadata={**hashes, "original_cost_usd": stored_meta.get("cost_usd", 0.0)},
             )
             return result, CallMeta(
-                call_id=record.id, cache_hit=True, cost_usd=0.0, model=model,
+                call_id=hit_id, cache_hit=True, cost_usd=0.0, model=model,
                 cache_key=key, prompt_sha256=prompt_sha, system_sha256=system_sha,
                 schema_sha256=schema_sha, request_sha256=request_sha, raw=stored_meta,
             )
@@ -638,22 +653,25 @@ def cached_call(
 
     # --- 3. Write: short, separate connection. ---
     if cache:
-        conn = _open(cache_db_path)
-        expires_at = (time.time() + ttl_days * 86400) if ttl_days else None
-        transport_name = transport if isinstance(transport, str) else getattr(transport, "__name__", "callable")
-        conn.execute(
-            "INSERT OR REPLACE INTO call_cache "
-            "(cache_key, project, purpose, model, transport, version, "
-            " result_json, meta_json, created_at, expires_at, hit_count, last_hit_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)",
-            (
-                key, project, purpose, resolved_model, transport_name, version,
-                json.dumps(result), json.dumps({"cost_usd": cost_usd, **raw_meta}),
-                time.time(), expires_at,
-            ),
-        )
-        conn.commit()
-        conn.close()
+        try:
+            conn = _open(cache_db_path)
+            expires_at = (time.time() + ttl_days * 86400) if ttl_days else None
+            transport_name = transport if isinstance(transport, str) else getattr(transport, "__name__", "callable")
+            conn.execute(
+                "INSERT OR REPLACE INTO call_cache "
+                "(cache_key, project, purpose, model, transport, version, "
+                " result_json, meta_json, created_at, expires_at, hit_count, last_hit_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)",
+                (
+                    key, project, purpose, resolved_model, transport_name, version,
+                    json.dumps(result), json.dumps({"cost_usd": cost_usd, **raw_meta}),
+                    time.time(), expires_at,
+                ),
+            )
+            conn.commit()
+            conn.close()
+        except Exception as failure:
+            log.warning("response cache write failed after a billed call (%s): %s", purpose, failure)
 
     return result, CallMeta(
         call_id=call_id, cache_hit=False, cost_usd=cost_usd, model=resolved_model,

@@ -281,3 +281,36 @@ class TestTransport:
         assert len(rows) == 1
         assert meta.call_id == rows[0]["id"]
         assert rows[0]["cost_usd"] == pytest.approx(0.001)
+
+
+class TestBilledCallSurvivesBookkeepingFailure:
+    def test_ledger_failure_returns_the_result_with_no_call_id(self, tmp_cost_log, cache_db, monkeypatch):
+        def broken(**_row):
+            raise RuntimeError("database is locked")
+
+        monkeypatch.setattr(tmp_cost_log, "log", broken)
+        result, meta = cached_call(
+            "p", project="t", purpose="guard", cache_db_path=cache_db,
+            transport=lambda prompt, **kw: ("paid answer", {"cost": 0.5}),
+        )
+        assert result == "paid answer"
+        assert meta.call_id is None
+        assert meta.cost_usd == 0.5
+
+    def test_cache_write_failure_returns_the_result(self, tmp_cost_log, cache_db, monkeypatch):
+        real_open = calls._open
+        opened = []
+
+        def flaky(path):
+            opened.append(path)
+            if len(opened) > 1:
+                raise RuntimeError("disk full")
+            return real_open(path)
+
+        monkeypatch.setattr(calls, "_open", flaky)
+        result, meta = cached_call(
+            "p", project="t", purpose="guard", cache_db_path=cache_db,
+            transport=lambda prompt, **kw: ("paid answer", {"cost": 0.5}),
+        )
+        assert result == "paid answer"
+        assert meta.cache_hit is False
