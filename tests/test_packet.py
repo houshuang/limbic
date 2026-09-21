@@ -347,3 +347,85 @@ class TestUnmatchedNames:
 
     def test_corpus_lowercase_words_needs_repetition(self):
         assert corpus_lowercase_words(["stoffet her"], minimum=3) == set()
+
+
+# ---------------------------------------------------------------------------
+# Quote anchoring
+# ---------------------------------------------------------------------------
+
+from limbic.cerebellum.packet import (  # noqa: E402
+    reanchor_quote, text_quote_anchor, unresolved_text_quote_anchor,
+)
+
+_PAGE = "Eleven skal  lese\nIbsen og Bjørnson.  Eleven skal lese høyt,\tog eleven skal lese Ibsen igjen."
+
+
+class TestTextQuoteAnchor:
+    def test_selector_fields(self):
+        anchor = text_quote_anchor(_PAGE, "lese   Ibsen og", "p12", context_chars=10)
+        page = "Eleven skal lese Ibsen og Bjørnson. Eleven skal lese høyt, og eleven skal lese Ibsen igjen."
+        assert anchor["type"] == "TextQuoteSelector"
+        assert anchor["exact"] == "lese Ibsen og"
+        assert page[anchor["start"]:anchor["end"]] == anchor["exact"]
+        assert anchor["prefix"] == "even skal "
+        assert anchor["suffix"] == " Bjørnson."
+        assert anchor["occurrence_index"] == 0
+        assert anchor["extraction_version_id"] == "sha256:" + anchor["page_text_sha256"]
+
+    def test_match_ignores_case_and_returns_the_page_spelling(self):
+        assert text_quote_anchor(_PAGE, "ELEVEN SKAL LESE høyt", "p12")["exact"] == "Eleven skal lese høyt"
+
+    def test_occurrence_index(self):
+        first = text_quote_anchor(_PAGE, "lese Ibsen", "p12")
+        second = text_quote_anchor(_PAGE, "lese Ibsen", "p12", occurrence_index=1)
+        assert second["start"] > first["start"]
+        assert second["selector_sha256"] != first["selector_sha256"]
+        assert second["span_sha256"] == first["span_sha256"]
+        with pytest.raises(ValueError, match="occurrence 2 not found"):
+            text_quote_anchor(_PAGE, "lese Ibsen", "p12", occurrence_index=2)
+
+    def test_missing_and_empty_quotes_raise(self):
+        with pytest.raises(ValueError, match="not found"):
+            text_quote_anchor(_PAGE, "lese Hamsun", "p12")
+        with pytest.raises(ValueError, match="empty quote"):
+            text_quote_anchor(_PAGE, "  ", "p12")
+
+    def test_selector_survives_an_edit_elsewhere_on_the_page(self):
+        before = text_quote_anchor(_PAGE, "lese høyt", "p12", context_chars=8)
+        after = text_quote_anchor("Rettet overskrift. " + _PAGE, "lese høyt", "p12", context_chars=8)
+        assert after["selector_sha256"] == before["selector_sha256"]
+        assert after["start"] != before["start"]
+        assert after["page_text_sha256"] != before["page_text_sha256"]
+
+    def test_hashes_match_the_reference_construction(self):
+        import hashlib
+        import json
+
+        anchor = text_quote_anchor(_PAGE, "lese høyt", "p12")
+        selector = {k: anchor[k] for k in ("type", "page_id", "exact", "prefix", "suffix", "occurrence_index")}
+        canonical = json.dumps(selector, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        assert anchor["selector_sha256"] == hashlib.sha256(canonical.encode()).hexdigest()
+        assert anchor["span_sha256"] == hashlib.sha256("lese høyt".encode()).hexdigest()
+
+    def test_unresolved_anchor(self):
+        anchor = unresolved_text_quote_anchor(_PAGE, "lese  Hamsun", "p12")
+        assert anchor["type"] == "UnresolvedTextQuoteSelector"
+        assert anchor["expected_exact"] == "lese Hamsun"
+        assert "start" not in anchor and "exact" not in anchor
+        assert anchor["page_text_sha256"] == text_quote_anchor(_PAGE, "lese", "p12")["page_text_sha256"]
+
+
+class TestReanchorQuote:
+    PAGES = {"p1": "Om Ibsen og hans tid.", "p2": "Bjørnson skrev Synnøve Solbakken.", "p3": "Mer om Ibsen."}
+
+    def test_moves_to_the_single_other_page(self):
+        page_id, anchor = reanchor_quote(self.PAGES, "Synnøve  Solbakken", cited="p1")
+        assert page_id == "p2" and anchor["page_id"] == "p2" and anchor["exact"] == "Synnøve Solbakken"
+
+    def test_ambiguous_absent_and_empty_return_none(self):
+        assert reanchor_quote(self.PAGES, "Ibsen", cited="p2") is None
+        assert reanchor_quote(self.PAGES, "Hamsun", cited="p1") is None
+        assert reanchor_quote(self.PAGES, "", cited="p1") is None
+
+    def test_the_cited_page_is_not_a_candidate(self):
+        assert reanchor_quote(self.PAGES, "Synnøve", cited="p2") is None

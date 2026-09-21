@@ -52,9 +52,12 @@ __all__ = [
     "lint_packet",
     "make_packet",
     "probe",
+    "reanchor_quote",
     "run_packets",
+    "text_quote_anchor",
     "union_passes",
     "unmatched_names",
+    "unresolved_text_quote_anchor",
     "validate_quotes",
 ]
 
@@ -566,6 +569,105 @@ def validate_quotes(
             continue
         valid.append(dict(item))
     return valid, problems
+
+
+def _normalize_text(value: str) -> str:
+    return _WHITESPACE.sub(" ", value).strip()
+
+
+def text_quote_anchor(
+    page_text: str,
+    exact: str,
+    page_id: str,
+    *,
+    occurrence_index: int = 0,
+    context_chars: int = 48,
+) -> dict[str, Any]:
+    """Anchor a quote to a page as a W3C-style TextQuoteSelector.
+
+    Where `validate_quotes` answers "is it there", this returns *where*: the
+    span as the page spells it, `prefix`/`suffix` context, which occurrence,
+    and hashes a later build can compare. Whitespace is collapsed and trimmed
+    on both sides and the match ignores case; nothing else is normalised.
+    `start`/`end` index the whitespace-collapsed page and are descriptive
+    only — they stay out of `selector_sha256`, so a correction elsewhere on
+    the page does not revoke a review of an unchanged span, while
+    `page_text_sha256` still records which extraction was read.
+
+    Raises `ValueError` when the quote is empty or that occurrence is absent.
+    """
+    normalized_page = _normalize_text(page_text)
+    normalized_exact = _normalize_text(exact)
+    if not normalized_exact:
+        raise ValueError(f"{page_id}: empty quote")
+    matches = list(re.finditer(re.escape(normalized_exact), normalized_page, re.IGNORECASE))
+    if occurrence_index < 0 or occurrence_index >= len(matches):
+        raise ValueError(
+            f"{page_id}: exact text occurrence {occurrence_index} not found: {normalized_exact!r}"
+        )
+    match = matches[occurrence_index]
+    selector = {
+        "type": "TextQuoteSelector",
+        "page_id": page_id,
+        "exact": match.group(0),
+        "prefix": normalized_page[max(0, match.start() - context_chars):match.start()],
+        "suffix": normalized_page[match.end():match.end() + context_chars],
+        "occurrence_index": occurrence_index,
+    }
+    page_sha = _sha(normalized_page)
+    return {
+        **selector,
+        "start": match.start(),
+        "end": match.end(),
+        "selector_sha256": _sha(_canonical(selector)),
+        "span_sha256": _sha(_normalize_text(match.group(0))),
+        "page_text_sha256": page_sha,
+        "extraction_version_id": f"sha256:{page_sha}",
+    }
+
+
+def unresolved_text_quote_anchor(page_text: str, expected_exact: str, page_id: str) -> dict[str, Any]:
+    """Describe a quote that no longer resolves, without pretending it matched."""
+    normalized_page = _normalize_text(page_text)
+    selector = {
+        "type": "UnresolvedTextQuoteSelector",
+        "page_id": page_id,
+        "expected_exact": _normalize_text(expected_exact),
+    }
+    page_sha = _sha(normalized_page)
+    return {
+        **selector,
+        "selector_sha256": _sha(_canonical(selector)),
+        "page_text_sha256": page_sha,
+        "extraction_version_id": f"sha256:{page_sha}",
+    }
+
+
+def reanchor_quote(
+    pages: Mapping[str, str],
+    exact: str,
+    *,
+    cited: str | None = None,
+    context_chars: int = 48,
+) -> tuple[str, dict[str, Any]] | None:
+    """Find the one page, other than `cited`, that carries this quote.
+
+    For a quote that failed to anchor where it was cited: on exactly one other
+    page it is a slot slip and `(page_id, anchor)` comes back; on two it is a
+    real ambiguity and on none it is unsupported, and both return None rather
+    than pick. Pass only the pages an item may legitimately cite.
+    """
+    if not _normalize_text(exact or ""):
+        return None
+    found: list[tuple[str, dict[str, Any]]] = []
+    for page_id, text in pages.items():
+        if page_id == cited:
+            continue
+        try:
+            found.append((page_id, text_quote_anchor(text, exact, page_id, context_chars=context_chars)))
+        except ValueError:
+            continue
+    return found[0] if len(found) == 1 else None
 
 
 def union_passes(
