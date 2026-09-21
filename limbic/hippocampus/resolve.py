@@ -225,14 +225,20 @@ def token_key(name: Any, lang: str = "nb") -> str:
     return " ".join(parts) if len(parts) >= 2 else ""
 
 
-def name_keys(name: Any, lang: str = "nb") -> list[str]:
-    """Every folded spelling this name should be findable under.
+def spellings_agree(query: str, indexed: str) -> bool:
+    """Whether a query key and an indexed key may meet.
 
-    Covers both diacritic spellings, "Last, First" inversion, a parenthetical
-    qualifier, an internal particle ("Ludwig van Beethoven" -> "ludwig
-    beethoven") and the genitive ("Ibsens" -> "ibsen"). Deduplicated, most
-    canonical first.
+    Two names are the same name when they agree under *one* spelling table.
+    Meeting across tables compares a transliterated name with a different,
+    diacritic-stripped one: "Bø" expands to "boe", which is also what "Bøe"
+    drops to. A key that both tables produce ("both") meets either.
     """
+    return query == indexed or "both" in (query, indexed)
+
+
+def key_spellings(name: Any, lang: str = "nb") -> dict[str, str]:
+    """`name_keys`, each with the table that produced it: "drop", "expand",
+    or "both" when the two tables agree on it. Most canonical first."""
     if not isinstance(name, str):
         name = str(name)
     surfaces = [name]
@@ -245,21 +251,38 @@ def name_keys(name: Any, lang: str = "nb") -> list[str]:
         if deeper:
             surfaces.append(deeper)
 
-    keys: list[str] = []
+    keys: dict[str, str] = {}
+
+    def add(key: str, spelling: str) -> None:
+        if key and keys.setdefault(key, spelling) != spelling:
+            keys[key] = "both"
+
     for surface in surfaces:
         for expand in (False, True):
             folded = fold(surface, lang, expand=expand)
             if not folded:
                 continue
-            keys.append(folded)
+            spelling = "expand" if expand else "drop"
+            add(folded, spelling)
             parts = folded.split()
             without_particles = [p for p in parts if p not in _PARTICLES]
             if without_particles and len(without_particles) != len(parts):
-                keys.append(" ".join(without_particles))
+                add(" ".join(without_particles), spelling)
             stemmed = [genitive_stem(p) or p for p in parts]
             if stemmed != parts:
-                keys.append(" ".join(stemmed))
-    return list(dict.fromkeys(k for k in keys if k))
+                add(" ".join(stemmed), spelling)
+    return keys
+
+
+def name_keys(name: Any, lang: str = "nb") -> list[str]:
+    """Every folded spelling this name should be findable under.
+
+    Covers both diacritic spellings, "Last, First" inversion, a parenthetical
+    qualifier, an internal particle ("Ludwig van Beethoven" -> "ludwig
+    beethoven") and the genitive ("Ibsens" -> "ibsen"). Deduplicated, most
+    canonical first.
+    """
+    return list(key_spellings(name, lang))
 
 
 def text_tokens(text: Any, lang: str = "nb", *, minimum: int = 3) -> set[str]:
@@ -321,7 +344,7 @@ CREATE TABLE IF NOT EXISTS resolve_meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS resolve_name (
     kind TEXT NOT NULL, entity_id TEXT NOT NULL, variant TEXT NOT NULL,
     raw TEXT NOT NULL, folded TEXT NOT NULL, token_key TEXT NOT NULL,
-    head TEXT NOT NULL, flen INTEGER NOT NULL
+    head TEXT NOT NULL, flen INTEGER NOT NULL, spelling TEXT NOT NULL DEFAULT 'both'
 );
 CREATE INDEX IF NOT EXISTS resolve_name_folded ON resolve_name (kind, folded);
 CREATE INDEX IF NOT EXISTS resolve_name_block ON resolve_name (kind, head, flen);
@@ -394,6 +417,14 @@ def _open(conn_or_path: str | Path | sqlite3.Connection) -> tuple[sqlite3.Connec
     return conn, owned
 
 
+def _ensure_spelling_column(conn: sqlite3.Connection) -> None:
+    """An index built before keys carried their spelling keeps working: its
+    rows read as "both", the old behaviour, until that kind is rebuilt."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(resolve_name)")}
+    if columns and "spelling" not in columns:
+        conn.execute("ALTER TABLE resolve_name ADD COLUMN spelling TEXT NOT NULL DEFAULT 'both'")
+
+
 def build_index(
     conn_or_path: str | Path | sqlite3.Connection,
     rows: Iterable[Mapping[str, Any]],
@@ -421,6 +452,7 @@ def build_index(
     """
     conn, _ = _open(conn_or_path)
     conn.executescript(_SCHEMA)
+    _ensure_spelling_column(conn)
     has_fts = True
     try:
         conn.execute(_FTS)
@@ -457,12 +489,12 @@ def build_index(
         seen_keys: set[str] = set()
         for variant, surface in surfaces:
             raw = surface if isinstance(surface, str) else str(surface)
-            for key in name_keys(raw, lang):
+            for key, spelling in key_spellings(raw, lang).items():
                 if key in seen_keys:
                     continue
                 seen_keys.add(key)
                 names.append((kind, entity_id, variant, raw, key,
-                              token_key(key, lang), key[:1], len(key)))
+                              token_key(key, lang), key[:1], len(key), spelling))
                 if has_fts:
                     fts_rows.append((key, kind, entity_id))
                 parts = {t for t in key.split() if len(t) >= _TOKEN_MIN}
@@ -471,8 +503,9 @@ def build_index(
                 variant_no += 1
 
     conn.executemany(
-        "INSERT INTO resolve_name (kind, entity_id, variant, raw, folded, token_key, head, flen)"
-        " VALUES (?,?,?,?,?,?,?,?)", names)
+        "INSERT INTO resolve_name"
+        " (kind, entity_id, variant, raw, folded, token_key, head, flen, spelling)"
+        " VALUES (?,?,?,?,?,?,?,?,?)", names)
     conn.executemany(
         "INSERT INTO resolve_token (kind, token, entity_id, variant_no, n_tokens)"
         " VALUES (?,?,?,?,?)", token_rows)
@@ -489,6 +522,7 @@ def build_index(
 def open_index(path: str | Path, *, lang: str = "nb") -> Index:
     """Open an index built earlier. `build_index` returns one directly."""
     conn, _ = _open(path)
+    _ensure_spelling_column(conn)
     has_fts = bool(conn.execute(
         "SELECT 1 FROM sqlite_master WHERE name='resolve_fts'").fetchone())
     return Index(conn=conn, lang=lang, has_fts=has_fts)
@@ -517,12 +551,15 @@ def _hits(index: Index, kind: str, query: str, *, fuzzy: bool) -> dict[str, tupl
         offer(row["entity_id"], "exact", 1.0, row["raw"])
 
     # 2. Folded — either diacritic spelling, either name orientation.
-    keys = name_keys(raw, lang)
+    spelled = key_spellings(raw, lang)
+    keys = list(spelled)
     if keys:
         marks = ",".join("?" * len(keys))
         for row in index.conn.execute(
-                f"SELECT entity_id, raw, variant FROM resolve_name"
+                f"SELECT entity_id, raw, variant, folded, spelling FROM resolve_name"
                 f" WHERE kind=? AND folded IN ({marks})", (kind, *keys)):
+            if not spellings_agree(spelled[row["folded"]], row["spelling"]):
+                continue
             offer(row["entity_id"], "folded",
                   0.97 if row["variant"] == "name" else 0.93, row["raw"])
 

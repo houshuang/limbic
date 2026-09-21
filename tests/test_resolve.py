@@ -297,3 +297,45 @@ def test_hippocampus_lazy_exports_are_complete():
     import limbic.hippocampus as hippocampus
     for name in hippocampus.__all__:
         assert getattr(hippocampus, name) is not None
+
+
+class TestSpellingTables:
+    """A query key and an indexed key must come from the same spelling table."""
+
+    ROWS = [{"id": "1", "name": "Sigve Bøe"}, {"id": "2", "name": "Bjørnstjerne Bjørnson"},
+            {"id": "3", "name": "Tor Åge Bringsværd"}]
+
+    @pytest.fixture()
+    def people(self):
+        return build_index(":memory:", self.ROWS, "person")
+
+    def test_expanded_query_does_not_meet_a_dropped_name(self, people):
+        """"Bø" expands to "boe", which is what "Bøe" drops to: different names."""
+        hits = candidates(people, "Sigve Bø", kind="person")
+        assert all(c.match_type != "folded" for c in hits)
+        assert all("confident" not in c.notes for c in hits)
+
+    def test_dropped_query_does_not_meet_an_expanded_name(self):
+        idx = build_index(":memory:", [{"id": "1", "name": "Sigve Bø"}], "person")
+        assert all(c.match_type != "folded" for c in candidates(idx, "Sigve Bøe", kind="person"))
+
+    @pytest.mark.parametrize("query,expected", [
+        ("Sigve Boe", "1"), ("Bjoernstjerne Bjoernson", "2"), ("Bjornstjerne Bjornson", "2"),
+        ("Bjørnson, Bjørnstjerne", "2"), ("Tor Aage Bringsvaerd", "3"), ("Tor Age Bringsvard", "3"),
+    ])
+    def test_either_plain_spelling_still_matches(self, people, query, expected):
+        top = candidates(people, query, kind="person")[0]
+        assert (top.id, top.match_type) == (expected, "folded")
+
+    def test_transliterated_name_is_found_in_a_passage(self, people):
+        assert [c.id for c in text_candidates(people, "Av Tor Aage BRINGSVÆRD.", kind="person")] == ["3"]
+
+    def test_index_built_before_spellings_still_opens(self, tmp_path):
+        import sqlite3
+        path = tmp_path / "old.sqlite"
+        build_index(path, self.ROWS, "person").close()
+        conn = sqlite3.connect(path)
+        conn.execute("ALTER TABLE resolve_name DROP COLUMN spelling")
+        conn.commit(); conn.close()
+        with open_index(path) as idx:
+            assert candidates(idx, "Sigve Boe", kind="person")[0].id == "1"
