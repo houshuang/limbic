@@ -25,14 +25,14 @@
       "precedent_search": {
         "queries": ["Kulturperler mobile Apple TV recent improvement mockup crash"],
         "inspected": [
-          "/Users/stian/src/nrk/kulturperler/KulturperlerTV/Kulturbase/Review/MobileMockups-2026-09-06/index.html",
-          "/Users/stian/src/nrk/kulturperler/KulturperlerTV/Kulturbase/Review/PlatformReview/REVIEW.md"
+          "archive/review/MobileMockups-2026-09-06/index.html",
+          "archive/review/PlatformReview/REVIEW.md"
         ],
         "result": "found"
       },
       "precedents": [
         {
-          "source": "/Users/stian/src/nrk/kulturperler/KulturperlerTV/Kulturbase/Review/MobileMockups-2026-09-06/index.html",
+          "source": "archive/review/MobileMockups-2026-09-06/index.html",
           "lesson": "A concrete artifact followed by the user's reaction corrected direction more effectively than autonomous breadth."
         }
       ],
@@ -77,13 +77,13 @@
       "precedent_search": {
         "queries": ["Otak overnight Hirsch handoff next decisive evidence ten-minute browsing"],
         "inspected": [
-          "/Users/stian/src/otak/.codex/worktrees/hirsch-history-20260912/handoff/otak-overnight-2026-09-13/AGENT-START-HERE.md"
+          "archive/handoff/otak-overnight-2026-09-13/AGENT-START-HERE.md"
         ],
         "result": "found"
       },
       "precedents": [
         {
-          "source": "/Users/stian/src/otak/.codex/worktrees/hirsch-history-20260912/handoff/otak-overnight-2026-09-13/AGENT-START-HERE.md",
+          "source": "archive/handoff/otak-overnight-2026-09-13/AGENT-START-HERE.md",
           "lesson": "The decisive evidence was the user's short browsing session, so that test belongs before broad account production."
         }
       ],
@@ -128,13 +128,13 @@
       "precedent_search": {
         "queries": ["Codex Claude Astra Fable routing quota local runs"],
         "inspected": [
-          "/Users/stian/src/research/.codex/worktrees/codex-claude-workflow-research/codex-claude-workflow-research-2026-09/README.md"
+          "archive/workflow-research/codex-claude-workflow-research-2026-09/README.md"
         ],
         "result": "found"
       },
       "precedents": [
         {
-          "source": "/Users/stian/src/research/.codex/worktrees/codex-claude-workflow-research/codex-claude-workflow-research-2026-09/README.md",
+          "source": "archive/workflow-research/codex-claude-workflow-research-2026-09/README.md",
           "lesson": "Retrieve the nearest local analogs first and lead with the smallest actionable recommendation."
         }
       ],

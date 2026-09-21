@@ -18,7 +18,7 @@ agent can be blocked. Construct with a descriptive string including contact:
 
     client = WikidataClient(
         cache_db_path="wikidata_cache.db",
-        user_agent="Petrarca/0.1 (mailto:stian@example.com) limbic/0.1",
+        user_agent="YourApp/0.1 (mailto:you@example.com) limbic/0.1",
     )
 
 Hallucination defense: this client never *generates* QIDs. It returns only

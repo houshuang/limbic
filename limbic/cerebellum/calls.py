@@ -220,9 +220,9 @@ def _log_call(
 # Built-in HTTP transports: OpenAI Responses API, Gemini REST.
 #
 # Both are stdlib-`urllib` only (no `openai`/`google-genai` SDK dependency).
-# `google-genai` is deliberately avoided here: it crashes on import on
-# arm64-macOS Python builds in at least one project's environment (see
-# `reference_polaris_api_keys`), and a REST call is all `cached_call` needs.
+# `google-genai` is deliberately avoided here: it crashes on import on the
+# arm64-macOS Python build we hit this on, and a REST call is all
+# `cached_call` needs.
 # Both self-log to `cost_log` (matching `claude_cli.generate`'s convention)
 # and return `call_id` in their metadata so `cached_call` doesn't log a
 # second row for the same call — see `_log_call`. This matters because these
