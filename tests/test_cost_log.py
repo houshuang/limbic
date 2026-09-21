@@ -203,3 +203,38 @@ class TestMultiGroupSummary:
         cl = CostLog(db_path=tmp_path / "costs.db")
         with pytest.raises(ValueError, match="at least one column"):
             cl.multi_group_summary(by=[])
+
+
+# ---------------------------------------------------------------------------
+# Backdated rows
+# ---------------------------------------------------------------------------
+
+class TestLogTimestamp:
+    def test_default_is_now(self, tmp_path):
+        from datetime import datetime, timezone
+
+        cl = CostLog(db_path=tmp_path / "c.db")
+        before = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        record = cl.log(project="p", model="m", cost_usd=0.0)
+        after = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        assert before <= record.ts <= after
+
+    def test_backfilled_row_keeps_its_date(self, tmp_path):
+        cl = CostLog(db_path=tmp_path / "c.db")
+        record = cl.log(project="skard", model="m", cost_usd=0.5, purpose="backfill",
+                        ts="2026-09-12T08:15:30Z")
+        assert record.ts == "2026-09-12T08:15:30.000000Z"
+        stored = cl.query(project="skard")[0]
+        assert stored["ts"] == "2026-09-12T08:15:30.000000Z"
+        assert cl.query(since="2026-09-13") == []
+
+    def test_offsets_and_naive_datetimes_are_stored_as_utc(self, tmp_path):
+        from datetime import datetime, timedelta, timezone
+
+        cl = CostLog(db_path=tmp_path / "c.db")
+        oslo = datetime(2026, 9, 12, 10, 15, 30, tzinfo=timezone(timedelta(hours=2)))
+        assert cl.log(project="p", model="m", cost_usd=0.0, ts=oslo).ts == "2026-09-12T08:15:30.000000Z"
+        assert cl.log(project="p", model="m", cost_usd=0.0,
+                      ts=datetime(2026, 9, 12, 8, 15, 30)).ts == "2026-09-12T08:15:30.000000Z"
+        assert cl.log(project="p", model="m", cost_usd=0.0,
+                      ts="2026-09-12T10:15:30+02:00").ts == "2026-09-12T08:15:30.000000Z"

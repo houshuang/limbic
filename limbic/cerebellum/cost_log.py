@@ -157,6 +157,16 @@ _FALLBACK_PRICES: dict[str, tuple[float, float]] = {  # (input/M, output/M)
 }
 
 
+def _format_ts(ts: str | datetime | None) -> str:
+    if ts is None:
+        moment = datetime.now(timezone.utc)
+    else:
+        if isinstance(ts, str):
+            ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        moment = ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts.astimezone(timezone.utc)
+    return moment.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
 def _fallback_cost(model: str, prompt_tokens: int,
                    completion_tokens: int) -> float | None:
     """Compute cost from built-in price table. Ignores any provider/ prefix."""
@@ -288,8 +298,15 @@ class CostLog:
             script: str = "", purpose: str = "",
             metadata: dict[str, Any] | None = None,
             cache_hit: bool = False, outcome: str | None = None,
-            packet_id: str | None = None) -> CostRecord:
+            packet_id: str | None = None,
+            ts: str | datetime | None = None) -> CostRecord:
         """Log an LLM call.  If cost_usd is None, computes it via litellm.
+
+        `ts` dates the row for a call that happened earlier (backfilling a
+        project's own ledger into this one); omitted, the row is dated now.
+        A datetime or an ISO-8601 string is accepted, a naive one is read as
+        UTC, and either is stored in the ledger's UTC format so `since`
+        filters and ordering keep working.
 
         `cache_hit`, `outcome`, and `packet_id` are optional ledger columns:
         `cache_hit` marks a `cached_call` response-cache hit (cost_usd should
@@ -305,7 +322,7 @@ class CostLog:
 
         record = CostRecord(
             id=uuid.uuid4().hex,
-            ts=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+            ts=_format_ts(ts),
             project=project,
             host=host or _detect_host(),
             model=model,
