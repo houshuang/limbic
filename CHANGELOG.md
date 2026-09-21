@@ -4,6 +4,80 @@ All notable changes to the limbic monorepo (formerly amygdala) are documented he
 
 ---
 
+## 2026-09-21 -- The library meets its first consumers
+
+On 20 Sep no consumer had migrated to the functions lifted the day before. That
+turned out to be a finding rather than a to-do: skard rejected three of three
+candidate migrations because the extracted functions did not fit the code they
+were extracted from. The transport rebuilt the request body, so stored paid
+responses would no longer have been addressable; `fold` mapped æ→a where skard
+maps æ→ae (505 of 3,908 strings differ); `validate_quotes` is a substring check
+where skard stores anchors. Everything below closed one of those gaps or one
+found by Kulturbase's `kb_resolve`. Both now import limbic: skard for every
+provider call (request bytes identical on 850 of 850 stored passes), Kulturbase
+for its folding primitives (gold-set rows identical).
+
+### Added
+
+- **`cached_call(request=, cache_key=)`.** A fully built provider body is posted
+  as its exact bytes through the openai/gemini transports, the response cache
+  is keyed on those bytes (or on the caller's own key), the raw response comes
+  back, and the ledger row is still written — `outcome=error` on a failed
+  request. A consumer whose paid artefacts are addressed by a request hash can
+  adopt the ledger and transports without invalidating what it has bought.
+- **`cost_for` and `cached_input_price_for`.** Cached input tokens are billed at
+  the provider's cached rate (OpenAI and Gemini list prices read 2026-09-21;
+  Anthropic left out, since its cache has a write surcharge one token count
+  cannot express). `compute_cost` and both HTTP transports use them; `price_for`
+  keeps its two-tuple and strict semantics. Rows already in the ledger are not
+  repriced.
+- **`CostLog.log(ts=)`,** so a backfilled call keeps its own date.
+- **`fold(profile="ascii")`.** `[0-9a-z ]` keys, `ae` for the ligature,
+  underscore as a token break — identical to skard's fold on 74,707 real
+  strings. The default names profile is unchanged.
+- **`packet.text_quote_anchor` and `reanchor_quote`.** A TextQuoteSelector-style
+  anchor (exact, prefix, suffix, occurrence, offsets, selector/span/page
+  hashes) beside `validate_quotes`, which is unchanged. An empty quote is an
+  unresolved anchor, not a match at offset 0 — three skard items that had
+  validated that way are now held.
+- `hippocampus.resolve.invert_name` and `strip_parenthetical` are public, so a
+  consumer keeping its own index can share the name surfaces.
+
+### Changed
+
+- **`hippocampus.resolve` and `limbic.cerebellum` import with the standard
+  library only.** `connect` moved to `limbic._sqlite` (re-exported from
+  `amygdala.index` unchanged), the hippocampus package resolves its exports on
+  first access, and `cerebellum.calls` no longer reaches `connect` through
+  `limbic.amygdala` — that one import loaded the embedding stack and numpy into
+  every packet runner (0.13–0.33 s against 0.03 s, and an ImportError in an
+  interpreter without them). Both are held by subprocess tests.
+
+### Fixed
+
+- **A folded key only meets a key from the same spelling table.** "Bø" expands
+  to "boe", which is also what the different name "Bøe" drops to, so the folded
+  layer linked them at 0.97. Each indexed key records the table that produced
+  it (drop, expand, or both when they agree). An index built before the column
+  existed reads as "both" until its kind is rebuilt. The token layers
+  (`token_overlap`, `text_candidates`) still compare tokens across tables; that
+  needs spelling-tagged tokens and is open.
+- **A bookkeeping failure never loses a billed response.** Once the provider's
+  response is in hand it has been paid for: the ledger write in both
+  transports, in `_log_call`, on a cache hit, and the response-cache write now
+  warn instead of raising. `CallMeta.call_id` is `None` when the row could not
+  be written; the provider response id in the metadata is enough to backfill
+  it. Found by skard's adoption, whose runner tests exactly this invariant.
+- `gemini-2.5-flash-lite` fallback price corrected from 0.15 / 0.60 to the
+  listed 0.10 / 0.40 per 1M tokens (pricing page read 2026-09-21).
+
+### Still missing for consumers
+
+A public usage parser for a raw Responses payload (skard keeps its own
+`usage_of`), and post-call fields on a ledger row.
+
+---
+
 ## 2026-09-20 -- Packets, entity resolution, and the write boundary
 
 Wave 2 of the `llm-pipeline-audit` response. The audit found limbic is adopted
