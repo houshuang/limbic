@@ -2,7 +2,6 @@
 """Launch the knowledge probe web UI for a given graph.
 
 Usage:
-    python3 experiments/probe_ui.py loro-mirror
     python3 experiments/probe_ui.py hamarquizen
     python3 experiments/probe_ui.py path/to/graph.json
 """
@@ -18,8 +17,6 @@ GRAPHS_DIR = Path(__file__).parent / "graphs"
 TEMPLATE = Path("/tmp/knowledge-probe.html")
 
 ALIASES = {
-    "loro-mirror": "loro_mirror.json",
-    "loro_mirror": "loro_mirror.json",
     "hamarquizen": "hamarquizen.json",
 }
 

@@ -31,7 +31,9 @@ if os.path.exists(_env_path):
     if "GEMINI_API_KEY" in os.environ and "GEMINI_KEY" not in os.environ:
         os.environ["GEMINI_KEY"] = os.environ["GEMINI_API_KEY"]
 
-sys.path.insert(0, "/Users/stian/tana/claude-tool/claude-chat-search/src")
+_chat_search_src = os.environ.get("CHAT_SEARCH_SRC")
+if _chat_search_src:
+    sys.path.insert(0, _chat_search_src)
 
 from claude_chat_search.db import get_connection, get_chunks_by_ids, fts_search
 from claude_chat_search.embedder import embed_query, _get_model
@@ -276,7 +278,7 @@ TEST_QUERIES = [
     "how the cost tracking system works",
     "designing the weekly report feature",
     "migrating from one database schema to another",
-    "when we discussed Tana integration",
+    "when we discussed the calendar integration",
     "fixing the FTS5 query sanitization bug",
     "how subagent conversations are stored",
     "conversation about whitening embeddings",

@@ -6,7 +6,7 @@ or structured content. Uses amygdala.llm for LLM calls.
 Usage:
     from amygdala.knowledge_map_gen import graph_from_description, graph_from_outline
     graph = await graph_from_description("Conflict-free replicated data types")
-    graph = await graph_from_outline(sections, domain="Loro Mirror")
+    graph = await graph_from_outline(sections, domain="Sourdough Baking")
 """
 
 from __future__ import annotations
