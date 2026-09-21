@@ -11,7 +11,8 @@ same model, same work. Your job is the codebook, the packet boundaries, the
 adjudication of holds and the sampled QA. The coding itself is an API call.
 
 Everything here is `limbic.cerebellum.packet` and `limbic.hippocampus.resolve`;
-read `docs/packet.md` and `docs/resolve.md` before writing a runner.
+read `docs/packet.md` and `docs/resolve.md` before writing a runner, and
+`docs/refuse.md` + `docs/audit.md` before writing an apply.
 
 ## Order of work — do not reorder
 
@@ -26,7 +27,7 @@ read `docs/packet.md` and `docs/resolve.md` before writing a runner.
    a stream that produced 0 writes because nobody did this. Low yield means a
    deterministic join, not a better prompt.
 3. **Then** write the runner: `make_packet` → `lint_packet` → `run_packets`.
-4. Validate, union the passes, propose. Apply through
+4. Validate, union the passes, propose. Run the QA loop below. Apply through
    `hippocampus.apply.apply_proposal`, never by writing the record yourself.
 
 ## Packet rules
@@ -80,6 +81,41 @@ pass knows the unknown ones, and neither is a superset.
   the common-noun filter: a word the corpus writes lower-case somewhere
   ("Dessuten", "Stoffet") is a common noun; "Hårfagre" never appears that way.
 
+## QA loop — anything that can be a guard is a guard
+
+A rule you wrote into the prompt is not enforced by having been written there.
+**Any instruction telling the model not to do X is also a check for X you have
+not written yet** — "don't invent a year", "don't describe your own citation",
+"don't answer with the item number" were all in one prompt, and all three
+happened. Every item below is a call, not a habit; the skill only says when.
+
+**On every output that is prose** (a rendering, a definition, a summary — any
+pass where there is no schema to fail):
+
+- `packet.slot_echo_refusal(text, slot_ids, source=…)` — the output is not a
+  sentence at all. Ten records reached a published graph defined as `i01`.
+- `packet.meta_leak_refusals(text, phrases=…)` — it describes your evidence
+  instead of the subject. Curate `phrases` from what your audit found; the
+  shipped default is English and deliberately small.
+- `packet.rendering_fidelity_refusals(source, rendering, exonyms=…, fold=…)` —
+  it added a year or a name the source does not contain.
+
+**Before any write, in the dry run and the real run, from the same line:**
+
+- `refuse.schema_refusals(records, schema, only=…)`, with the semantic guards
+  (`temporal_plausibility_refusals`, `dates_disagree`, the prose refusals
+  above) passed as `extra_checks`. `only` filters records, never runs — a
+  check that runs on `--execute` only is how a dry run reports a clean apply.
+- `refuse.expect(changed=N)` around the decision loop; write after the block.
+  Decide inside, commit outside, and a miscount raises before the write.
+
+**Any batch that decided something about the world** — as opposed to rendering
+or wording it — gets **one independent audit pass**, and its output can only
+move a decision to `hold`. Brief it per `docs/blind-audit.md` (different model
+family, blind, full set when cheap, `right`/`wrong`/`cannot_tell`), fold it in
+with `hippocampus.audit.apply_audit` **after reconciliation**. An auditor that
+may promote is a second proposer: you only hear from it when it agrees.
+
 ## Report what is NOT known
 
 Every batch ends with a coverage block that states the denominator, the held
@@ -95,10 +131,12 @@ A coverage number without a residual is a completeness claim you did not check.
 - **Disagreement holds, it never tie-breaks.** `replicates=2, agree=2`: three
   reads of one input agreed only 62.8% of the time, but exact agreement between
   two lifted precision 0.71 → 0.97. A confidence score of 0.88 means nothing.
-- **Protect paid artefacts.** Before replanning, check whether every packet of
-  the plan already has a cached response, and require an explicit
-  `--discard-paid` flag to throw one away. Store the provider `response_id`
-  (retained 30 days) so a locally lost result is refetched, not re-bought.
+- **Protect paid artefacts.** Still prose, and marked as such: before
+  replanning, check whether every packet of the plan already has a cached
+  response, and require an explicit `--discard-paid` flag to throw one away.
+  Store the provider `response_id` (retained 30 days) so a locally lost result
+  is refetched, not re-bought. Design for the missing guard:
+  `limbic/docs/proposed-paid-artefact-registry.md`.
 - **Every call is ledgered**, failures included, with `purpose`, `packet_id`
   and an `outcome`. Without `outcome` you can compute cost per call and never
   cost per useful change: `report --by project,purpose,outcome`.
