@@ -140,12 +140,13 @@ def apply_proposal(
             into a typed identifier field at confidence 0.88 with five sources
             is a real incident, not a hypothetical.
         validators: `(field, value) -> message | None`. A message refuses.
-        writer: called with the whole updated record instead of writing a file.
+        writer: called with the whole updated record instead of writing a file
+            or updating the mapping in place; the caller persists what it gets.
         receipt: path to append one JSON line per attempt, applied or not.
 
     Returns:
-        A receipt dict: `applied`, `reason`, `fields`, `sha256_before`,
-        `sha256_before_after` and the timestamp. The receipt is returned even
+        A receipt dict: `applied`, `reason`, `target`, `fields`,
+        `sha256_before`, `sha256_after` and `ts`. The receipt is returned even
         when refused, and written to `receipt` either way — a refusal you
         cannot count is a refusal you will argue about later.
     """

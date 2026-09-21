@@ -1,8 +1,9 @@
 # `limbic.hippocampus.apply` — the model proposes, code writes
 
 One function at the write boundary. It refuses on a field outside the
-whitelist, an on-disk value that is not what the proposer saw, or any validator
-that objects. It writes atomically and emits its own receipt.
+whitelist, a changed field with no entry in the preimage, an on-disk value that
+is not what the proposer saw, an empty set of changes, or any validator that
+objects. It writes atomically and emits its own receipt.
 
 The 20 Sep 2026 governance review traced every mechanism one project built
 against every incident it had and found a single clean rule: **mechanisms that
@@ -31,8 +32,20 @@ if not receipt["applied"]:
     print(receipt["reason"])                    # refused, and the record is untouched
 ```
 
-Targets can also be a mutable mapping (a DB row you loaded yourself) with
-`writer=` to persist it. YAML files round-trip when `pyyaml` is installed.
+Targets can also be a mutable mapping — a DB row you loaded yourself. YAML files
+round-trip when `pyyaml` is installed.
+
+Three destinations, and exactly one of them runs:
+
+| | what happens on success |
+|---|---|
+| `writer=fn` | `fn(merged_dict)` is called. **Your mapping is not touched** — the merged record only reaches you through `fn`. |
+| a path, no `writer` | atomic write through a temp file in the same directory |
+| a mapping, no `writer` | the mapping is updated in place |
+
+The first row is the one that surprises people: passing both a mapping and a
+`writer` does not also update the mapping, so a caller that reads the row back
+afterwards sees the old values. Persist what `writer` receives.
 
 ## `MISSING` is not `None`
 
@@ -66,10 +79,13 @@ also why "sealed mutation record" stops being a separate 191-line script.
 
 | Validator | Refuses |
 |---|---|
-| `enum_member(allowed, fields=None)` | a value outside a controlled vocabulary |
-| `regex(pattern, fields=None)` | a value that does not *fully* match |
-| `wikidata_exists(client=None)` | a malformed or deleted QID |
-| `wikidata_type_is(expected, client=None)` | a QID that exists but is the wrong kind of thing |
+| `enum_member(allowed, *, fields=None)` | a value outside a controlled vocabulary |
+| `regex(pattern, *, fields=None)` | a value that does not *fully* match |
+| `wikidata_exists(*, client=None, fields=None)` | a malformed or deleted QID |
+| `wikidata_type_is(expected, *, client=None, fields=None, property_id="P31")` | a QID that exists but is the wrong kind of thing |
+
+Every argument after the first is keyword-only. `fields=` restricts a validator
+to named fields; left `None` it sees every field in the proposal.
 
 Signature: `(field, value) -> message | None`. Any message refuses. `None`
 values pass every built-in validator, because null is a legal answer and

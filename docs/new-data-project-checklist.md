@@ -10,7 +10,8 @@ around $2.43 of model calls that produced **0 writes**. Every item below must
 cost less than the failure it prevents, *at your project's size*. That is what
 the "when NOT to adopt" line on each tier is for.
 
-Derived from the 20 Sep 2026 `llm-pipeline-audit` (`lanes/governance.md` §3–5),
+Derived from the 20 Sep 2026 `llm-pipeline-audit` (its `lanes/governance.md`
+§3–5 — an internal document, not part of this repo),
 which traced ten incidents across a year to the mechanism that did or did not
 prevent a recurrence. The one general finding: **a mechanism that refuses a
 specific bad state worked; a mechanism that describes a state never refused
@@ -42,7 +43,7 @@ can wait for the first measured suspicion. 0.1–0.5 always pay.
 
 | # | Rule | Failure it prevents | Enforcement |
 |---|---|---|---|
-| 1.1 | **Yield probe on 50 items before building any machinery** | 12.3k lines and 26 prompt versions → 0 writes; next door, 2,336 of 2,342 proposals came from a plain join while 384 model calls produced 6 | **CODE**: `cerebellum.packet.probe(n=50, min_yield=…)`, which raises rather than reports |
+| 1.1 | **Yield probe on 50 packets before building any machinery** | 12.3k lines and 26 prompt versions → 0 writes; next door, 2,336 of 2,342 proposals came from a plain join while 384 model calls produced 6 | **CODE**: `cerebellum.packet.probe(n=50, min_yield=…, execute=True)`, which raises rather than reports |
 | 1.2 | Frozen, hashed packets (10–40K) given to **calls**, not agents | One traced packet: 3.8M tokens as an agent vs ≈40K stateless — 95× | **CODE**: `cerebellum.packet.make_packet` + `run_packets`. **PROSE**: never spawn agents as coders |
 | 1.3 | Preimage-checked proposals; missing key ≠ explicit null | The 28 Aug partial-apply cluster, preimages unrestorable | **CODE**: `apply_proposal(preimage={"f": MISSING})` |
 | 1.4 | Replicate-and-agree instead of a confidence score | Three reads of one input agreed only 62.8% of the time; two blind reads lifted precision 0.71 → 0.97 | **CODE**: `run_packets(replicates=2, agree=2)` — disagreement **holds**, it never tie-breaks |

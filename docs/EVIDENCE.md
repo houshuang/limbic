@@ -28,7 +28,12 @@ Every significant design choice in limbic.amygdala was tested in controlled expe
 | 22 | Document-level similarity? | Weighted 0.5×summary + 0.5×claims: **94% acc, rho=0.818**. Beats single-field (89%), concatenation (89%), LLM judge (78%), topic Jaccard (50%). AUROC=0.930 on 300 pairs. | 18 human + 300 LLM + 50 synthetic pairs |
 | 23 | Knowledge map: best propagator × strategy? | **Bayesian + EIG** best overall (avg 7.2 Q→80%). Bayesian 42% faster than heuristic on chains. Post-hoc foil calibration doesn't help; Bayesian constraint propagation is the primary overclaiming defense. Batch probing maintains efficiency (5 Qs in 1 round = same as sequential). | 5 topologies × 50 trials |
 
-Experiment code is in the `experiments/` directory if you want to reproduce or extend them.
+Experiment code is in the `experiments/` directory, mostly as `expNN_*.py`.
+Two exceptions: row 22 is `document_similarity_design.md` plus
+`calibration_document_similarity.md`, and row 23 is `exp_knowledge_map_matrix.py`
+with `knowledge_map_simulation.py`. Most of these scripts need a private corpus
+(`$AMYGDALA_EVAL_DB`, a local chat index) that does not ship with the repo, so
+they document how a number was reached rather than being runnable as-is.
 
 ## Findings from production corpora
 
@@ -40,9 +45,10 @@ results kept deliberately** — they are the expensive things not to build.
 A pooled-judgment eval (38 queries, 877 graded judgments, scaled 789 → 4,668
 documents) compared three increasingly expensive LLM rerankers against the free
 cross-encoder: snippet reranking, a wide hybrid+FTS union, and reading the *full
-text* of the top 25. All three plateaued at ~0.54 nDCG@10 — tied with
-`rerank()` — while `hybrid_rerank` reached the best cheap recall at 0.606.
-Reading full documents instead of snippets bought nothing.
+text* of the top 25. All three plateaued at ~0.54 nDCG@10 — tied with the free
+cross-encoder, `rerank()` — while the hybrid+rerank arm of the eval reached the
+best cheap recall at 0.606. Reading full documents instead of snippets bought
+nothing.
 
 The reason generalises: **the bottleneck is first-stage recall, not ranking.** No
 reranker can reorder a document that is not in its candidate list. Spend the
@@ -51,8 +57,8 @@ effort on retrieval, not on re-reading what retrieval already found.
 **Index retrieval is scale-invariant; agentic file-reading is not.** In the same
 eval, an agent with grep over the raw files led on quality (0.741 nDCG vs 0.521
 for hybrid) but at roughly 1000× the cost and latency — and its advantage eroded
-with corpus size (recall 0.77 → 0.66 at 6× the documents) while
-`hybrid_rerank` stayed flat (0.532 → 0.534). Agentic retrieval is for deep,
+with corpus size (recall 0.77 → 0.66 at 6× the documents) while hybrid+rerank
+stayed flat (0.532 → 0.534). Agentic retrieval is for deep,
 small-set, high-value tasks; the index is for everything else.
 
 **A better first-stage encoder is the lever that does work.** Swapping the

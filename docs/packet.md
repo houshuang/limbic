@@ -18,7 +18,7 @@ from limbic.cerebellum.packet import lint_packet, make_packet, probe, run_packet
 
 packets = [make_packet(PREFIX, body, SCHEMA, prompt_version="v1") for body in bodies]
 print(lint_packet(packets))                                     # caching and schema warnings
-report = probe(packets, n=50, yield_fn=lambda r: len(r["items"]),  # 50 items BEFORE machinery
+report = probe(packets, n=50, yield_fn=lambda r: len(r["items"]),  # 50 packets BEFORE machinery
                project="skard", purpose="code_spans", transport="openai",
                execute=True, min_yield=0.2)                     # raises LowYield if it is not worth it
 result = run_packets(packets, project="skard", purpose="code_spans", transport="openai",
@@ -26,8 +26,9 @@ result = run_packets(packets, project="skard", purpose="code_spans", transport="
                      split=halve, execute=True)
 ```
 
-`execute=False` is the default everywhere. A dry run prices the batch and
+`execute=False` is the default on `run_packets`. A dry run prices the batch and
 returns what it *would* send — the cheapest thing you can do before committing.
+(`probe` has no `execute` of its own; it passes yours through. See below.)
 
 ## The order that matters
 
@@ -35,9 +36,15 @@ returns what it *would* send — the cheapest thing you can do before committing
    sealed machinery, 26 prompt versions and 13 per-packet test files around a
    model stream that produced **0 writes** — while the campaign next to it got
    2,336 of 2,342 proposals from a plain deterministic join (384 model calls
-   produced 6). Nobody had run a 50-item yield probe. `yield_fn` counts
-   *actionable* outputs, not items returned; `min_yield` makes the probe refuse
-   rather than report.
+   produced 6). Nobody had run a yield probe. `yield_fn` counts *actionable*
+   outputs, not items returned; `min_yield` makes the probe refuse rather than
+   report.
+
+   `n` is a number of **packets**, stratified across the batch — not a number
+   of items. And a probe has to actually spend: it forwards `**run_kwargs` to
+   `run_packets`, where `execute=False` is the default, so a dry-run probe
+   returns zero results, computes a 0.00% yield, and raises `LowYield` every
+   time. Pass `execute=True` to a probe you mean.
 2. **`lint_packet` before you spend.** Its warnings are each a bill someone
    already paid.
 3. **`run_packets` with budgets that refuse.** The run stops at `max_calls`, or
@@ -59,7 +66,11 @@ returns what it *would* send — the cheapest thing you can do before committing
 - **Derivable fields are not data.** 46% of each packet in that campaign was an
   `evidence_fields` list identical on every record. The lint flags a body field
   that is byte-identical across the batch (move it to the prefix, pay once) and
-  a list that repeats one value.
+  a list that repeats one value. Both warnings have a floor, so a small constant
+  is not nagged about: the constant-across-batch check needs a canonical value
+  over **200 characters**, and the repeated-value check a list of **more than
+  three** elements. A five-element identical `evidence_fields` therefore trips
+  the second warning and not the first.
 - **Past ~25 items per call a model drops items silently.** Cut the packet
   rather than raising the output cap.
 
@@ -98,24 +109,64 @@ two-word name is never lost to it.
 Hand the result to the model as a list it must account for one way or the
 other. That accounting is also your deterministic recall check on the run.
 
-## Evidence: `validate_quotes`
+## Evidence: `validate_quotes`, and an anchor that survives a reflow
 
-Whitespace is collapsed on both sides and **nothing else**. No normalising of
-spelling, no expanding of abbreviations, no repairing of OCR: if the page says
-"av av", the quote must say "av av". An exact-substring check is what makes
-invented evidence unrepresentable rather than discouraged.
+`validate_quotes(items, pages)` is an exact substring check. Whitespace is
+collapsed on both sides and **nothing else** — no normalising of spelling, no
+expanding of abbreviations, no repairing of OCR: if the page says "av av", the
+quote must say "av av". Case is significant. An exact-substring check is what
+makes invented evidence unrepresentable rather than discouraged.
+
+It answers "is this quote really on that page", and nothing else. When the page
+text can change under you — a re-extraction, a different OCR pass — you want the
+quote to still be *locatable*, which is `text_quote_anchor`:
+
+```python
+from limbic.cerebellum.packet import reanchor_quote, text_quote_anchor
+
+anchor = text_quote_anchor("The page says av av here.", "says av av", "p1")
+# {'type','page_id','exact','prefix','suffix','start','end','occurrence_index',
+#  'page_text_sha256','selector_sha256','span_sha256','extraction_version_id'}
+found = reanchor_quote({"p1": "The page says av av here."}, "says av av")
+```
+
+A TextQuoteSelector-style record: the exact string, its prefix and suffix
+context (48 characters each by default), which occurrence it is, character
+offsets, and hashes of the page text, the selector and the span.
+`reanchor_quote(pages, exact)` finds it again in new text and returns
+`(page_id, anchor)` or `None`.
+
+Two differences from `validate_quotes` worth knowing: `text_quote_anchor`
+matches **case-insensitively** (`text_quote_anchor("Some Page here", "some
+page", "p1")["exact"]` is `"Some Page"`), and an **empty quote raises
+`ValueError`** rather than matching at offset 0. That second one is a fix, not a
+preference: three items had validated as evidence on an empty string. Use
+`unresolved_text_quote_anchor(page_text, expected_exact, page_id)` to record a
+quote you could *not* anchor, which is a held item rather than a match.
 
 ## Ledger
 
-Every call lands exactly one row, including failures, carrying `packet_id`,
-`purpose`, `outcome` and (on the OpenAI transport) the provider's
-`response_id` — a response is retained for 30 days, so a result lost locally
-can be fetched back instead of re-bought. `outcome_fn` closes the loop:
-without an outcome you can compute cost per call, never cost per useful change.
+Each call aims at exactly one row, failures included, carrying `packet_id`,
+`purpose`, `outcome` and (on the OpenAI transport) the provider's `response_id`
+— a response is retained for 30 days, so a result lost locally can be fetched
+back instead of re-bought. `outcome_fn` closes the loop: without an outcome you
+can compute cost per call, never cost per useful change.
+
+The row is not a guarantee, and deliberately so. A billed response must never be
+lost to a locked or unwritable ledger, so those writes warn instead of raising;
+when one fails, `CallMeta.call_id` is `None` and the later
+`set_packet_id` / `record_outcome` calls return `False` rather than attaching to
+anything. The response id in the transport metadata is what you backfill from.
+See [`docs/calls.md`](calls.md).
 
 ```bash
 python -m limbic.cerebellum.cost_log report --by project,purpose,outcome --since 7d
 ```
+
+Input tokens the provider served from its own cache are billed at the cached
+rate by `cost_for`, so a well-cached batch reports as cheaper rather than as
+mysteriously the same. [`docs/cost-log.md`](cost-log.md) has the price table
+rules.
 
 ## Paid artefacts
 
@@ -124,3 +175,10 @@ later cannot silently invalidate a batch that was already bought — it produces
 a different packet id instead. Before replanning, check whether every packet of
 a plan already has a cached response, and require an explicit
 `--discard-paid`-shaped flag to throw one away.
+
+If your paid artefacts are addressed by a hash of the *provider request body*
+rather than by a packet id, build the body yourself and hand it over verbatim
+with `cached_call(request=...)`: those exact bytes are posted and the response
+cache is keyed on them, so adopting the ledger does not re-key anything you have
+already bought. This is what let one consumer migrate with request bytes
+identical on 850 of 850 stored passes. See [`docs/calls.md`](calls.md).
