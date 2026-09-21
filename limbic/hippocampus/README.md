@@ -6,13 +6,24 @@ Hippocampus is the change management layer of limbic. It handles the messy reali
 
 These patterns were extracted from kulturperler (a Nordic performing arts archive with 10,000+ entities across persons, works, performances, and episodes) and otak/alif (a claims-first knowledge system), where every data improvement — fixing a name, merging duplicates found by amygdala's clustering, deleting orphaned records — needed to be proposed, reviewed, and applied with full cascade handling.
 
+> **Read this before building on `ProposalStore`.** It was extracted from
+> kulturperler and kulturperler does not import it back: as of the 20 September
+> 2026 audit it has **zero consumers**. It is a filing cabinet, not a lock — it
+> has no preimage check, so an `approved` status in it is a string in a file.
+> The mechanism that actually refuses a bad write is
+> [`hippocampus.apply.apply_proposal`](../../docs/apply.md), and it is a plain
+> function for that reason.
+
 ## Install
 
 ```bash
-pip install "limbic[hippocampus]"
+pip install "limbic[hippocampus] @ git+https://github.com/houshuang/limbic.git"
 ```
 
-**Requirements:** pyyaml >= 6.0 (on top of limbic core).
+**Requirements:** pyyaml >= 6.0, for `store` and `proposals` only. Since
+2026-09-21 the package resolves its exports on first access, so
+`hippocampus.resolve` and `hippocampus.apply` import with the standard library
+alone — no pyyaml, no numpy, no embedding stack.
 
 ---
 
@@ -26,6 +37,8 @@ pip install "limbic[hippocampus]"
 | **validate** | `Validator`, `Rule` — composable validation rules that check entities and produce errors/warnings |
 | **store** | `YAMLStore` — file-locked, atomic YAML storage with typed entity access |
 | **wikidata_resolve** | `WikidataResolver`, `Resolution`, `validate_chosen_qid` — deterministic mention → QID resolution scored across five weighted heuristics, returning an audit record or `status="ambiguous"` rather than a guess |
+| **apply** | `apply_proposal`, `MISSING`, `enum_member`, `regex`, `wikidata_exists`, `wikidata_type_is` — the preimage-checked write boundary. Documented in [`docs/apply.md`](../../docs/apply.md) |
+| **resolve** | `fold`, `name_keys`, `build_index`, `candidates`, `text_candidates`, `slot_enum`, `unslot` — entity resolution over a SQLite sidecar, stdlib-only. Documented in [`docs/resolve.md`](../../docs/resolve.md) |
 
 ---
 
@@ -441,7 +454,7 @@ than a bare QID:
 
 | Heuristic | Weight | What it uses |
 |---|---|---|
-| `coherence` | 0.30 | Does the candidate's family/role claims (P22 father, P25 mother, P26 spouse, P40 child, P39 position, P108 employer) point at QIDs already resolved in this batch? The strongest signal, because it is the one an unrelated same-named entity cannot fake. |
+| `coherence` | 0.30 | Do the candidate's relational claims (`COHERENCE_PROPERTIES`: P22 father, P25 mother, P26 spouse, P40 child, P39 position, P108 employer, P131 located-in, P17 country, P463 member-of) point at QIDs already resolved in this batch? The strongest signal, because it is the one an unrelated same-named entity cannot fake. |
 | `type` | 0.25 | Does `P31 instance of` match the `type_hint`, per the `TYPE_HINT_P31` allowlist? |
 | `description` | 0.20 | Cosine similarity between the candidate's description and `context_text`, via the `embedder` you passed. |
 | `date` | 0.15 | `amygdala.temporal.plausibility_score` of the candidate's P569/P570 (or P571/P576) dates against your `date_hint`. |

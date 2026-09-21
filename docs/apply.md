@@ -103,7 +103,8 @@ wikidata_type_is("work", client=c)("wikidata_id", "Q170065")
 # -> "Q170065 (Ramon Llull) is P31=['Q5'], not a work"
 ```
 
-`expected` is a `TYPE_HINT_P31` key (`person`, `place`, `event`, `work`) or an
+`expected` is a key of `hippocampus.wikidata_resolve.TYPE_HINT_P31` — exactly
+`person`, `place`, `event` and `work` — or an
 explicit iterable of QIDs. Subclass chains are **not** walked, so an
 over-narrow allowlist refuses a legitimate value — widen the allowlist rather
 than dropping the check. Pass `client=` to inject a fake in tests; the

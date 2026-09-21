@@ -9,11 +9,21 @@ These patterns were extracted from kulturperler, where 2,400+ performing arts wo
 ## Install
 
 ```bash
-pip install limbic
-# Cerebellum has no extra dependencies beyond stdlib.
-# But you'll probably want the LLM client too:
-pip install "limbic[llm]"
+pip install git+https://github.com/houshuang/limbic.git
 ```
+
+Cerebellum imports with the **standard library only** — as of 2026-09-21,
+`cerebellum.calls` no longer reaches `connect` through `limbic.amygdala`, which
+had been loading numpy and the embedding stack into every packet runner
+(0.13–0.33 s against 0.03 s, and an `ImportError` in an interpreter without
+them). This is held by subprocess tests.
+
+The built-in `openai` and `gemini` transports are stdlib `urllib`, so they need
+no extra either. The `[llm]` extra is for `amygdala.llm`, not for anything here.
+
+The install itself is still large: the distribution declares numpy,
+sentence-transformers and transformers as core dependencies, so you pay for the
+embedding stack even though this package never imports it.
 
 ---
 
@@ -25,8 +35,9 @@ pip install "limbic[llm]"
 | **orchestrator** | `TieredOrchestrator`, `VerificationTier` — multi-tier verification with auto-escalation |
 | **audit_log** | `AuditLogger`, `read_logs`, `summarize_logs` — append-only JSONL logging with daily rotation and analysis |
 | **context** | `ContextBuilder`, `build_batch_context` — structured prompt building for LLM verification calls |
-| **cost_log** | `CostLog`, `cost_log`, `compute_cost`, `price_for`, `record_outcome` — cross-project spend tracking with a dashboard, an outcome-bearing ledger, and a strict per-model price lookup |
-| **calls** | `cached_call`, `Held`, `CallMeta` — response-cache + replicate-agreement wrapper around a generate transport, so a repeated call costs $0 |
+| **cost_log** | `CostLog`, `cost_log`, `compute_cost`, `price_for`, `cost_for`, `cached_input_price_for`, `record_outcome`, `sync_from_remote` — cross-project spend tracking with a dashboard, an outcome-bearing ledger, and a strict per-model price lookup. [`docs/cost-log.md`](../../docs/cost-log.md) |
+| **calls** | `cached_call`, `Held`, `CallMeta`, `canonical_bytes` — response-cache + replicate-agreement wrapper around a generate transport, so a repeated call costs $0. [`docs/calls.md`](../../docs/calls.md) |
+| **packet** | `make_packet`, `run_packets`, `probe`/`LowYield`, `lint_packet`, `validate_quotes`, `text_quote_anchor`, `union_passes`, `unmatched_names` — stateless batch units with budgets that refuse. [`docs/packet.md`](../../docs/packet.md) |
 | **claude_cli** | `generate`, `generate_parallel`, `Task` — `claude -p` wrapper, every call auto-logged to `cost_log` |
 | **codex_cli** | `codex_json`, `codex_research`, `strict_response_schema` — `codex exec` wrapper: locked-down structured calls, and deliberately agentic runs with web search and network egress |
 | **sandbox** | `untrusted_payload`, `isolated_scratch`, `sanitized_environment`, `call_slot` — isolation primitives for handing untrusted material to an agentic CLI |
@@ -488,7 +499,15 @@ Audit findings can automatically create proposals for human review. See the hipp
 
 ## Cost logging (`cost_log.py`)
 
-Centralized LLM cost tracking across projects, models, and hosts. Uses litellm's pricing data (2,500+ models) for automatic cost computation:
+Centralized LLM cost tracking across projects, models, and hosts.
+
+Pricing resolves in two steps: litellm's database (2,500+ models) **if litellm
+happens to be importable**, then a built-in 24-entry fallback table. litellm is
+not a dependency of limbic and is not installed by any extra, so in a default
+install only the fallback table is in play. `price_for` raises
+`UnknownModelPriceError` rather than pricing an unknown model at $0 — including
+for cerebellum's own default alias `haiku`, which the fallback table does not
+carry. See [`../../docs/cost-log.md`](../../docs/cost-log.md).
 
 ```python
 from limbic.cerebellum.cost_log import cost_log, compute_cost
@@ -504,9 +523,9 @@ cost_log.log(project="petrarca", model="gemini/gemini-2.5-flash",
 import litellm
 litellm.callbacks = [cost_log.callback("alif")]
 
-# Query costs
+# Query costs. query() returns sqlite3.Row objects — index them, don't dot them.
 records = cost_log.query(project="petrarca", days=7)
-total = sum(r.cost_usd for r in records)
+total = sum(r["cost_usd"] for r in records)
 
 # Built-in dashboard and CLI
 # python -m limbic.cerebellum.cost_log report --days 7

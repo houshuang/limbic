@@ -10,10 +10,10 @@ It's optimized for **short knowledge-dense texts** — claims, research findings
 
 ```bash
 # Core (embedding, search, novelty, clustering)
-pip install limbic
+pip install git+https://github.com/houshuang/limbic.git
 
 # With LLM support (knowledge map generation, multi-provider LLM client)
-pip install "limbic[llm]"
+pip install "limbic[llm] @ git+https://github.com/houshuang/limbic.git"
 ```
 
 **Requirements:** Python >= 3.11, numpy, sentence-transformers. No vector database needed.
@@ -30,13 +30,13 @@ pip install "limbic[llm]"
 | **cluster** | Greedy centroid clustering (batch + incremental), complete linkage, pairwise cosine, confidence-calibrated pair classification | Incremental matches batch quality at threshold >= 0.85, 1.8x faster; order-sensitive at lower thresholds |
 | **document_similarity** | Document-level thematic similarity using weighted multi-field embeddings | 94% accuracy on human-rated pairs; AUROC=0.930 on 300-pair dataset; Spearman rho=0.818 |
 | **cache** | Persistent SQLite-backed embedding cache | 20K texts: 48s cold → 585ms warm |
-| **index** | SQLite document/chunk storage with hybrid search, grep, `connect()` helper | Single-file, zero-config, FTS5 auto-synced via triggers |
+| **index** | SQLite document/chunk storage with hybrid search, grep, and a re-export of the `connect()` helper (which lives in `limbic._sqlite` since 2026-09-21, so the pipeline packages can use it without loading numpy) | Single-file, zero-config, FTS5 auto-synced via triggers |
 | **calibrate** | Cohen's kappa, LLM judge validation (Bootstrap Validation Protocol), intra-rater reliability | Validates LLM judges against human gold labels |
 | **knowledge_map** | Adaptive knowledge probing via EIG selection with Bayesian belief propagation, batch probing, KST fringes | Converges in 5–8 questions on 20-node graphs; Bayesian propagator 42% faster than heuristic on chains |
 | **knowledge_map_gen** | LLM-powered knowledge graph generation from topic descriptions | Generates 15–50 node prerequisite DAGs |
 | **llm** | Multi-provider LLM client (Gemini, Anthropic, OpenAI) with structured output and retry | Auto-fallback, cost tracking, async + sync |
 | **temporal** | Uncertain-date parsing ("940s", "circa 942", "4th century BC", EDTF) into integer year ranges, Allen interval relations, soft plausibility scoring | Indexes as two ints; `edtf` extra optional |
-| **wikidata** | Cache-backed, rate-limited Wikidata client: search, get, batched get_many, SPARQL | 30-day payload cache, 5 req/s token bucket, maxlag-aware |
+| **wikidata** | Cache-backed, rate-limited Wikidata client: search, get, batched get_many, SPARQL | 30-day payload cache, 5 req/s token bucket, opt-in maxlag |
 | **retrieval_eval** | Pooled-judgment IR evaluation: pool -> LLM-judge -> nDCG / Recall / MRR / MAP, with strata | Answers "which retrieval knob actually wins?" |
 | **serendipity** | Non-obvious link finding: inverted-U similarity band, cross-facet bonus, Swanson ABC bridging | 70% of surfaced links rated surprising *and* useful |
 
@@ -73,10 +73,18 @@ scores = batch_novelty(vecs, index)
 # Aggregate per source to rank "who brings the most novel arguments?"
 
 # 4. Find contradictions (cosine can't distinguish agree vs disagree)
-pairs = extract_pairs(pairwise_cosine(vecs), threshold=0.72)
-classified = classify_pairs(texts, pairs)
+pairs = extract_pairs(pairwise_cosine(vecs), threshold=0.72)   # (i, j, score)
+classified = classify_pairs(
+    [(texts[i], texts[j]) for i, j, _ in pairs],               # pairs of TEXTS
+    [score for _, _, score in pairs],                          # their scores
+    known_threshold=0.85, extends_threshold=0.72,              # both required
+)
 # Returns KNOWN (paraphrase), NEW (contradiction), EXTENDS (elaboration)
 ```
+
+`extract_pairs` returns index triples; `classify_pairs` takes the text pairs
+and their scores as two parallel lists, plus both thresholds explicitly. There
+are no defaults, because the right cut depends on the corpus.
 
 See also the [entity dedup recipe](../hippocampus/README.md#deduplication-deduppy) in limbic.hippocampus and the [batch verification recipe](../cerebellum/README.md#batch-processing-batchpy) in limbic.cerebellum.
 
@@ -172,7 +180,11 @@ similarity = float(v_no @ v_en)  # -> 0.86
 
 ## Search (`search.py`)
 
-Three search modes that compose together. All return `Result(id, score)` namedtuples.
+Three search modes that compose together. All return `Result` dataclasses with
+`id`, `score`, `content`, `metadata` and `source`. Only the FTS5 index populates
+`content` and `metadata`; a `VectorIndex` result carries `metadata={}`, so a
+`dedup_by(results, key_fn=lambda r: r.metadata["session_id"])` over vector hits
+raises `KeyError`.
 
 ```python
 from limbic.amygdala import VectorIndex, FTS5Index, HybridSearch, rerank
@@ -218,15 +230,6 @@ deduped = dedup_by(results, key_fn=lambda r: r.metadata["session_id"])
 FTS5 dominates on scientific text (exact terminology matters); vector dominates on medical queries (semantic matching matters). Reranking helps on NFCorpus (+16%) but slightly hurts on SciFact (-5%), likely because scientific terminology already gives exact matches high FTS5 scores.
 
 ---
-
-### Search benchmarks
-
-| Dataset | Vector nDCG@10 | FTS5 nDCG@10 | Hybrid | Hybrid + rerank |
-|---------|---------------|-------------|--------|-----------------|
-| SciFact (5K docs, 300 queries) | 0.484 | 0.638 | 0.674 | **0.641** |
-| NFCorpus (3.6K docs) | 0.235 | 0.126 | 0.286 | **0.333** |
-
-FTS5 dominates on scientific text (exact terminology matters); vector dominates on medical queries (semantic matching matters). Reranking helps on NFCorpus (+16%) but slightly hurts on SciFact (-5%), likely because scientific terminology already gives exact matches high FTS5 scores.
 
 ## Multi-list RRF and query expansion (`search.py`)
 
@@ -357,10 +360,19 @@ pairs_result = classify_pairs(texts, scores, known_threshold=0.88, extends_thres
 
 ### Adaptive top-K
 
-The number of neighbors considered scales with index size (Experiment 3):
-- K=1 for ≤50 items (small corpus, single nearest neighbor is most informative)
-- K=10 for 1000+ items (smooths over local density variation)
-- Formula: `K = max(1, min(10, len(index) // 100))`
+The number of neighbours considered scales with index size (Experiment 3). It
+is a step function, not a formula — `novelty._adaptive_k`:
+
+| index size | K | |
+|---|---|---|
+| ≤ 50 | 1 | the single nearest neighbour is the most informative signal |
+| ≤ 200 | 3 | |
+| ≤ 1000 | 5 | |
+| > 1000 | 10 | smooths over local density variation |
+
+Passing `top_k=` explicitly overrides all of it. The K=1 row is why scoring
+items that are *in* the index returns exactly `0.0` on a small corpus: each
+item is its own and only neighbour.
 
 ### Performance at scale
 
@@ -371,7 +383,8 @@ Tested on a 27K-claim knowledge base (Experiment 15):
 ---
 
 
-`corpus_centroid(vectors)` returns the mean direction that the
+`corpus_centroid(index)` takes a populated `VectorIndex`, not a raw array, and
+returns the mean direction that the
 centroid-specificity signal dampens against — compute it once and reuse it
 across a batch rather than letting each call re-derive it.
 
@@ -409,12 +422,16 @@ from limbic.amygdala import classify_pairs_with_confidence, format_for_eval_harn
 
 # Classify pairs with confidence-based labels and per-label metrics
 # pairs: list of (idx_a, idx_b, cosine_score) from extract_pairs()
-result = classify_pairs_with_confidence(pairs, texts,
-                                         confident_threshold=0.75, reject_threshold=0.30)
+confident, uncertain = classify_pairs_with_confidence(
+    pairs, texts, confident_threshold=0.75, reject_threshold=0.30)
 
-# Format for evaluation harness
-eval_data = format_for_eval_harness(result)
+# Format the uncertain ones for an evaluation harness
+eval_data = format_for_eval_harness(uncertain, texts)
 ```
+
+It returns two lists, not one: the pairs it will answer for, and the pairs it
+wants a human or a model to look at. `format_for_eval_harness` takes the second
+list plus the texts they index into.
 
 ### Choosing a threshold
 
@@ -584,9 +601,12 @@ consistency = intra_rater_reliability(pass1_labels, pass2_labels)
 Multi-provider async LLM client with structured output, retry, auto-fallback, and cost tracking.
 
 Supported providers and models:
-- **Gemini**: gemini3-flash, gemini25-flash, gemini25-pro
-- **Anthropic**: sonnet (Claude Sonnet 4), haiku (Claude Haiku 4.5)
-- **OpenAI**: gpt41-mini, gpt41-nano
+Aliases as of 2026-09-21 — `limbic.amygdala.llm.MODELS` is the list that is
+actually true:
+
+- **Gemini**: gemini38-flash, gemini35-flash, gemini35-flash-lite, gemini31-pro, gemini31-flash-lite, gemini3-flash, gemini25-flash, gemini25-pro
+- **Anthropic**: fable (Claude Fable 5.1), opus (Claude Opus 5), sonnet (Claude Sonnet 5), haiku (Claude Haiku 4.5)
+- **OpenAI**: sol, terra, luna (GPT-5.6 family), gpt55, gpt54-mini, gpt54-nano, gpt41-mini, gpt41-nano
 
 ```python
 from limbic.amygdala.llm import generate, generate_structured
@@ -662,9 +682,12 @@ The `Index` class uses SQLite triggers to keep FTS5 in sync automatically — no
 ```python
 from limbic.amygdala import PersistentEmbeddingCache
 
-cache = PersistentEmbeddingCache("embeddings.db")
+cache = PersistentEmbeddingCache("embeddings.db", model_name="all-MiniLM-L6-v2")
 # EmbeddingModel uses this automatically when cache_path= is set
 ```
+
+`model_name` is required and part of the key: two models' vectors must not
+collide in one cache file.
 
 SQLite-backed, keyed by text hash. Stores pre-whitening vectors so the same cache works across whitening configurations. ~2.2 KB per 384-dim entry.
 
@@ -703,7 +726,7 @@ never asserted. Widen it yourself if your domain wants that; `plausibility_score
 already decays softly outside the range, which covers most of the reason to.
 
 Full EDTF strings are supported when the optional package is installed
-(`pip install "limbic[temporal]"`). Both the ratified uppercase spelling (`196X`)
+(`pip install "limbic[temporal] @ git+https://github.com/houshuang/limbic.git"`). Both the ratified uppercase spelling (`196X`)
 and the 2012-draft lowercase one (`196x`, `19uu`) parse, because archive data
 predates the change.
 
@@ -723,9 +746,16 @@ rows = wd.sparql("SELECT ?x WHERE { ... }")
 
 Every response goes through `PayloadCache` (30-day default TTL), so a re-run of
 an enrichment pass costs nothing. Requests are rate-limited by an in-process
-`TokenBucket` (thread-safe) at Wikidata's published 5 req/s, and `maxlag` is honoured — a
-`MaxlagError` means the server asked you to back off, not that the data is
-missing. `WikidataNotFound` is the distinct "this QID doesn't exist" case.
+`TokenBucket` (thread-safe) at Wikidata's published 5 req/s.
+
+`maxlag` is handled but **not sent by default** (`DEFAULT_MAXLAG_SECONDS =
+None`). Wikidata's maxlag reports the slowest lag across all related services
+including the query service, which is often tens of seconds behind while the
+REST API answers in under 300 ms, so the documented `maxlag=5` rejects healthy
+calls during routine load. Pass `maxlag_seconds=` to opt in — sensible for a
+high-volume batch, not for interactive use. When it is sent, a `MaxlagError`
+means the server asked you to back off, not that the data is missing.
+`WikidataNotFound` is the distinct "this QID doesn't exist" case.
 
 A `user_agent` is required, not optional: Wikidata blocks anonymous bulk
 clients, and the failure is a silent throttle rather than an error.
@@ -806,7 +836,7 @@ separate judgment — scoring candidates on surprise and usefulness separately
 - **Billion-scale vector search.** Use FAISS, Milvus, or Qdrant for that. Amygdala's brute-force numpy works up to ~100K vectors.
 - **Document chunking / RAG pipelines.** Use LlamaIndex or LangChain. Amygdala embeds individual texts, not multi-page documents.
 - **Fine-tuning.** Experiment 14 showed that task-specific embeddings aren't worth it for this use case (search and novelty are anti-correlated at -0.953 — optimizing one hurts the other).
-- **Query expansion.** Experiment 17 showed PRF query expansion hurts search quality (-1.2% to -7.2% across metrics). Rejected.
+- **Pseudo-relevance-feedback query expansion.** Experiment 17 showed PRF expansion hurts search quality (-1.2% to -7.2% across metrics). Rejected. This is *not* the same thing as `expand_query`/`expanded_hybrid_search` above, which expand with an LLM rather than by feeding back top results, and which did ship.
 
 ## Full API reference
 

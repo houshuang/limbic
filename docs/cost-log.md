@@ -102,35 +102,36 @@ session JSONL files.
 ```python
 from limbic.cerebellum.forensics import parse_since, scan_claude_sessions
 
-def billed(by_model):
-    return sum(r["input_tokens"] + r["cache_read_tokens"]
-               + r["cache_creation_tokens"] + r["output_tokens"]
-               for r in by_model.values())
-
 for s in scan_claude_sessions(since=parse_since("1d")):
     if not s.subagents:
         continue
-    print(f"{s.cwd}  main={billed(s.main_by_model):,}"
-          f"  subagents={billed(s.sidechain_by_model):,} ({len(s.subagents)})")
-    for sub in s.subagents:
+    main, side = s.totals("main"), s.totals("sidechain")
+    print(f"{s.cwd}  main={sum(main.values()):,}  subagents={sum(side.values()):,}"
+          f" ({len(s.subagents)})")
+    for sub in s.subagents[:1]:
         print(f"    entrance fee {sub.first_turn_context:,}  {sub.model}")
 ```
 
 Real output from one day of this machine's sessions:
 
 ```
-/Users/stian/src/research  main=  21,489,147  subagents=  72,639,994 (8)
-    entrance fee    55,641  claude-fable-5-1
-/Users/stian/tana/pol6     main=  15,036,208  subagents=  35,999,049 (5)
-    entrance fee    51,439  claude-opus-5
+/Users/stian/src/research  main=19,848,168  subagents=179,619,595 (22)
+    entrance fee 61,449  claude-sonnet-5
+/Users/stian/src/nrk       main=11,820,737  subagents=2,157,058 (1)
+    entrance fee 19,238  claude-opus-5
 ```
 
-That shape is the finding: delegated work cost 3.4× the main thread, and each
-subagent paid ~50K tokens to establish its context before doing anything useful
-(the audit measured a 49.8K median entrance fee). `scan_codex_sessions` is the
-Codex equivalent; `attrib_session(path)` breaks a single session down by
-category; the CLI is `python -m limbic.cerebellum.forensics {claude,codex}
---since 30d`.
+That shape is the finding. In the first session, delegated work cost **9× the
+main thread**, and each of the 22 subagents paid tens of thousands of tokens to
+establish its context before doing any work at all — the audit measured a 49.8K
+median entrance fee. A ledger that only sees `cached_call` rows reports none of
+this.
+
+`totals(which)` takes `"main"`, `"sidechain"` or `"all"` and returns a dict of
+`input_tokens`, `cache_creation_tokens`, `cache_read_tokens`, `output_tokens`
+and `requests`. `scan_codex_sessions` is the Codex equivalent;
+`attrib_session(path)` breaks a single session down by category; the CLI is
+`python -m limbic.cerebellum.forensics {claude,codex} --since 30d`.
 
 Three counting rules are baked in, each silently wrong if skipped:
 
