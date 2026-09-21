@@ -502,6 +502,10 @@ def _join_readers(readers: list[threading.Thread], budget: float) -> None:
         reader.join(timeout=max(0.0, deadline - time.monotonic()))
 
 
+# clap (the Codex CLI's argument parser) exits 2 on a usage error.
+_ARGPARSE_EXIT_CODE = 2
+
+
 def _rejects_json_flag(proc: subprocess.CompletedProcess) -> bool:
     """Whether this exit is the CLI refusing to parse `--json`, not a model failure.
 
@@ -509,8 +513,19 @@ def _rejects_json_flag(proc: subprocess.CompletedProcess) -> bool:
     so retrying without the flag is free. Without this check, a host on a Codex
     build predating `--json` would have every call fail the moment it picked up
     this version of limbic.
+
+    All three conditions have to hold, because the retry is only free while the
+    run genuinely never started. A model failure whose text happens to quote the
+    flag would otherwise re-run an agentic mission that had already spent its
+    tokens — and disable usage logging for the rest of the process on the way.
+    So: the parser's own exit code, *no* event on stdout (the run never got as
+    far as emitting one), and the complaint on stderr where clap writes it.
     """
-    text = ((proc.stderr or "") + (proc.stdout or "")).lower()
+    if proc.returncode != _ARGPARSE_EXIT_CODE:
+        return False
+    if next(_iter_events(proc.stdout or ""), None) is not None:
+        return False
+    text = (proc.stderr or "").lower()
     if "--json" not in text:
         return False
     return any(m in text for m in (
@@ -616,11 +631,17 @@ def _finish(proc: subprocess.CompletedProcess, output_path: str | None, schema: 
         except OSError:
             text = ""
     if not text:
-        # With `--json` stdout is an event stream, so the old raw-stdout fallback
-        # would hand back JSONL instead of the answer. Recover the agent's last
-        # message from the events; if there are none, fall through to the
-        # pre-event-capture behaviour unchanged.
-        text = final_message(proc.stdout or "") or (proc.stdout or "").strip()
+        args = proc.args if isinstance(proc.args, (list, tuple)) else ()
+        if "--json" in args:
+            # stdout is an event stream, not an answer. If no recognised event
+            # carried the agent's message — an older CLI with an event shape we
+            # have never seen — then this run produced no output, and it has to
+            # fail as an empty result always did. Handing back raw JSONL would
+            # be silent corruption: a schema-less caller would store the
+            # transcript as the answer and nothing would look wrong.
+            text = final_message(proc.stdout or "")
+        else:
+            text = (proc.stdout or "").strip()
     if schema is None:
         return text
     parsed = _parse_json(text)

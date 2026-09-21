@@ -33,6 +33,11 @@ for its folding primitives (gold-set rows identical).
   Verified against the real shape from codex-cli 0.153.4 on 2026-09-21:
   `{"type":"turn.completed","usage":{"input_tokens":…,"cached_input_tokens":…,
   "output_tokens":…,"reasoning_output_tokens":…}}`, recorded as a test fixture.
+  In `--json` mode the raw event stream is never returned as an answer: if
+  `--output-last-message` is empty and no recognised event carried the agent's
+  message — an older CLI with an event shape we have not seen — the call fails
+  exactly as an empty result always did, rather than handing back a transcript
+  that nothing downstream could tell from a real answer.
 - **`billing_mode` and `notional_cost_usd` on the ledger.** A subscription call
   burns real tokens and spends no money; one number cannot hold both. A
   `subscription` row carries `cost_usd = 0` — `log()` refuses it otherwise —

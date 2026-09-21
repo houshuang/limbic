@@ -314,14 +314,49 @@ class TestFinalMessage:
         assert cc.final_message("plain text answer") == ""
 
     def test_finish_prefers_the_event_message_over_raw_jsonl(self):
-        proc = subprocess.CompletedProcess(args=["codex"], returncode=0,
+        proc = subprocess.CompletedProcess(args=["codex", "--json"], returncode=0,
                                            stdout=REAL_EVENTS, stderr="")
         assert cc._finish(proc, None, None) == "ok"
 
-    def test_finish_still_falls_back_to_raw_stdout(self):
+    def test_finish_still_falls_back_to_raw_stdout_without_json(self):
         proc = subprocess.CompletedProcess(args=["codex"], returncode=0,
                                            stdout="  plain answer  ", stderr="")
         assert cc._finish(proc, None, None) == "plain answer"
+
+
+class TestUnrecognisedEventShape:
+    """An older CLI (production runs 0.146.0) may emit events we cannot read.
+
+    Raw JSONL must never become the answer. A caller that stored a transcript
+    as its result would have no way to notice: nothing raises, nothing is
+    empty, and the value is plausible JSON.
+    """
+
+    # Deliberately not a shape `final_message` knows.
+    UNKNOWN_EVENTS = "\n".join([
+        '{"id":"0","msg":{"type":"agent_reasoning_delta","delta":"thinking"}}',
+        '{"id":"1","msg":{"type":"task_complete","last_message":"ok"}}',
+    ])
+
+    def test_schemaless_caller_gets_an_empty_result_not_the_transcript(self):
+        proc = subprocess.CompletedProcess(args=["codex", "--json"], returncode=0,
+                                           stdout=self.UNKNOWN_EVENTS, stderr="")
+        assert cc._finish(proc, None, None) == ""
+
+    def test_a_schema_caller_fails_exactly_as_an_empty_result_always_did(self):
+        proc = subprocess.CompletedProcess(args=["codex", "--json"], returncode=0,
+                                           stdout=self.UNKNOWN_EVENTS, stderr="")
+        with pytest.raises(cc.CodexCLIError, match="unparseable JSON"):
+            cc._finish(proc, None, {"type": "object"})
+
+    def test_the_last_message_file_is_still_what_wins(self, tmp_path):
+        """The normal path is unaffected: `--output-last-message` is written
+        byte-identically with and without `--json`."""
+        out = tmp_path / "last.txt"
+        out.write_text("the real answer", encoding="utf-8")
+        proc = subprocess.CompletedProcess(args=["codex", "--json"], returncode=0,
+                                           stdout=self.UNKNOWN_EVENTS, stderr="")
+        assert cc._finish(proc, str(out), None) == "the real answer"
 
 
 class TestUsageLogging:
@@ -464,5 +499,59 @@ class TestJsonFlagUnsupported:
         monkeypatch.setattr(cc, "_spawn", _spawn)
         proc = cc._run(["codex", "exec", "--json"], timeout=5)
         assert proc.returncode == 1
+        assert len(seen) == 1
+        assert cc._JSON_EVENTS_SUPPORTED is True
+
+    def test_a_mid_run_failure_quoting_the_flag_never_respawns(self, monkeypatch):
+        """The retry is only free before the run starts.
+
+        A failure that arrives *after* events were emitted has already spent
+        its tokens; re-running an agentic mission on the strength of a phrase
+        match would spend them twice and disable usage logging for the rest of
+        the process on the way out.
+        """
+        seen: list[list[str]] = []
+
+        def _spawn(cmd, timeout):
+            seen.append(list(cmd))
+            return subprocess.CompletedProcess(
+                cmd, 2, REAL_EVENTS,
+                "tool call failed: error: unexpected argument '--json' found "
+                "while running `jq --json`")
+
+        monkeypatch.setattr(cc.shutil, "which", lambda name: "/usr/bin/codex")
+        monkeypatch.setattr(cc, "_spawn", _spawn)
+        proc = cc._run(["codex", "exec", "--json"], timeout=5)
+        assert len(seen) == 1
+        assert cc._JSON_EVENTS_SUPPORTED is True
+        assert cc.parse_usage(proc.stdout).input_tokens == 14169
+
+    def test_only_the_argument_parsers_exit_code_counts(self, monkeypatch):
+        seen: list[list[str]] = []
+
+        def _spawn(cmd, timeout):
+            seen.append(list(cmd))
+            return subprocess.CompletedProcess(
+                cmd, 1, "", "error: unexpected argument '--json' found")
+
+        monkeypatch.setattr(cc.shutil, "which", lambda name: "/usr/bin/codex")
+        monkeypatch.setattr(cc, "_spawn", _spawn)
+        cc._run(["codex", "exec", "--json"], timeout=5)
+        assert len(seen) == 1
+        assert cc._JSON_EVENTS_SUPPORTED is True
+
+    def test_the_complaint_has_to_be_on_stderr(self, monkeypatch):
+        """clap writes usage errors to stderr; a model echoing the phrase on
+        stdout is not the CLI refusing the flag."""
+        seen: list[list[str]] = []
+
+        def _spawn(cmd, timeout):
+            seen.append(list(cmd))
+            return subprocess.CompletedProcess(
+                cmd, 2, "error: unexpected argument '--json' found", "")
+
+        monkeypatch.setattr(cc.shutil, "which", lambda name: "/usr/bin/codex")
+        monkeypatch.setattr(cc, "_spawn", _spawn)
+        cc._run(["codex", "exec", "--json"], timeout=5)
         assert len(seen) == 1
         assert cc._JSON_EVENTS_SUPPORTED is True
