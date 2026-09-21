@@ -135,6 +135,36 @@ def test_source_errors_are_kept_as_findings_and_never_applied():
     assert report["findings"]["source_errors"] == errors
 
 
+@pytest.mark.parametrize("field", ["citation_key", "concept_id", "disposition"])
+def test_a_correction_targeting_an_identifying_field_is_refused(field):
+    """Re-keying is not a correction: it moves the decision onto another record."""
+
+    with pytest.raises(AuditError, match="Re-key outside the audit"):
+        apply_audit(
+            DECISIONS, {"fixes": {"ada": "ada-lovelace"}},
+            key_fields=KEYS, hold_sections=(),
+            correction_sections=(("fixes", field),),
+        )
+
+
+def test_the_caller_can_protect_further_identity_fields():
+    with pytest.raises(AuditError, match="Re-key outside the audit"):
+        apply_audit(
+            DECISIONS, {"fixes": {"ada": "Ada"}},
+            key_fields=KEYS, hold_sections=(),
+            correction_sections=(("fixes", "label"),),
+            identity_fields=("label",),
+        )
+
+
+def test_the_refusal_does_not_depend_on_the_audit_carrying_such_a_row():
+    """An empty section must not make a re-keying configuration look safe."""
+
+    with pytest.raises(AuditError, match="Re-key outside the audit"):
+        apply_audit(DECISIONS, {}, key_fields=KEYS, hold_sections=(),
+                    correction_sections=(("fixes", "concept_id"),))
+
+
 def test_an_unreconciled_decision_is_refused():
     with pytest.raises(AuditError, match="after reconciliation"):
         apply_audit([{"citation_key": "c1"}], {}, key_fields=KEYS)

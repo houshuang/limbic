@@ -103,6 +103,7 @@ def apply_audit(
     hold_sections: Sequence[str] = ("holds",),
     correction_sections: Sequence[tuple[str, str]] = (),
     finding_sections: Sequence[str] = ("source_errors",),
+    identity_fields: Sequence[str] | None = None,
     disposition_field: str = "disposition",
     hold_value: str = "hold",
     validator: CorrectionValidator | None = None,
@@ -135,7 +136,25 @@ def apply_audit(
     Sections present in `audit` that the caller did not name are reported under
     `ignored_sections`, so an auditor that invented a `promotions` section is
     visible rather than quietly dropped.
+
+    A correction may not target a field that identifies the record. `key_fields`
+    and `disposition_field` are protected always, and `identity_fields` names
+    any further ones (a `label`, a `source_id`). Re-keying is not a correction:
+    it moves the decision onto a different record, so everything already
+    demoted, matched or reported about it silently means something else. A
+    caller who really wants to re-key does it outside the audit, where it reads
+    as the migration it is.
     """
+
+    protected = set(identity_fields) if identity_fields is not None else set(key_fields)
+    protected |= {*key_fields, disposition_field}
+    for section_name, field in correction_sections:
+        if field in protected:
+            raise AuditError(
+                f"correction section {section_name!r} targets {field!r}, which identifies "
+                "the record or decides it: an audit corrects what a record says, never "
+                "which record it is. Re-key outside the audit."
+            )
 
     out = [copy.deepcopy(dict(d)) for d in decisions]
     for index, decision in enumerate(out):

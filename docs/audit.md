@@ -84,6 +84,19 @@ through `validator(field, value, row)`; anything it refuses is reported under
 `corrections_refused` and never written. The natural validator is the output
 refusal kit in [`packet.md`](packet.md).
 
+### A correction may not re-key the record
+
+`apply_audit` raises if a correction section targets `key_fields`,
+`disposition_field`, or anything further the caller names in
+`identity_fields` (a `label`, a `source_id`). Re-keying is not a correction: it
+moves the decision onto a *different* record, so everything already demoted,
+matched or reported about it quietly means something else, and the demote-only
+guarantee is left intact over a row that is no longer the row it was. The
+refusal is raised on the configuration, not on the presence of such a row, so
+an audit file that happens to carry none today cannot make a re-keying setup
+look safe. A caller who really wants to re-key does it outside the audit, where
+it reads as the migration it is.
+
 ## The report
 
 | Key | Meaning |

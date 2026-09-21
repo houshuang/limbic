@@ -860,9 +860,21 @@ DEFAULT_META_PHRASES = re.compile(
     r"|(according to|based on) the (provided|supplied|given) ",
     re.I,
 )
-# «A person named Kristoffer Visted, identified only as the source…» — a
-# definition whose whole content is that the thing has the name it has.
-DEFAULT_VACUOUS = re.compile(r"^(a|an|the)\s+(\w+\s+){1,3}(named|titled|called)\b", re.I)
+# «A person named Kristoffer Visted.» — a definition whose whole content is
+# that the thing has the name it has. Anchored end to end on purpose: matching
+# the opening formula alone refuses «A ballad titled Terje Vigen describes a
+# sailor's ordeal in a storm», which is a real definition that happens to start
+# the same way. Only a label may follow the formula, and then nothing else.
+# A word character that is neither a digit, an underscore, nor a lowercase
+# letter — i.e. a capital, in any alphabet, without enumerating one.
+_UPPER = r"[^\W\d_a-zß-öø-ÿ]"
+_LABEL_WORD = _UPPER + r"[\w’'-]*"
+DEFAULT_VACUOUS = re.compile(
+    r"^(?:[Aa]n?|[Tt]he)\s+(?:\w+\s+){1,3}(?:named|titled|called)\s+"
+    rf"[«\"']?{_LABEL_WORD}"
+    rf"(?:[\s,-]+(?:av|von|de|van|der|den|of|the|di|du|la|le)?\s*{_LABEL_WORD})*"
+    r"[»\"']?[\s.!?]*$"
+)
 
 _YEAR = re.compile(r"(?<!\d)\d{4}(?!\d)")
 # A word that is not sentence-initial; the capital is checked in Python so the
@@ -928,9 +940,12 @@ def meta_leak_refusals(
     definition*: the prompt told the model not to write them, the model wrote
     them anyway, and nothing between the model and the store disagreed.
 
-    `phrases` is meant to be replaced. It is per corpus and per language, and
-    the right way to build one is to read what an audit found and add exactly
-    that.
+    Both defaults are a starting point, not a shipped answer. `phrases` is per
+    corpus and per language, and the right way to build one is to read what an
+    audit found and add exactly that. `vacuous` is anchored end to end so only
+    a definition that is *nothing but* the formula is refused — "A ballad
+    titled Terje Vigen describes a sailor's ordeal" says something and stands.
+    A corpus whose definitions run to several sentences will want its own.
     """
 
     stripped = (text or "").strip()

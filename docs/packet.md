@@ -199,7 +199,7 @@ with the item number." All three were in the prompt. All three happened.
 | Function | Refuses |
 |---|---|
 | `slot_echo_refusal(text, slot_ids, *, source=None)` | output that is not prose at all: the item's own slot id, no space, no lowercase word, a fraction of its source. First reason only — once the answer is the item number, nothing else about it is worth reporting |
-| `meta_leak_refusals(text, *, phrases=…)` | text that describes the pipeline's evidence rather than the subject ("identified only as the source"), and text whose whole content is that the thing has its name |
+| `meta_leak_refusals(text, *, phrases=…)` | text that describes the pipeline's evidence rather than the subject ("identified only as the source"), and text whose whole content is that the thing has its name — anchored end to end, so "A ballad titled Terje Vigen describes a sailor's ordeal" stands |
 | `rendering_fidelity_refusals(source, rendering, *, exonyms=…, fold=…, parts=…)` | a rendering that added a fact its source does not contain: a year not in the source, a capitalised name in neither the source nor the caller's known names, or more than `max_ratio` times the length |
 
 ```python
@@ -227,8 +227,8 @@ exonym set (the target language's own forms for names the source gives in its
 own — Danmark for Denmark), `fold` (the comparison key — a language that
 inflects names needs its own), `parts` (how a compound splits), and
 `exempt_years` (for a language that spells a century as a four-digit number,
-like bokmål's "1100-tallet"). `DEFAULT_META_PHRASES` is the one default, and it
-is English-only and small on purpose: a phrase list is a corpus's vocabulary,
+like bokmål's "1100-tallet"). `DEFAULT_META_PHRASES` and `DEFAULT_VACUOUS` are the only defaults, both
+English-only and small on purpose: a phrase list is a corpus's vocabulary,
 and one lifted from another corpus refuses good text and misses the bad.
 Curate yours from what an audit actually finds.
 

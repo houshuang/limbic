@@ -70,10 +70,31 @@ def test_text_about_the_evidence_is_refused(text):
     assert "text describes the evidence rather than the subject" in meta_leak_refusals(text)
 
 
-def test_text_whose_whole_content_is_the_name_is_refused():
-    assert meta_leak_refusals("A person named Kristoffer Visted.") == [
-        "text says only that the subject has its name"
-    ]
+@pytest.mark.parametrize(
+    "text",
+    [
+        "A person named Kristoffer Visted.",
+        "A work titled «Terje Vigen»",
+        "The ballad called Terje Vigen.",
+        "A Norwegian poet named Sigbjørn Obstfelder",
+    ],
+)
+def test_text_whose_whole_content_is_the_name_is_refused(text):
+    assert meta_leak_refusals(text) == ["text says only that the subject has its name"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Opens with the formula and then says something. The unanchored
+        # version refused this, which is how a guard loses its welcome.
+        "A ballad titled Terje Vigen describes a sailor's ordeal in a storm.",
+        "A person named Kristoffer Visted who collected Norwegian folk costume.",
+        "The city called Nidaros was the seat of the archbishop.",
+    ],
+)
+def test_a_definition_that_only_starts_with_the_formula_stands(text):
+    assert meta_leak_refusals(text) == []
 
 
 def test_a_real_definition_is_not_refused():
