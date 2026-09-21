@@ -86,33 +86,40 @@ for claim, score in zip(claims, scores):
 ### Deduplicate entities with merge proposals
 
 ```python
-from limbic.amygdala import EmbeddingModel, VectorIndex, pairwise_cosine, extract_pairs
-from limbic.hippocampus import VetoMatcher, ProposalStore, ReferenceGraph, apply_merge
-from limbic.hippocampus import exact_field, initial_match, no_conflict
+from limbic.amygdala import EmbeddingModel, pairwise_cosine, extract_pairs
+from limbic.hippocampus import (
+    CandidatePair, ProposalStore, VetoMatcher, exact_field, initial_match,
+)
 
-# 1. Find candidate pairs via embedding similarity
+# 1. Find candidate pairs via embedding similarity.
+#    extract_pairs returns (i, j, score) INDICES into the input array.
 model = EmbeddingModel()
 vecs = model.embed_batch([e["name"] for e in entities])
 pairs = extract_pairs(pairwise_cosine(vecs), threshold=0.80)
 
-# 2. Filter through veto gates
-matcher = VetoMatcher(gates=[
-    initial_match("name"),
-    exact_field("birth_year"),
-    no_conflict("external_id"),
-])
-confirmed = [p for p in pairs if matcher.check_pair(p).accepted]
-
-# 3. Create merge proposals for review
+# 2. Filter through veto gates. check_pair takes a CandidatePair carrying both
+#    records, not the index tuple — the gates read fields, not embeddings.
+matcher = VetoMatcher(gates=[initial_match("name"), exact_field("birth_year")])
 store = ProposalStore("proposals/")
-for a, b, score in confirmed:
-    store.create_merge(a, b, title=f"Merge {a} into {b}", reasoning=f"Similarity {score:.2f}")
-
-# 4. After approval, cascade-merge with automatic relinking
-graph = ReferenceGraph([...])  # declare entity reference structure
-for proposal in store.list_approved():
-    apply_merge(graph, proposal.source_id, proposal.target_id, ...)
+for i, j, score in pairs:
+    a, b = entities[i], entities[j]
+    result = matcher.check_pair(CandidatePair(
+        id_a=a["id"], id_b=b["id"], fields_a=a, fields_b=b, score=score))
+    if not result.accepted:
+        print(result.reason)   # "exact_birth_year: birth_year differs: 1828 vs 1808"
+        continue
+    # 3. File a merge proposal. Refs are "type/id", not bare ids.
+    store.create_merge(f"person/{a['id']}", f"person/{b['id']}",
+                       title=f"Merge {a['name']} into {b['name']}",
+                       reasoning=f"Similarity {score:.2f}")
 ```
+
+A filed proposal is `status="pending"` in a YAML file. `ProposalStore` has **no
+preimage check**, so approving one is a string change in a file — to actually
+write, go through `hippocampus.apply.apply_proposal`, which refuses a stale or
+out-of-whitelist write. For merges that must relink every reference, build a
+`ReferenceGraph([ReferenceSpec(...)])` and call `apply_merge(graph, source_id,
+target_id, entity_type, data_loader, data_writer, data_deleter)`.
 
 ### Apply a codebook / extract / classify over N documents
 
@@ -146,8 +153,13 @@ apply_proposal(path, {"wikidata_id": qid}, preimage={"wikidata_id": MISSING},
                receipt=Path("receipts.jsonl"))
 ```
 
-See `docs/packet.md`, `docs/resolve.md`, `docs/apply.md`, and
-`docs/new-data-project-checklist.md` before starting a new data project.
+`probe(n=50)` samples 50 **packets**, not 50 items, and needs `execute=True` —
+a dry-run probe has nothing to measure and raises `LowYield` every time.
+
+See `docs/new-data-project-checklist.md` before starting a new data project,
+then `docs/packet.md`, `docs/resolve.md`, `docs/apply.md`, `docs/calls.md`
+(the cache, `request=`, replicate agreement) and `docs/cost-log.md` (the
+ledger, outcomes, forensics).
 
 ### LLM-verified batch processing with budget control
 
@@ -219,6 +231,12 @@ This is expected — cosine measures *topical* similarity, not agreement. Two cl
 - `batch_novelty()` returns `list[float]` in same order as input vectors.
 - `novelty_score()` returns a single float. Use `batch_novelty()` for bulk.
 - `classify_pairs()` expects `list[tuple[int, int]]` indices into a texts list.
+- `extract_pairs()` returns `list[tuple[int, int, float]]` — **indices**, not ids.
+  `VetoMatcher.check_pair()` takes a `CandidatePair` carrying both records.
+- `apply_proposal()` with `writer=` does **not** also update an in-memory
+  mapping; persist what the writer receives.
+- `cached_call()` requires `purpose=`, and infers `project=` from the git root
+  rather than defaulting.
 - All functions are synchronous. Async LLM calls available via `limbic.amygdala.llm`.
 
 ## Package Overview
