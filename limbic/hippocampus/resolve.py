@@ -91,6 +91,19 @@ _LANG_MAPS: dict[str, tuple[dict[str, str], dict[str, str]]] = {
     "": ({}, {}),
 }
 
+# Fold profiles. "names" is the catalogue behaviour described above and the
+# default; every gold-set number measured against this module used it. "ascii"
+# is for keys that must be plain `[0-9a-z ]`: one fixed spelling (ae for the
+# ligature, like oe; single letters for the rest), and anything outside
+# ASCII letters and digits — underscore included — separates tokens. It has no
+# second spelling, so `lang` and `expand` do not apply to it.
+_ASCII_MAP = {
+    "ø": "o", "æ": "ae", "å": "a", "ð": "d", "þ": "th", "đ": "d", "ß": "ss",
+    "œ": "oe", "ł": "l",
+}
+_ASCII_NON_WORD = re.compile(r"[^0-9a-z]+")
+FOLD_PROFILES = ("names", "ascii")
+
 # Particles that sit inside a name. Stripping them gives a second key, so
 # "Ludwig van Beethoven" also meets "Ludwig Beethoven".
 _PARTICLES = frozenset(
@@ -136,8 +149,15 @@ def _apply(text: str, table: Mapping[str, str]) -> str:
     return "".join(table.get(ch, ch) for ch in text) if table else text
 
 
-def fold(text: Any, lang: str = "nb", *, expand: bool = False) -> str:
+def fold(text: Any, lang: str = "nb", *, expand: bool = False, profile: str = "names") -> str:
     """Casefold, strip diacritics, normalise punctuation and whitespace.
+
+    `profile="names"` (default) is the language-aware fold below.
+    `profile="ascii"` yields `[0-9a-z ]` only: æ -> ae, ø -> o, å -> a, and
+    underscores, punctuation and non-Latin letters all become token breaks;
+    `lang` is ignored and `expand=True` is refused. The two are different key
+    spaces ("Næss" is "nass" in one and "naess" in the other) — fold the index
+    and the query with the same profile.
 
     `expand=False` gives the drop spelling (Bjørnson -> bjornson);
     `expand=True` gives the transliterated one (Bjørnson -> bjoernson). Index
@@ -147,8 +167,18 @@ def fold(text: Any, lang: str = "nb", *, expand: bool = False) -> str:
     numeric-looking, and `'int' object has no attribute 'lower'` is a real
     crash this replaces.
     """
+    if profile not in FOLD_PROFILES:
+        raise ValueError(f"unknown fold profile {profile!r}; use one of {FOLD_PROFILES}")
+    if text is None and profile == "ascii":
+        return ""
     if not isinstance(text, str):
         text = str(text)
+    if profile == "ascii":
+        if expand:
+            raise ValueError("the ascii fold profile has a single spelling; expand=True does not apply")
+        out = _apply(unicodedata.normalize("NFKD", text.casefold()), _ASCII_MAP)
+        out = "".join(ch for ch in out if not unicodedata.combining(ch))
+        return _ASCII_NON_WORD.sub(" ", out).strip()
     drop, expand_map = _LANG_MAPS.get(lang, _LANG_MAPS[""])
     out = _apply(text.casefold(), expand_map if expand else drop)
     out = unicodedata.normalize("NFKD", out)

@@ -56,6 +56,34 @@ class TestFold:
         assert fold("Café", lang="xx") == "cafe"
 
 
+class TestFoldProfiles:
+    def test_names_profile_is_the_default_and_unchanged(self):
+        for text in ("Næss", "Bjørnson", "snake_case", "Zauberflöte"):
+            assert fold(text) == fold(text, profile="names")
+        assert fold("Næss") == "nass"
+        assert fold("snake_case") == "snake_case"
+        assert fold("Bjørnson", expand=True, profile="names") == "bjoernson"
+
+    def test_ascii_profile(self):
+        assert fold("Næss", profile="ascii") == "naess"
+        assert fold("snake_case", profile="ascii") == "snake case"
+        assert fold("Bjørnson, Bjørnstjerne", profile="ascii") == "bjornson bjornstjerne"
+        assert fold("Zauberflöte", profile="ascii") == "zauberflote"
+        assert fold("Œuvres de Łódź", profile="ascii") == "oeuvres de lodz"
+        assert fold("Москва 1905", profile="ascii") == "1905"
+        assert fold(None, profile="ascii") == ""
+        assert fold(1984, profile="ascii") == "1984"
+
+    def test_ascii_profile_ignores_lang_and_refuses_expand(self):
+        assert fold("Zauberflöte", "de", profile="ascii") == "zauberflote"
+        with pytest.raises(ValueError, match="single spelling"):
+            fold("Næss", expand=True, profile="ascii")
+
+    def test_unknown_profile(self):
+        with pytest.raises(ValueError, match="unknown fold profile"):
+            fold("x", profile="skard")
+
+
 class TestNameKeys:
     def test_inversion(self):
         assert "henrik ibsen" in name_keys("Ibsen, Henrik")
