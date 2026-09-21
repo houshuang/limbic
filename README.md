@@ -63,6 +63,9 @@ enforces it, or marked as prose if nothing does. Then:
 | [`docs/packet.md`](docs/packet.md) | `cerebellum.packet`: the unit of work is a call, not an agent. Probes, budgets, prompt-cache rules, truncation, quote anchors |
 | [`docs/resolve.md`](docs/resolve.md) | `hippocampus.resolve`: retrieve candidates in code so a hallucinated identifier is unrepresentable |
 | [`docs/apply.md`](docs/apply.md) | `hippocampus.apply`: the model proposes, code writes |
+| [`docs/refuse.md`](docs/refuse.md) | `hippocampus.refuse`: guards that run before the write — schema refusals in dry *and* real runs, implausible life dates, prose that contradicts its own structured fields, and a declared changed-count bound |
+| [`docs/audit.md`](docs/audit.md) | `hippocampus.audit`: folding an independent audit in demote-only — it can take a decision back, never make one |
+| [`docs/blind-audit.md`](docs/blind-audit.md) | how to brief the second reader that produces that audit: different model family, full set, fixed verdict vocabulary, `cannot_tell` encouraged |
 | [`docs/proposed-batch-and-cache-lifts.md`](docs/proposed-batch-and-cache-lifts.md) | not built yet: narrow cache-key projections, and batch validation that returns partial success for retry |
 
 Three findings from that work, if you want to know whether this is worth your

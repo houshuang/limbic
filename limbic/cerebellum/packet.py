@@ -45,15 +45,21 @@ from .cost_log import cost_log, price_for
 log = logging.getLogger(__name__)
 
 __all__ = [
+    "DEFAULT_META_PHRASES",
+    "DEFAULT_VACUOUS",
+    "SLOT_ID",
     "LowYield",
     "Packet",
     "corpus_lowercase_words",
     "estimate_tokens",
     "lint_packet",
     "make_packet",
+    "meta_leak_refusals",
     "probe",
     "reanchor_quote",
+    "rendering_fidelity_refusals",
     "run_packets",
+    "slot_echo_refusal",
     "text_quote_anchor",
     "union_passes",
     "unmatched_names",
@@ -812,3 +818,219 @@ def unmatched_names(
         if raw not in found:
             found.append(raw)
     return found
+
+
+# ---------------------------------------------------------------------------
+# Output refusals
+#
+# A packet that renders or rewrites text — translate this definition, say this
+# in the other register — produces prose, and prose has no schema. Three
+# distinct defects have shipped from such stages, and three different checks
+# caught them. They stay three functions: a single `lint_output()` would force
+# every caller to accept all three sets of assumptions to get any one of them.
+#
+# The rule the whole episode teaches: any instruction you write into the prompt
+# telling the model not to do X — don't invent a year, don't describe your own
+# citation, don't answer with the item number — is also a check for X you have
+# not written yet.
+# ---------------------------------------------------------------------------
+
+# «i01», «r7», «q03» — a slot id from the packet the model was answering. One
+# packet answered every item with its own slot id and ten records went into a
+# published graph defined as "i01".
+SLOT_ID = re.compile(r"[^\W\d_]{1,2}\d{1,3}[.,]?", re.UNICODE)
+# Any word of two letters or more. Prose contains one that is lowercase; an
+# identifier and a shouted heading do not. Case is checked in Python rather
+# than in the class, so the pattern stays usable for any alphabet.
+WORD = re.compile(r"(?<![^\s])[^\W\d_]{2,}")
+MIN_RENDERING_CHARS = 12
+
+# Phrases that describe the evidence the pipeline happened to read rather than
+# the thing being described. Shipped as English only, and small: a phrase list
+# is a corpus's vocabulary, and one lifted from another corpus refuses good
+# text and misses the bad. Curate your own from what an audit actually finds
+# and pass it as `phrases`.
+DEFAULT_META_PHRASES = re.compile(
+    r"as stated in the (label|prompt|text|passage)"
+    r"|in the (label|cue|quote|given citation|supplied citation|supplied text)"
+    r"|the (supplied|given) (citation|quote|source|passage|text)"
+    r"|identified (only )?as the (source|author)"
+    r"|identified (here|in the (passage|quote|text|label|citation|account))"
+    r"|the cited (account|passage|source|text)"
+    r"|(according to|based on) the (provided|supplied|given) ",
+    re.I,
+)
+# «A person named Kristoffer Visted, identified only as the source…» — a
+# definition whose whole content is that the thing has the name it has.
+DEFAULT_VACUOUS = re.compile(r"^(a|an|the)\s+(\w+\s+){1,3}(named|titled|called)\b", re.I)
+
+_YEAR = re.compile(r"(?<!\d)\d{4}(?!\d)")
+# A word that is not sentence-initial; the capital is checked in Python so the
+# pattern does not have to enumerate an alphabet's uppercase letters.
+_CAPITALISED = re.compile(r"(?<![.!?]\s)(?<!^)\b([^\W\d_][\w’'-]{2,})")
+
+
+def _fold_default(word: str) -> str:
+    """Casefold and strip diacritics. Any language-specific rule is the caller's."""
+
+    stripped = unicodedata.normalize("NFD", word.casefold())
+    return "".join(c for c in stripped if not unicodedata.combining(c))
+
+
+def slot_echo_refusal(
+    text: str | None,
+    slot_ids: Iterable[str] = (),
+    *,
+    source: str | None = None,
+    min_chars: int = MIN_RENDERING_CHARS,
+    min_ratio: float = 0.4,
+    slot_pattern: "re.Pattern[str]" = SLOT_ID,
+    word_pattern: "re.Pattern[str]" = WORD,
+) -> str | None:
+    """Why this output is not prose at all, or None.
+
+    A cascade, first reason only: once the answer is the item number, nothing
+    else about it is worth reporting. The checks are deliberately the cheapest
+    ones that would have caught the real defect — a sentence has a space in
+    it, has a lowercase word in it, is not an identifier, and is not a small
+    fraction of what it was asked to render.
+
+    `slot_ids` are this packet's own item ids, matched exactly; `slot_pattern`
+    additionally catches the shape of an id from a packet you did not pass in.
+    `source` enables the short-side length ratio and may be omitted for a
+    generation task that has no source text.
+    """
+
+    stripped = (text or "").strip()
+    if not stripped:
+        return "empty output"
+    if stripped in set(slot_ids) or slot_pattern.fullmatch(stripped):
+        return f"output is a slot id, not a sentence: {stripped}"
+    if " " not in stripped or len(stripped) < min_chars:
+        return f"output is too short to be a sentence: {stripped[:40]}"
+    if not any(m.group(0).islower() for m in word_pattern.finditer(stripped)):
+        return f"output has no lowercase word in it: {stripped[:40]}"
+    if source and len(stripped) < min_ratio * len(source):
+        return f"output is under {min_ratio:g} of its source: {stripped[:40]}"
+    return None
+
+
+def meta_leak_refusals(
+    text: str | None,
+    *,
+    phrases: "re.Pattern[str]" = DEFAULT_META_PHRASES,
+    vacuous: "re.Pattern[str] | None" = DEFAULT_VACUOUS,
+) -> list[str]:
+    """Refuse text that describes the pipeline's own evidence instead of the subject.
+
+    "…identified only as the source", "as stated in the label". Every phrase
+    in the default list was found by a blind audit *inside an already applied
+    definition*: the prompt told the model not to write them, the model wrote
+    them anyway, and nothing between the model and the store disagreed.
+
+    `phrases` is meant to be replaced. It is per corpus and per language, and
+    the right way to build one is to read what an audit found and add exactly
+    that.
+    """
+
+    stripped = (text or "").strip()
+    out: list[str] = []
+    if stripped and phrases.search(stripped):
+        out.append("text describes the evidence rather than the subject")
+    if stripped and vacuous is not None and vacuous.match(stripped):
+        out.append("text says only that the subject has its name")
+    return out
+
+
+def rendering_fidelity_refusals(
+    source: str,
+    rendering: str | None,
+    *,
+    known_names: Iterable[str] = (),
+    exonyms: Iterable[str] = (),
+    max_ratio: float = 2.0,
+    stem: int = 4,
+    year_pattern: "re.Pattern[str]" = _YEAR,
+    exempt_years: Callable[[str, str], Iterable[str]] | None = None,
+    capitalised_pattern: "re.Pattern[str]" = _CAPITALISED,
+    fold: Callable[[str], str] = _fold_default,
+    parts: Callable[[str], Sequence[str]] = lambda word: (word,),
+) -> list[str]:
+    """Refuse a rendering that added a fact its source does not contain.
+
+    Rendering into another language or register is the one task where the
+    model has no licence to know anything: every year and every name in the
+    output has to be in the input. A rendering stage invented plausible dates
+    and plausible people, and both read as competent prose.
+
+    Not a cascade — every refusal here is separately true, so all are
+    returned. Three checks: the output is more than `max_ratio` times its
+    source; it states a year the source does not; it names a capitalised thing
+    that is in neither the source nor `known_names` nor `exonyms`.
+
+    Everything language-shaped is injectable and nothing language-shaped ships:
+    `exonyms` (the target language's own forms for names the source gives in
+    its own — Danmark for Denmark), `fold` (the comparison key: a language
+    that inflects names needs its own), `parts` (how a compound splits, for a
+    language that compounds: Norwegian's "Perth-traktaten" is the treaty of
+    Perth, not a new name), and `exempt_years` (a `(source, rendering) ->
+    years` callable, for a language that spells a century as a four-digit
+    number — bokmål's "1100-tallet" for "the twelfth century").
+
+    A name counts as known when it shares a `stem`-character prefix with a
+    known name, in both directions, after folding.
+    """
+
+    text = (rendering or "").strip()
+    if not text:
+        return ["empty rendering"]
+    out: list[str] = []
+    if len(text) > max_ratio * max(len(source), 1):
+        out.append(f"rendering is more than {max_ratio:g} times the length of its source")
+
+    exempt = set(exempt_years(source, text)) if exempt_years else set()
+    invented_years = sorted(set(year_pattern.findall(text)) - set(year_pattern.findall(source)) - exempt)
+    if invented_years:
+        out.append(f"year(s) not in the source: {', '.join(invented_years)}")
+
+    # Tokenised, not folded whole: a label is "Det gamle Hellas" and the name
+    # the rendering may use is "Hellas". Folding the label as one string hides
+    # every word in it.
+    known = {
+        fold(word)
+        for text in (source, *known_names, *exonyms)
+        for word in re.findall(r"[\w’']+", text)
+    }
+    known.discard("")
+    invented_names = sorted(
+        {word for word in capitalised_pattern.findall(text)
+         if word[:1].isupper()
+         and not _is_known_name(word, known, stem=stem, fold=fold, parts=parts)}
+    )
+    if invented_names:
+        out.append(f"name(s) not in the source: {', '.join(invented_names)}")
+    return out
+
+
+def _is_known_name(
+    word: str,
+    known: set[str],
+    *,
+    stem: int,
+    fold: Callable[[str], str],
+    parts: Callable[[str], Sequence[str]],
+) -> bool:
+    """Whether every part of a capitalised word matches a known name by stem."""
+
+    for part in parts(word):
+        key = fold(part)
+        if not key:
+            continue
+        if not any(
+            key.startswith(other[: min(stem, len(other))])
+            or other.startswith(key[: min(stem, len(key))])
+            for other in known
+            if len(other) >= 3
+        ):
+            return False
+    return True

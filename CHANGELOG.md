@@ -4,6 +4,93 @@ All notable changes to the limbic monorepo (formerly amygdala) are documented he
 
 ---
 
+## 2026-09-21 -- Guards that refuse, lifted with a fit check each
+
+A read-only survey of every QA mechanism skard and Kulturbase built against
+every incident they had found one clean division: **mechanisms that refuse a
+specific bad state worked; mechanisms that describe a state never refused
+anything.** This release lifts seven refusals and leaves the describing behind.
+
+Three of three functions lifted on 20 Sep were rejected by their own source
+project for semantic mismatch, so every function below was fit-checked against
+the project's real stored data before being committed — numbers in each doc,
+and one of the checks found a real bug in the lift.
+
+### Added
+
+- **`hippocampus.audit.apply_audit`** — folds an independent audit into a
+  settled decision set, demote-only by construction: the only disposition it
+  writes is the hold value, it never appends a record, and it re-checks that
+  invariant over its own output. Corrections must pass the caller's validator;
+  unknown ids are reported, never dropped; `source_errors` are kept as findings
+  and never applied, because a fact that is wrong in the *source* was
+  reproduced faithfully. Refuses a decision set that has no disposition field —
+  an audit folds in after reconciliation, not before.
+  **Fit check** vs skard's `demote_on_audit` over 2,925 real decisions and its
+  real `independent-audit.json`: 86 demoted on both sides, identical held sets
+  (symmetric difference 0), 0 promotions, 424/424 definition corrections
+  identical. limbic additionally reported 1 unknown id and 2 already-held rows
+  that skard passed over silently. [`docs/audit.md`](docs/audit.md)
+- **`hippocampus.refuse.schema_refusals`** — validates exactly the records an
+  apply would write, with no argument that can express "skip on a dry run":
+  `only` filters records, not runs. The defect was a check that ran on
+  `--execute` only. Includes a stdlib-only JSON Schema 2020-12 subset
+  (`json_schema_refusals`) that **raises** on an unimplemented keyword rather
+  than passing the record, so limbic still takes no schema dependency;
+  `jsonschema_backed()` swaps in the real library where a project has it.
+  **Fit check**: skard's `evidence-spine.schema.json` over 682 live concepts —
+  0 refusals, matching the gate they pass, full keyword coverage so nothing was
+  skipped; four one-field mutations refused 200/200 each.
+- **`cerebellum.packet.slot_echo_refusal` / `meta_leak_refusals` /
+  `rendering_fidelity_refusals`** — three functions, not one, because three
+  different checks caught three different defects. Covers the shipped case
+  where one packet answered every item with its own slot id and ten records
+  entered a published graph defined as `i01`. Everything language-shaped is
+  injectable; only a small English phrase list ships.
+  **Fit check** vs skard's `nb_refusals` over its 519 stored bokmål renderings:
+  **identical verdict on 519/519**, 88 refused each side, all ten `i01`…`i10`
+  echoes caught. Parameterised to get there: phrase regexes, exonym set,
+  `fold=name_key`, compound `parts`, and century `exempt_years`. The check
+  caught a real bug in the lift — known names must be tokenised the way the
+  source is, or the label "Det gamle Hellas" fails to make "Hellas" known.
+- **`hippocampus.refuse.temporal_plausibility_refusals`** — refuses a
+  machine-derived death inside living memory and an exact-year life over a
+  century. `living_year` is a required argument and ships as no constant: it is
+  a statement about now. **Fit check** vs skard's `extent_refusals`: identical
+  on 682/682 concepts.
+- **`hippocampus.refuse.dates_disagree`** *(new — no reference implementation
+  existed)* — refuses a record whose prose contradicts its own structured
+  dates, the `peter-kolbjornsen` case (prose 1687–1737, extent 1683–1738) that
+  neither project's guards could see because one read definitions and the other
+  read extents. Conservative by measurement, not by taste: matching any year
+  range fired on 74 of 580 real pairs and was mostly reporting that a reign is
+  not a life, so the default fires only on a *fenced* range or a birth/death
+  pair. At that setting, 4 of 580 flagged — 2 real, 2 false positives of one
+  kind (a monument carrying the commemorated person's dates).
+- **`hippocampus.refuse.expect` / `declared_count`** *(new)* — a step declares
+  how many records it will change and raises on the way out if it did not.
+  "A commit promising 6 changes touched 3,963 files." This closes
+  **checklist item 2.7**, which said **CODE** while no code existed in any
+  project; that row now names the function.
+- **[`docs/blind-audit.md`](docs/blind-audit.md)** — the brief for the second
+  reader that produces an audit file: different model family, blind to earlier
+  reads *and* earlier audits, the full set rather than a sample when it is
+  cheap (a sample almost never contains both members of a duplicate pair), a
+  fixed `right`/`wrong`/`cannot_tell` vocabulary with `cannot_tell`
+  encouraged, non-`ok` rows only, corrections supplied rather than described.
+
+### Not built, deliberately
+
+- **Paid-artefact registry** — design note in
+  [`docs/proposed-paid-artefact-registry.md`](docs/proposed-paid-artefact-registry.md).
+  Its acceptance test is a fit check against a plan/packet/run/cache directory
+  layout, and that layout is the part that varies most between projects. Build
+  it when a second project has a tree to check against.
+- **`apply_batch` + rollback** — still deferred; see
+  [`docs/proposed-batch-and-cache-lifts.md`](docs/proposed-batch-and-cache-lifts.md).
+
+---
+
 ## 2026-09-21 -- The library meets its first consumers
 
 On 20 Sep no consumer had migrated to the functions lifted the day before. That

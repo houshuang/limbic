@@ -182,3 +182,63 @@ with `cached_call(request=...)`: those exact bytes are posted and the response
 cache is keyed on them, so adopting the ledger does not re-key anything you have
 already bought. This is what let one consumer migrate with request bytes
 identical on 850 of 850 stored passes. See [`docs/calls.md`](calls.md).
+
+## Output refusals: what to do when the output is prose
+
+A packet that renders or rewrites text — translate this definition, say this in
+the other register — produces prose, and prose has no schema. Three defects
+have shipped from such stages, and three different checks caught them, so they
+stay three functions. One `lint_output()` would force every caller to accept
+all three sets of assumptions to get any one of them.
+
+The rule the whole episode teaches: **any instruction you write into the prompt
+telling the model not to do X is also a check for X that you have not written
+yet.** "Don't invent a year." "Don't describe your own citation." "Don't answer
+with the item number." All three were in the prompt. All three happened.
+
+| Function | Refuses |
+|---|---|
+| `slot_echo_refusal(text, slot_ids, *, source=None)` | output that is not prose at all: the item's own slot id, no space, no lowercase word, a fraction of its source. First reason only — once the answer is the item number, nothing else about it is worth reporting |
+| `meta_leak_refusals(text, *, phrases=…)` | text that describes the pipeline's evidence rather than the subject ("identified only as the source"), and text whose whole content is that the thing has its name |
+| `rendering_fidelity_refusals(source, rendering, *, exonyms=…, fold=…, parts=…)` | a rendering that added a fact its source does not contain: a year not in the source, a capitalised name in neither the source nor the caller's known names, or more than `max_ratio` times the length |
+
+```python
+def refusals(english: str, rendering: str, labels: list[str]) -> list[str]:
+    first = slot_echo_refusal(rendering, source=english)
+    if first:
+        return [first]
+    return [
+        *meta_leak_refusals(rendering, phrases=MY_CORPUS_PHRASES),
+        *rendering_fidelity_refusals(
+            english, rendering, known_names=labels, exonyms=MY_EXONYMS,
+            fold=my_name_key, parts=lambda w: re.split(r"[-–—]", w)[:1],
+        ),
+    ]
+```
+
+The shipped defect this comes from: one packet answered every item with its own
+slot id, and ten records went into a published graph *defined as* `i01`.
+Nothing between the model and the store looked at whether the answer was a
+sentence.
+
+**Words stay in your project, shape comes from here.** Everything
+language-shaped is injectable and almost nothing language-shaped ships: the
+exonym set (the target language's own forms for names the source gives in its
+own — Danmark for Denmark), `fold` (the comparison key — a language that
+inflects names needs its own), `parts` (how a compound splits), and
+`exempt_years` (for a language that spells a century as a four-digit number,
+like bokmål's "1100-tallet"). `DEFAULT_META_PHRASES` is the one default, and it
+is English-only and small on purpose: a phrase list is a corpus's vocabulary,
+and one lifted from another corpus refuses good text and misses the bad.
+Curate yours from what an audit actually finds.
+
+**Fit check.** skard's 519 stored bokmål renderings, run through its own
+`nb_refusals` and through the composition above: **identical verdict on
+519/519**, 88 refused on each side, including all ten `i01`…`i10` slot echoes.
+The refusal *wording* differs on all 88 (limbic says "output", skard says
+"rendering"); the verdicts do not. Parameterised to get there: the phrase
+regexes, the exonym set, `fold=name_key` (Norwegian name morphology),
+`parts` (leading element of a hyphenated compound) and `exempt_years` (the
+century form). One bug was found by the fit check and fixed: known names must
+be tokenised like the source, not folded whole, or the label "Det gamle
+Hellas" fails to make "Hellas" a known name.
