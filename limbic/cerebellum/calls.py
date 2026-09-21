@@ -55,7 +55,7 @@ from typing import Any, Callable, Literal
 from limbic.amygdala import connect
 
 from .claude_cli import generate as _claude_cli_generate
-from .cost_log import cost_log, price_for
+from .cost_log import cost_for, cost_log
 
 log = logging.getLogger(__name__)
 
@@ -288,7 +288,7 @@ def _openai_generate(
     `packet_id` and `ledger_metadata` land on that row.
 
     Structured output via a strict `json_schema` text format. Self-logs to
-    `cost_log` via `price_for` (so an unpriced model logs a visible $0 with a
+    `cost_log` via `cost_for` (so an unpriced model logs a visible $0 with a
     warning rather than the call itself failing). The response's own `id` is
     stored in both the ledger row and (via the returned metadata) the cache
     entry, as `response_id` — a response is retained by OpenAI for 30 days by
@@ -349,8 +349,7 @@ def _openai_generate(
     input_tokens = usage.get("input_tokens") or 0
     cached_tokens = (usage.get("input_tokens_details") or {}).get("cached_tokens") or 0
     output_tokens = usage.get("output_tokens") or 0
-    inp_price, out_price = price_for(model, strict=False)
-    cost_usd = (input_tokens * inp_price + output_tokens * out_price) / 1_000_000
+    cost_usd = cost_for(model, input_tokens, output_tokens, cached_tokens, strict=False)
 
     response_id = data.get("id")
     record = cost_log.log(
@@ -403,7 +402,7 @@ def _gemini_generate(
 ) -> tuple[Any, dict]:
     """Built-in transport: Gemini REST via stdlib `urllib` — deliberately not
     the `google-genai` SDK (see module-section docstring above). Self-logs to
-    `cost_log` via `price_for`. Unlike the OpenAI Responses API, Gemini's
+    `cost_log` via `cost_for`. Unlike the OpenAI Responses API, Gemini's
     `generateContent` is stateless — there's no `GET`-by-id endpoint — so its
     `responseId` (when present) is recorded for provenance only, not as a
     "fetch it back" capability.
@@ -453,8 +452,7 @@ def _gemini_generate(
     input_tokens = usage.get("promptTokenCount", 0)
     output_tokens = usage.get("candidatesTokenCount", 0)
     cached_tokens = usage.get("cachedContentTokenCount", 0)
-    inp_price, out_price = price_for(model, strict=False)
-    cost_usd = (input_tokens * inp_price + output_tokens * out_price) / 1_000_000
+    cost_usd = cost_for(model, input_tokens, output_tokens, cached_tokens, strict=False)
 
     response_id = data.get("responseId")
     record = cost_log.log(

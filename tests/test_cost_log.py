@@ -11,6 +11,9 @@ from limbic.cerebellum.cost_log import (
     CostLog,
     UnknownModelPriceError,
     _migrate_columns,
+    cached_input_price_for,
+    compute_cost,
+    cost_for,
     price_for,
     record_outcome,
 )
@@ -238,3 +241,53 @@ class TestLogTimestamp:
                       ts=datetime(2026, 9, 12, 8, 15, 30)).ts == "2026-09-12T08:15:30.000000Z"
         assert cl.log(project="p", model="m", cost_usd=0.0,
                       ts="2026-09-12T10:15:30+02:00").ts == "2026-09-12T08:15:30.000000Z"
+
+
+# ---------------------------------------------------------------------------
+# Cached-input pricing
+# ---------------------------------------------------------------------------
+
+class TestCachedInputPricing:
+    def test_openai_cached_rate(self):
+        assert cached_input_price_for("gpt-5.4-mini") == 0.075
+        assert cached_input_price_for("openai/gpt-4.1-mini") == 0.10
+
+    def test_gemini_cached_rate(self):
+        assert cached_input_price_for("gemini-2.5-flash") == 0.03
+
+    def test_priced_model_without_a_known_discount_pays_full_input(self):
+        assert cached_input_price_for("claude-haiku-4-5-20251001") == 1.00
+
+    def test_unknown_model_strict_and_not(self):
+        with pytest.raises(UnknownModelPriceError):
+            cached_input_price_for("totally-made-up-model-xyz")
+        assert cached_input_price_for("totally-made-up-model-xyz", strict=False) == 0.0
+        assert cost_for("totally-made-up-model-xyz", 1000, 10, 500, strict=False) == 0.0
+        with pytest.raises(UnknownModelPriceError):
+            cost_for("totally-made-up-model-xyz", 1000, 10)
+
+    def test_cost_for_bills_the_cached_share_at_the_cached_rate(self):
+        # 5000 input of which 4096 cached, 200 output, gpt-5.4-mini 0.75 / 0.075 / 4.50
+        expected = (904 * 0.75 + 4096 * 0.075 + 200 * 4.50) / 1_000_000
+        assert cost_for("gpt-5.4-mini", 5000, 200, 4096) == pytest.approx(expected)
+
+    def test_no_cached_tokens_is_the_old_formula(self):
+        assert cost_for("gpt-5.4-mini", 5000, 200) == pytest.approx((5000 * 0.75 + 200 * 4.50) / 1_000_000)
+
+    def test_cached_never_exceeds_prompt(self):
+        assert cost_for("gpt-5.4-mini", 100, 0, 999) == pytest.approx(100 * 0.075 / 1_000_000)
+
+    def test_compute_cost_applies_the_discount(self):
+        assert compute_cost("gpt-5.4-mini", 5000, 200, 4096) == pytest.approx(cost_for("gpt-5.4-mini", 5000, 200, 4096))
+        assert compute_cost("gpt-5.4-mini", 5000, 200) == pytest.approx(cost_for("gpt-5.4-mini", 5000, 200))
+        assert compute_cost("totally-made-up-model-xyz", 5000, 200, 4096) is None
+
+    def test_existing_rows_are_not_repriced(self, tmp_path):
+        cl = CostLog(db_path=tmp_path / "c.db")
+        full_rate = (5000 * 0.75 + 200 * 4.50) / 1_000_000
+        old = cl.log(project="skard", model="gpt-5.4-mini", prompt_tokens=5000,
+                     completion_tokens=200, cached_tokens=4096, cost_usd=full_rate)
+        cl.log(project="skard", model="gpt-5.4-mini", prompt_tokens=5000,
+               completion_tokens=200, cached_tokens=4096)
+        rows = {r["id"]: r["cost_usd"] for r in CostLog(db_path=tmp_path / "c.db").query()}
+        assert rows[old.id] == pytest.approx(full_rate)

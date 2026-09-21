@@ -157,6 +157,36 @@ _FALLBACK_PRICES: dict[str, tuple[float, float]] = {  # (input/M, output/M)
 }
 
 
+# Cached-input prices (USD per 1M tokens): what the provider bills for the part
+# of `prompt_tokens` it served from its prompt cache. Sources, both read on
+# 2026-09-21: OpenAI https://developers.openai.com/api/docs/pricing (standard
+# tier, "Cached input"); Gemini https://ai.google.dev/gemini-api/docs/pricing
+# (paid tier, "Context caching", page dated 2026-09-16; gemini-2.0-flash from
+# its earlier listing). Anthropic is left out on purpose: its cache has a
+# separate write surcharge that a single cached-token count cannot express.
+# A model absent here is billed at the full input price — never guessed.
+_CACHED_INPUT_PRICES: dict[str, float] = {
+    "gpt-5.6-sol":            0.40,
+    "gpt-5.6-terra":          0.20,
+    "gpt-5.6-luna":           0.02,
+    "gpt-5.5":                0.50,
+    "gpt-5.4-mini":           0.075,
+    "gpt-5.4-nano":           0.02,
+    "gpt-4.1-mini":           0.10,
+    "gpt-4.1-nano":           0.025,
+    "gemini-2.0-flash":       0.025,
+    "gemini-2.5-flash":       0.03,
+    "gemini-2.5-flash-lite":  0.01,
+    "gemini-2.5-pro":         0.125,
+    "gemini-3-flash-preview": 0.05,
+    "gemini-3.1-flash-lite":  0.025,
+    "gemini-3.1-pro-preview": 0.20,
+    "gemini-3.5-flash":       0.15,
+    "gemini-3.5-flash-lite":  0.03,
+    "gemini-3.8-flash":       0.075,
+}
+
+
 def _format_ts(ts: str | datetime | None) -> str:
     if ts is None:
         moment = datetime.now(timezone.utc)
@@ -191,11 +221,19 @@ def compute_cost(model: str, prompt_tokens: int, completion_tokens: int,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )
-        return float(prompt_cost + compl_cost)
-    except ImportError:
-        return _fallback_cost(model, prompt_tokens, completion_tokens)
+        cost = float(prompt_cost + compl_cost)
     except Exception:
-        return _fallback_cost(model, prompt_tokens, completion_tokens)
+        cost = _fallback_cost(model, prompt_tokens, completion_tokens)
+    if cost is None or not cached_tokens:
+        return cost
+    return max(0.0, cost - _cached_discount(model, prompt_tokens, cached_tokens))
+
+
+def _cached_discount(model: str, prompt_tokens: int, cached_tokens: int) -> float:
+    """USD to take off a full-input-price cost for the cached share of the prompt."""
+    inp, _ = price_for(model, strict=False)
+    cached_price = cached_input_price_for(model, strict=False)
+    return min(cached_tokens, prompt_tokens) * max(0.0, inp - cached_price) / 1_000_000
 
 
 class UnknownModelPriceError(ValueError):
@@ -233,6 +271,51 @@ def price_for(model: str, *, strict: bool = True) -> tuple[float, float]:
         )
     log.warning("no known price for model %r; treating as $0/1M (strict=False)", model)
     return (0.0, 0.0)
+
+
+def cached_input_price_for(model: str, *, strict: bool = True) -> float:
+    """USD per 1M *cached* input tokens for a model.
+
+    litellm's `cache_read_input_token_cost` first, then `_CACHED_INPUT_PRICES`
+    (OpenAI and Gemini list prices read 2026-09-21 — see the table's comment
+    for the URLs). A priced model with no known cached rate returns its full
+    input price, so an unknown discount is never invented; an unpriced model
+    follows `price_for`'s `strict` behaviour.
+    """
+    try:
+        import litellm
+        cached = litellm.get_model_info(model).get("cache_read_input_token_cost")
+        if cached is not None:
+            return float(cached) * 1_000_000
+    except Exception:
+        pass
+    known = _CACHED_INPUT_PRICES.get(model)
+    if known is None:
+        known = _CACHED_INPUT_PRICES.get(model.rsplit("/", 1)[-1])
+    if known is not None:
+        return known
+    return price_for(model, strict=strict)[0]
+
+
+def cost_for(model: str, prompt_tokens: int, completion_tokens: int,
+             cached_tokens: int = 0, *, strict: bool = True) -> float:
+    """USD for one call: fresh input, cached input and output each at its own rate.
+
+    `prompt_tokens` is the provider's total input count and *includes*
+    `cached_tokens` (the OpenAI `input_tokens` / Gemini `promptTokenCount`
+    convention), so the cached share is billed at `cached_input_price_for`
+    and only the remainder at the full input price.
+
+    Ledger rows written before 2026-09-21 billed every input token at the
+    full rate and therefore overstate calls that hit a provider prompt cache.
+    They are left as written: `cached_tokens` is on each row, so the
+    difference is recomputable, and a total that silently changed under a
+    reader would be worse than one that is known to run high.
+    """
+    inp, out = price_for(model, strict=strict)
+    cached = min(max(cached_tokens or 0, 0), prompt_tokens or 0)
+    cached_price = cached_input_price_for(model, strict=False) if cached else 0.0
+    return ((prompt_tokens - cached) * inp + cached * cached_price + completion_tokens * out) / 1_000_000
 
 
 # ---------------------------------------------------------------------------

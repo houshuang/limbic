@@ -411,6 +411,7 @@ class TestRawRequestPassthrough:
         assert billed["purpose"] == "packet-coding:v7"
         assert billed["packet_id"] == "src-1:p003"
         assert (billed["prompt_tokens"], billed["cached_tokens"]) == (5000, 4096)
+        assert billed["cost_usd"] == pytest.approx((904 * 0.75 + 4096 * 0.075 + 20 * 4.50) / 1_000_000)
         billed_meta = json.loads(billed["metadata"])
         assert billed_meta["response_id"] == "resp_abc123"
         assert billed_meta["source_id"] == "src-1"
