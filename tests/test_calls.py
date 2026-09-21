@@ -314,3 +314,22 @@ class TestBilledCallSurvivesBookkeepingFailure:
         )
         assert result == "paid answer"
         assert meta.cache_hit is False
+
+
+def test_cerebellum_imports_without_numpy_or_amygdala():
+    """A packet runner that only posts requests and writes ledger rows must not
+    need numpy installed, nor pay the embedding stack's import time."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    code = (
+        "import sys\n"
+        "import limbic.cerebellum\n"
+        "from limbic.cerebellum import cached_call, run_packets, CostLog\n"
+        "heavy = [m for m in ('numpy', 'yaml', 'limbic.amygdala') if m in sys.modules]\n"
+        "assert not heavy, heavy\n"
+    )
+    root = Path(__file__).resolve().parent.parent
+    done = subprocess.run([sys.executable, "-c", code], cwd=root, capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr

@@ -52,7 +52,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Literal
 
-from limbic.amygdala import connect
+from limbic._sqlite import connect
 
 from .claude_cli import generate as _claude_cli_generate
 from .cost_log import cost_for, cost_log
