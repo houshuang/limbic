@@ -41,6 +41,25 @@ def test_the_input_is_never_mutated():
     assert DECISIONS == before
 
 
+def test_conflicting_hold_rows_for_one_id_stay_held():
+    """Two audit rows disagree about c1 -- one holds it, the other tries to
+    release it by asserting its own disposition. The row that arrives first
+    wins the demotion and the release attempt is reported, never applied."""
+
+    out, report = apply_audit(
+        DECISIONS,
+        {"citations": [
+            {"citation_key": "c1", "note": "wrong person"},
+            {"citation_key": "c1", "note": "actually right, unhold it", "disposition": "new"},
+        ]},
+        key_fields=KEYS, hold_sections=("citations",),
+    )
+    assert out[0]["disposition"] == "hold"
+    assert out[0]["audit_note"] == "wrong person"
+    assert report["demoted"] == 1
+    assert report["already_held"] == [{"section": "citations", "key": "c1"}]
+
+
 def test_an_audit_that_tries_to_promote_cannot():
     """The audit file's own words do not decide the disposition; the fold-in does."""
 

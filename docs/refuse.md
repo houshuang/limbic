@@ -63,12 +63,19 @@ limbic takes no dependency for this. `validate=` accepts any
 returns one built on the real library if a project has it installed.
 
 **Fit check.** Against skard's `evidence-spine.schema.json` and its 682 live
-graph concepts: 0 refusals, matching the gate those concepts pass today; the
-schema's full keyword set is supported, so nothing was skipped. Four
-one-field mutations (drop `id`, drop `type`, an out-of-enum type, an id with
-spaces) were refused on 200/200 concepts each. Exact message-text equality with
-`jsonschema` could not be measured — it is not installed on this machine and
-skard's own `concept_schema_refusals` raises without it.
+graph concepts: 0 pure-schema refusals; the schema's full keyword set is
+supported, so nothing was skipped. Four one-field mutations (drop `id`, drop
+`type`, an out-of-enum type, an id with spaces) were refused on 200/200
+concepts each. Exact message-text equality with `jsonschema` could not be
+measured — it is not installed on this machine and skard's own
+`concept_schema_refusals` raises without it.
+
+Not full parity: skard's own `concept_schema_refusals` bundles a meta-leak
+check alongside the JSON Schema check and flags 2 of the 682 concepts on that
+basis — `schema_refusals` alone reports 0, correctly, since those 2 are schema-
+valid and the meta-leak check only runs when passed as `extra_checks`. "0
+refusals" above means the schema portion agrees with the schema portion of
+skard's gate, not that the two functions produce an identical set end to end.
 
 ## `temporal_plausibility_refusals`
 

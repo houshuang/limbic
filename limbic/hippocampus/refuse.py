@@ -179,8 +179,14 @@ def _errors(
         if "maxLength" in schema and len(value) > schema["maxLength"]:
             out.append(at(f"{value!r} is too long"))
         fmt = schema.get("format")
-        if fmt in _FORMATS and not _FORMATS[fmt].match(value):
-            out.append(at(f"{value!r} is not a {fmt!r}"))
+        if fmt is not None:
+            if fmt not in _FORMATS:
+                raise SchemaSupportError(
+                    f"schema at {path or '<root>'} uses format {fmt!r}, which this subset "
+                    "does not check: pass validate=jsonschema_backed(schema) instead"
+                )
+            if not _FORMATS[fmt].match(value):
+                out.append(at(f"{value!r} is not a {fmt!r}"))
 
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         if "minimum" in schema and value < schema["minimum"]:

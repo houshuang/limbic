@@ -121,6 +121,15 @@ def test_an_unsupported_keyword_raises_instead_of_passing_the_record():
         json_schema_refusals({"a": "x"}, {"properties": {"a": {"contentEncoding": "base64"}}})
 
 
+def test_an_unrecognized_format_value_raises_instead_of_passing_silently():
+    """`format` is in _SUPPORTED, so an unrecognized value (e.g. "uuid") slipped
+    past the unsupported-keyword gate and validated everything as clean -- the
+    exact vacuous pass this module exists to refuse."""
+
+    with pytest.raises(SchemaSupportError, match="uuid"):
+        json_schema_refusals({"a": "not-a-uuid"}, {"properties": {"a": {"format": "uuid"}}})
+
+
 def test_a_bool_is_not_an_integer():
     assert json_schema_refusals({"n": True}, {"properties": {"n": {"type": "integer"}}})
 
