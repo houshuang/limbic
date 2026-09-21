@@ -71,8 +71,8 @@ time before reading further:
   and **≈40K** as one stateless structured-output call — same model, same work.
 - A campaign with 12.3k lines of machinery, 26 prompt versions and 13 test files
   produced **0 writes**, while a plain deterministic join next door produced
-  2,336 of 2,342 proposals. Nobody had run a 50-packet yield probe. `probe()`
-  now raises rather than reports.
+  2,336 of 2,342 proposals. Nobody had run a yield probe first. `probe()` now
+  raises rather than reports.
 - Of 901 Wikidata QIDs audited in one catalogue, **198 pointed at something that
   was not that work**, and every one passed an existence check. *Et dukkehjem*
   resolved to Ramon Llull. Hence `wikidata_type_is`, not just `wikidata_exists`.
@@ -104,7 +104,7 @@ Three things decide most outcomes, and two of them bite quietly:
   0.7–0.9 band and clustering, novelty and search all degrade together.
 - **Sweep the clustering threshold; never inherit one.** Whitening moves the
   whole distribution, so a threshold that worked elsewhere can return *zero*
-  clusters here — on a 40-text corpus above, whitening left a maximum pairwise
+  clusters here — in one 40-text corpus, whitening left a maximum pairwise
   similarity of 0.845, so a 0.85 threshold matched nothing at all. Start at 0.75
   and sweep [0.70, 0.75, 0.80, 0.85].
 - **Don't score items against an index that contains them.** Each item is then
