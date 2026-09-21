@@ -119,6 +119,7 @@ class CallMeta:
     prompt_sha256: str
     system_sha256: str
     schema_sha256: str
+    request_sha256: str = ""  # set instead of the three above when `request=` was passed
     replicate_metas: list[dict] | None = None
     raw: dict = field(default_factory=dict)  # transport-native metadata (session_id, turns, ...)
 
@@ -222,11 +223,22 @@ class TransportError(RuntimeError):
     or a response that doesn't contain the expected output."""
 
 
+def canonical_bytes(value: Any) -> bytes:
+    """The one serialisation of a request body: sorted keys, no whitespace,
+    UTF-8 without ASCII escaping. A provider's prompt cache keys off a
+    byte-identical prefix, so the bytes hashed for the response cache and the
+    bytes posted must be the same bytes — this is the only place they are made."""
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
 def _http_post_json(url: str, payload: dict, *, headers: dict, timeout: int) -> dict:
+    return _http_post_bytes(url, json.dumps(payload).encode("utf-8"), headers=headers, timeout=timeout)
+
+
+def _http_post_bytes(url: str, body: bytes, *, headers: dict, timeout: int) -> dict:
     import urllib.error
     import urllib.request
 
-    body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         url, data=body, method="POST",
         headers={"Content-Type": "application/json", **headers},
@@ -260,9 +272,20 @@ def _extract_openai_text(data: dict) -> str:
 
 def _openai_generate(
     prompt: str, *, project: str, purpose: str, system: str = "", schema: dict | None = None,
-    model: str = "gpt-5.4-mini", max_output_tokens: int = 4096, timeout: int = 120, **_ignored: Any,
+    model: str = "gpt-5.4-mini", max_output_tokens: int = 4096, timeout: int = 120,
+    request: bytes | None = None, packet_id: str | None = None,
+    ledger_metadata: dict | None = None, **_ignored: Any,
 ) -> tuple[Any, dict]:
     """Built-in transport: OpenAI Responses API via stdlib `urllib`.
+
+    With `request` (the exact body bytes, as `cached_call(request=...)` hands
+    them over) nothing is rebuilt: those bytes are posted unchanged, the model
+    is read from the body, and the result is the provider's raw response dict
+    rather than extracted text — a caller that built the request by hand
+    (`input` structure, `reasoning`, `prompt_cache_key`, its own schema name)
+    parses the response by hand too, including a truncated one. Usage, cached
+    tokens, response id and the ledger row are captured the same either way;
+    `packet_id` and `ledger_metadata` land on that row.
 
     Structured output via a strict `json_schema` text format. Self-logs to
     `cost_log` via `price_for` (so an unpriced model logs a visible $0 with a
@@ -290,31 +313,42 @@ def _openai_generate(
     if not api_key:
         raise TransportError("OPENAI_KEY or OPENAI_API_KEY is not set")
 
-    payload: dict[str, Any] = {"model": model, "input": prompt, "max_output_tokens": max_output_tokens}
-    if system:
-        payload["instructions"] = system
-    if schema:
-        payload["text"] = {"format": {"type": "json_schema", "name": "response", "strict": True, "schema": schema}}
+    if request is not None:
+        body = request
+        model = json.loads(body).get("model") or model
+    else:
+        payload: dict[str, Any] = {"model": model, "input": prompt, "max_output_tokens": max_output_tokens}
+        if system:
+            payload["instructions"] = system
+        if schema:
+            payload["text"] = {"format": {"type": "json_schema", "name": "response", "strict": True, "schema": schema}}
+    extra = dict(ledger_metadata or {})
 
     t0 = time.time()
     try:
-        data = _http_post_json(
-            "https://api.openai.com/v1/responses", payload,
-            headers={"Authorization": f"Bearer {api_key}"}, timeout=timeout,
-        )
+        url = "https://api.openai.com/v1/responses"
+        auth = {"Authorization": f"Bearer {api_key}"}
+        if request is not None:
+            data = _http_post_bytes(url, body, headers=auth, timeout=timeout)
+        else:
+            data = _http_post_json(url, payload, headers=auth, timeout=timeout)
     except TransportError as e:
         cost_log.log(project=project, model=model, purpose=purpose, script="cached_call.openai",
-                     cost_usd=0.0, metadata={"failed": True, "error": str(e)[:500]})
+                     cost_usd=0.0, outcome="error", packet_id=packet_id,
+                     metadata={**extra, "failed": True, "error": str(e)[:500]})
         raise
     duration_s = time.time() - t0
 
-    text = _extract_openai_text(data)
-    result = json.loads(text) if schema else text
+    if request is not None:
+        result = data
+    else:
+        text = _extract_openai_text(data)
+        result = json.loads(text) if schema else text
 
     usage = data.get("usage") or {}
-    input_tokens = usage.get("input_tokens", 0)
-    cached_tokens = (usage.get("input_tokens_details") or {}).get("cached_tokens", 0)
-    output_tokens = usage.get("output_tokens", 0)
+    input_tokens = usage.get("input_tokens") or 0
+    cached_tokens = (usage.get("input_tokens_details") or {}).get("cached_tokens") or 0
+    output_tokens = usage.get("output_tokens") or 0
     inp_price, out_price = price_for(model, strict=False)
     cost_usd = (input_tokens * inp_price + output_tokens * out_price) / 1_000_000
 
@@ -322,7 +356,8 @@ def _openai_generate(
     record = cost_log.log(
         project=project, model=model, purpose=purpose, script="cached_call.openai",
         prompt_tokens=input_tokens, completion_tokens=output_tokens, cached_tokens=cached_tokens,
-        cost_usd=cost_usd, metadata={"duration_s": round(duration_s, 2), "response_id": response_id},
+        cost_usd=cost_usd, packet_id=packet_id,
+        metadata={**extra, "duration_s": round(duration_s, 2), "response_id": response_id},
     )
     return result, {
         "cost": cost_usd, "model": model, "call_id": record.id, "duration_s": duration_s,
@@ -362,42 +397,57 @@ def _extract_gemini_text(data: dict) -> str:
 
 def _gemini_generate(
     prompt: str, *, project: str, purpose: str, system: str = "", schema: dict | None = None,
-    model: str = "gemini-2.5-flash", max_output_tokens: int = 8192, timeout: int = 120, **_ignored: Any,
+    model: str = "gemini-2.5-flash", max_output_tokens: int = 8192, timeout: int = 120,
+    request: bytes | None = None, packet_id: str | None = None,
+    ledger_metadata: dict | None = None, **_ignored: Any,
 ) -> tuple[Any, dict]:
     """Built-in transport: Gemini REST via stdlib `urllib` — deliberately not
     the `google-genai` SDK (see module-section docstring above). Self-logs to
     `cost_log` via `price_for`. Unlike the OpenAI Responses API, Gemini's
     `generateContent` is stateless — there's no `GET`-by-id endpoint — so its
     `responseId` (when present) is recorded for provenance only, not as a
-    "fetch it back" capability."""
+    "fetch it back" capability.
+
+    `request`, `packet_id` and `ledger_metadata` behave as in the `openai`
+    transport, except that a `generateContent` body does not name its model,
+    so `model` still selects the endpoint."""
     if not project:
         raise ValueError("project is required (used for cost_log attribution)")
     api_key = os.environ.get("GEMINI_KEY") or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
         raise TransportError("GEMINI_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY is not set")
 
-    payload: dict[str, Any] = {
-        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "generationConfig": {"maxOutputTokens": max_output_tokens},
-    }
-    if system:
-        payload["systemInstruction"] = {"parts": [{"text": system}]}
-    if schema:
-        payload["generationConfig"]["responseMimeType"] = "application/json"
-        payload["generationConfig"]["responseSchema"] = _strip_gemini_schema(schema)
+    if request is None:
+        payload: dict[str, Any] = {
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {"maxOutputTokens": max_output_tokens},
+        }
+        if system:
+            payload["systemInstruction"] = {"parts": [{"text": system}]}
+        if schema:
+            payload["generationConfig"]["responseMimeType"] = "application/json"
+            payload["generationConfig"]["responseSchema"] = _strip_gemini_schema(schema)
+    extra = dict(ledger_metadata or {})
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
     t0 = time.time()
     try:
-        data = _http_post_json(url, payload, headers={}, timeout=timeout)
+        if request is not None:
+            data = _http_post_bytes(url, request, headers={}, timeout=timeout)
+        else:
+            data = _http_post_json(url, payload, headers={}, timeout=timeout)
     except TransportError as e:
         cost_log.log(project=project, model=model, purpose=purpose, script="cached_call.gemini",
-                     cost_usd=0.0, metadata={"failed": True, "error": str(e)[:500]})
+                     cost_usd=0.0, outcome="error", packet_id=packet_id,
+                     metadata={**extra, "failed": True, "error": str(e)[:500]})
         raise
     duration_s = time.time() - t0
 
-    text = _extract_gemini_text(data)
-    result = json.loads(text) if schema else text
+    if request is not None:
+        result = data
+    else:
+        text = _extract_gemini_text(data)
+        result = json.loads(text) if schema else text
 
     usage = data.get("usageMetadata") or {}
     input_tokens = usage.get("promptTokenCount", 0)
@@ -410,7 +460,8 @@ def _gemini_generate(
     record = cost_log.log(
         project=project, model=model, purpose=purpose, script="cached_call.gemini",
         prompt_tokens=input_tokens, completion_tokens=output_tokens, cached_tokens=cached_tokens,
-        cost_usd=cost_usd, metadata={"duration_s": round(duration_s, 2), "response_id": response_id},
+        cost_usd=cost_usd, packet_id=packet_id,
+        metadata={**extra, "duration_s": round(duration_s, 2), "response_id": response_id},
     )
     return result, {
         "cost": cost_usd, "model": model, "call_id": record.id, "duration_s": duration_s,
@@ -441,7 +492,7 @@ def _resolve_transport(transport: str | Callable[..., tuple[Any, dict]]) -> Call
 
 
 def cached_call(
-    prompt: str,
+    prompt: str = "",
     *,
     project: str = "",
     purpose: str,
@@ -455,11 +506,26 @@ def cached_call(
     replicates: int = 1,
     agree: int | None = None,
     cache_db_path: str | Path | None = None,
+    request: dict | bytes | None = None,
+    cache_key: str | None = None,
     **transport_kwargs: Any,
 ) -> tuple[Any | Held, CallMeta]:
     """Call an LLM transport once, cached by (model, system, prompt, schema, version).
 
     Args:
+        request: A fully built provider request body, in place of
+            prompt/system/schema. A dict is serialised once with
+            `canonical_bytes`; bytes are taken as they are. Those exact bytes
+            are what the transport posts and what the response cache is keyed
+            on (with `version`), so a provider prompt cache that depends on a
+            byte-identical prefix survives the trip. The result is the
+            provider's raw response dict. The built-in `openai` and `gemini`
+            transports accept it; a callable transport receives it as the
+            `request=` keyword. Not combinable with `replicates` — give each
+            replicate its own `cache_key` instead.
+        cache_key: Caller-supplied response-cache key, replacing the derived
+            one (e.g. a key that carries a replicate number or a packet's own
+            input hash).
         project: Attribution tag for cost_log rows. If empty, inferred from
             the enclosing git repo's directory name; raises if that fails.
         purpose: Required. Task label (e.g. "extract_claims"). A ledger row
@@ -495,10 +561,30 @@ def cached_call(
     project = project or _infer_project()
     fn = _resolve_transport(transport)
 
-    prompt_sha = _hash(prompt)
-    system_sha = _hash(system) if system else ""
-    schema_sha = _hash(json.dumps(schema, sort_keys=True)) if schema else ""
-    key = _cache_key(model=model, system=system, prompt=prompt, schema=schema, version=version)
+    request_sha = ""
+    if request is not None:
+        if prompt or system or schema:
+            raise ValueError("request= replaces prompt/system/schema; pass one or the other")
+        if replicates and replicates > 1:
+            raise ValueError("request= cannot be combined with replicates; pass a cache_key per replicate")
+        body = request if isinstance(request, bytes) else canonical_bytes(request)
+        spec = json.loads(body)
+        model = spec.get("model") or model
+        request_sha = hashlib.sha256(body).hexdigest()
+        transport_kwargs["request"] = body
+        prompt_sha = system_sha = schema_sha = ""
+        key = cache_key or _hash(json.dumps({"request_sha256": request_sha, "version": version or ""}, sort_keys=True))
+    else:
+        if not prompt:
+            raise ValueError("prompt is required unless request= is given")
+        prompt_sha = _hash(prompt)
+        system_sha = _hash(system) if system else ""
+        schema_sha = _hash(json.dumps(schema, sort_keys=True)) if schema else ""
+        key = cache_key or _cache_key(model=model, system=system, prompt=prompt, schema=schema, version=version)
+    hashes = {
+        "cache_key": key, "prompt_sha256": prompt_sha, "system_sha256": system_sha,
+        "schema_sha256": schema_sha, **({"request_sha256": request_sha} if request_sha else {}),
+    }
 
     if replicates and replicates > 1:
         return _replicated_call(
@@ -528,16 +614,13 @@ def cached_call(
             record = cost_log.log(
                 project=project, model=model, purpose=purpose, script="cached_call",
                 cost_usd=0.0, cache_hit=True,
-                metadata={
-                    "cache_key": key, "prompt_sha256": prompt_sha,
-                    "system_sha256": system_sha, "schema_sha256": schema_sha,
-                    "original_cost_usd": stored_meta.get("cost_usd", 0.0),
-                },
+                packet_id=transport_kwargs.get("packet_id"),
+                metadata={**hashes, "original_cost_usd": stored_meta.get("cost_usd", 0.0)},
             )
             return result, CallMeta(
                 call_id=record.id, cache_hit=True, cost_usd=0.0, model=model,
                 cache_key=key, prompt_sha256=prompt_sha, system_sha256=system_sha,
-                schema_sha256=schema_sha, raw=stored_meta,
+                schema_sha256=schema_sha, request_sha256=request_sha, raw=stored_meta,
             )
         conn.close()
 
@@ -552,11 +635,7 @@ def cached_call(
     call_id = _log_call(
         raw_meta, project=project, purpose=purpose, model=resolved_model,
         cost_usd=cost_usd, cache_hit=False,
-        metadata={
-            "cache_key": key, "prompt_sha256": prompt_sha,
-            "system_sha256": system_sha, "schema_sha256": schema_sha,
-            "transport_meta": raw_meta,
-        },
+        metadata={**hashes, "transport_meta": raw_meta},
     )
 
     # --- 3. Write: short, separate connection. ---
@@ -581,7 +660,7 @@ def cached_call(
     return result, CallMeta(
         call_id=call_id, cache_hit=False, cost_usd=cost_usd, model=resolved_model,
         cache_key=key, prompt_sha256=prompt_sha, system_sha256=system_sha,
-        schema_sha256=schema_sha, raw=raw_meta,
+        schema_sha256=schema_sha, request_sha256=request_sha, raw=raw_meta,
     )
 
 

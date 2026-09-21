@@ -307,3 +307,176 @@ class TestGeminiTransport:
         assert result == "cached-answer"
         assert meta.cache_hit is True
         assert calls_made["n"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Raw-request passthrough
+# ---------------------------------------------------------------------------
+
+
+def _skard_style_request():
+    return {
+        "model": "gpt-5.4-mini",
+        "reasoning": {"effort": "low"},
+        "max_output_tokens": 6000,
+        "prompt_cache_key": "v7:0123456789abcdef",
+        "input": [
+            {"role": "system", "content": [{"type": "input_text", "text": "Kodebok: læreplan — «ånd»"}]},
+            {"role": "user", "content": [{"type": "input_text", "text": "side 12"}]},
+        ],
+        "text": {"format": {
+            "type": "json_schema", "name": "skard_packet_result", "strict": True,
+            "schema": {"type": "object", "properties": {"items": {"type": "array"}},
+                       "required": ["items"], "additionalProperties": False},
+        }},
+    }
+
+
+class _FakeHTTPResponse:
+    def __init__(self, payload):
+        self._body = json.dumps(payload).encode("utf-8")
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class TestRawRequestPassthrough:
+    def _capture_urlopen(self, monkeypatch, response):
+        import urllib.request
+
+        posted = []
+
+        def fake_urlopen(req, timeout=None):
+            posted.append(req)
+            return _FakeHTTPResponse(response)
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+        return posted
+
+    def test_bytes_in_equal_bytes_posted(self, tmp_cost_log, cache_db, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        response = _openai_response(structured={"items": []}, input_tokens=5000, cached_tokens=4096)
+        posted = self._capture_urlopen(monkeypatch, response)
+        body = calls.canonical_bytes(_skard_style_request())
+
+        result, meta = cached_call(
+            request=body, project="skard", purpose="packet-coding:v7",
+            transport="openai", cache_db_path=cache_db,
+        )
+
+        assert len(posted) == 1
+        assert posted[0].data == body
+        assert posted[0].full_url == "https://api.openai.com/v1/responses"
+        assert result == response
+        assert meta.request_sha256 == calls.hashlib.sha256(body).hexdigest()
+        assert meta.model == "gpt-5.4-mini"
+        assert meta.raw["cached_tokens"] == 4096
+        assert meta.raw["response_id"] == "resp_abc123"
+
+    def test_dict_request_is_posted_as_canonical_bytes(self, tmp_cost_log, cache_db, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        posted = self._capture_urlopen(monkeypatch, _openai_response(structured={"items": []}))
+        request = _skard_style_request()
+
+        cached_call(request=request, project="skard", purpose="p", transport="openai", cache_db_path=cache_db)
+
+        expected = json.dumps(request, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        assert posted[0].data == expected
+        assert "«ånd»".encode("utf-8") in posted[0].data
+
+    def test_ledger_row_and_cache_hit(self, tmp_cost_log, cache_db, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        response = _openai_response(structured={"items": []}, input_tokens=5000, cached_tokens=4096)
+        posted = self._capture_urlopen(monkeypatch, response)
+        kwargs = dict(
+            request=_skard_style_request(), project="skard", purpose="packet-coding:v7",
+            transport="openai", cache_db_path=cache_db, packet_id="src-1:p003",
+            ledger_metadata={"source_id": "src-1", "replicate": 0},
+        )
+
+        _, first = cached_call(**kwargs)
+        again, second = cached_call(**kwargs)
+
+        assert len(posted) == 1
+        assert again == response
+        assert second.cache_hit and second.cache_key == first.cache_key
+        rows = {r["id"]: r for r in tmp_cost_log.query()}
+        billed = rows[first.call_id]
+        assert billed["purpose"] == "packet-coding:v7"
+        assert billed["packet_id"] == "src-1:p003"
+        assert (billed["prompt_tokens"], billed["cached_tokens"]) == (5000, 4096)
+        billed_meta = json.loads(billed["metadata"])
+        assert billed_meta["response_id"] == "resp_abc123"
+        assert billed_meta["source_id"] == "src-1"
+        hit = rows[second.call_id]
+        assert hit["cache_hit"] == 1 and hit["cost_usd"] == 0.0
+        assert hit["packet_id"] == "src-1:p003"
+
+    def test_caller_supplied_cache_key(self, tmp_cost_log, cache_db, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        posted = self._capture_urlopen(monkeypatch, _openai_response(structured={"items": []}))
+        common = dict(request=_skard_style_request(), project="skard", purpose="p",
+                      transport="openai", cache_db_path=cache_db)
+
+        _, r0 = cached_call(cache_key="input-sha:model:v7:0", **common)
+        _, r1 = cached_call(cache_key="input-sha:model:v7:1", **common)
+        _, r0_again = cached_call(cache_key="input-sha:model:v7:0", **common)
+
+        assert len(posted) == 2
+        assert (r0.cache_key, r1.cache_key) == ("input-sha:model:v7:0", "input-sha:model:v7:1")
+        assert r0_again.cache_hit
+
+    def test_failure_row_carries_error_outcome(self, tmp_cost_log, cache_db, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+        def boom(url, body, *, headers, timeout):
+            raise TransportError("HTTP 500: upstream")
+
+        monkeypatch.setattr(calls, "_http_post_bytes", boom)
+        with pytest.raises(TransportError):
+            cached_call(request=_skard_style_request(), project="skard", purpose="p",
+                        transport="openai", cache_db_path=cache_db, packet_id="src-1:p003")
+
+        (row,) = tmp_cost_log.query()
+        assert (row["outcome"], row["packet_id"], row["purpose"]) == ("error", "src-1:p003", "p")
+
+    def test_truncated_response_is_returned_not_raised(self, tmp_cost_log, cache_db, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        response = {"id": "resp_cut", "status": "incomplete", "output": [],
+                    "usage": {"input_tokens": 10, "output_tokens": 6000}}
+        self._capture_urlopen(monkeypatch, response)
+
+        result, meta = cached_call(request=_skard_style_request(), project="skard", purpose="p",
+                                   transport="openai", cache=False)
+
+        assert result["status"] == "incomplete"
+        assert tmp_cost_log.query()[0]["completion_tokens"] == 6000
+
+    def test_request_excludes_prompt_and_replicates(self, tmp_cost_log, cache_db):
+        with pytest.raises(ValueError, match="replaces prompt"):
+            cached_call("hi", request={"model": "m"}, project="p", purpose="p", transport="openai")
+        with pytest.raises(ValueError, match="replicates"):
+            cached_call(request={"model": "m"}, project="p", purpose="p", transport="openai", replicates=2)
+        with pytest.raises(ValueError, match="prompt is required"):
+            cached_call(project="p", purpose="p", transport="openai")
+
+    def test_gemini_posts_request_bytes(self, tmp_cost_log, cache_db, monkeypatch):
+        monkeypatch.setenv("GEMINI_KEY", "g-test")
+        response = {"responseId": "g1", "candidates": [{"content": {"parts": [{"text": "ok"}]}}],
+                    "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 2,
+                                      "cachedContentTokenCount": 4}}
+        posted = self._capture_urlopen(monkeypatch, response)
+        body = calls.canonical_bytes({"contents": [{"role": "user", "parts": [{"text": "hei"}]}]})
+
+        result, meta = cached_call(request=body, model="gemini-2.5-flash", project="kb", purpose="p",
+                                   transport="gemini", cache_db_path=cache_db)
+
+        assert posted[0].data == body
+        assert "gemini-2.5-flash:generateContent" in posted[0].full_url
+        assert result == response and meta.raw["cached_tokens"] == 4
