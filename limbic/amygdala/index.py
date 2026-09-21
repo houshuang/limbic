@@ -1,13 +1,13 @@
 """SQLite-based chunk/claim storage with incremental updates.
 
 Usage:
-    from amygdala.index import Index
+    from limbic.amygdala.index import Index
     idx = Index("my_index.db")
     idx.add_document("file.md", chunks=[{"content": "text", "metadata": {}}])
     results = idx.search("query", embedding_model=model, limit=10)
 
     # Standalone connection with best practices:
-    from amygdala import connect
+    from limbic.amygdala import connect
     conn = connect("my.db")
 """
 
