@@ -42,6 +42,16 @@ for its folding primitives (gold-set rows identical).
   `total_notional()`, `notional_cost_usd` in both summaries,
   `notional_cost_per_applied`, and its own dashboard section. An unpriced model
   logs its tokens with a NULL notional rather than an invented $0.
+- **The `cached_call` cache key is pinned by a test.** It addresses answers
+  consumers have already paid for, so a reordering or a new field in
+  `_cache_key`'s payload silently re-buys every stored response. A failure
+  there is now a migration, not a test to update.
+- **`docs/proposed-batch-and-cache-lifts.md`,** designs for two mechanisms a
+  consumer has and this library does not: a narrow content-hash projection for
+  cache keys (the hooks — `version=`, `cache_key=` — already exist; the helper
+  does not), and batch structured-output validation that rejects duplicate
+  answers per key and returns the missing ones for retry rather than erroring
+  the batch. Neither is built.
 - **`cached_call(request=, cache_key=)`.** A fully built provider body is posted
   as its exact bytes through the openai/gemini transports, the response cache
   is keyed on those bytes (or on the caller's own key), the raw response comes

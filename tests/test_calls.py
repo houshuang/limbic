@@ -333,3 +333,35 @@ def test_cerebellum_imports_without_numpy_or_amygdala():
     root = Path(__file__).resolve().parent.parent
     done = subprocess.run([sys.executable, "-c", code], cwd=root, capture_output=True, text=True)
     assert done.returncode == 0, done.stderr
+
+
+class TestCacheKeyIsPinned:
+    """The cache key addresses answers consumers have already paid for.
+
+    Any change to `_cache_key`'s payload — a reordering, a new field, a
+    different hash input — silently re-buys every stored response in every
+    consumer. These are the existing call patterns, pinned to the values they
+    produce today. A failure here is not a test to update; it is a migration.
+    """
+
+    def test_prompt_only(self):
+        assert calls._cache_key(model="gpt-5.4-mini", system="", prompt="hello",
+                                schema=None, version="") == (
+            "9b1fb40c36f85fc67c2096246938e460a825ae726a09b4cefdcb7a5b15314ae3"
+        )
+
+    def test_every_field_participates(self):
+        base = dict(model="gpt-5.4-mini", system="be terse", prompt="hello",
+                    schema={"type": "object"}, version="v2")
+        key = calls._cache_key(**base)
+        for field, other in (("model", "gpt-5.4"), ("system", "be verbose"),
+                             ("prompt", "hi"), ("schema", {"type": "array"}),
+                             ("version", "v3")):
+            assert calls._cache_key(**{**base, field: other}) != key, field
+
+    def test_schema_key_order_does_not_matter(self):
+        """Two spellings of the same schema must hit the same paid answer."""
+        a = {"type": "object", "properties": {"x": {"type": "string"}}}
+        b = {"properties": {"x": {"type": "string"}}, "type": "object"}
+        common = dict(model="gpt-5.4-mini", system="", prompt="hello", version="")
+        assert calls._cache_key(schema=a, **common) == calls._cache_key(schema=b, **common)

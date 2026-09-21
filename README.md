@@ -59,10 +59,11 @@ enforces it, or marked as prose if nothing does. Then:
 | Doc | What it covers |
 |---|---|
 | [`docs/calls.md`](docs/calls.md) | `cached_call`: response cache, `request=` verbatim bytes, replicate agreement and `Held`, `CallMeta`, and why a bookkeeping failure never loses a billed response |
-| [`docs/cost-log.md`](docs/cost-log.md) | the ledger — `outcome`, `cache_hit`, `packet_id`, the price functions, and `cerebellum.forensics` for the interactive spend a ledger never sees |
+| [`docs/cost-log.md`](docs/cost-log.md) | the ledger — `outcome`, `cache_hit`, `packet_id`, `billing_mode` and notional dollars for subscription calls, the price functions, and `cerebellum.forensics` for the interactive spend a ledger never sees |
 | [`docs/packet.md`](docs/packet.md) | `cerebellum.packet`: the unit of work is a call, not an agent. Probes, budgets, prompt-cache rules, truncation, quote anchors |
 | [`docs/resolve.md`](docs/resolve.md) | `hippocampus.resolve`: retrieve candidates in code so a hallucinated identifier is unrepresentable |
 | [`docs/apply.md`](docs/apply.md) | `hippocampus.apply`: the model proposes, code writes |
+| [`docs/proposed-batch-and-cache-lifts.md`](docs/proposed-batch-and-cache-lifts.md) | not built yet: narrow cache-key projections, and batch validation that returns partial success for retry |
 
 Three findings from that work, if you want to know whether this is worth your
 time before reading further:
