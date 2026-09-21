@@ -229,3 +229,43 @@ class TestIndex:
         build_index(tmp_path / "kb.idx", PERSONS, kind="person").close()
         assert source.read_bytes() == b""
         assert (tmp_path / "kb.idx").exists()
+
+
+class TestPublicNameHelpers:
+    def test_invert_name(self):
+        from limbic.hippocampus.resolve import invert_name
+        assert invert_name("Andre, Bjørn Tore") == "Bjørn Tore Andre"
+        assert invert_name("Krogh, d.y.") is None
+        assert invert_name("a, b, c") is None
+        assert invert_name(1984) is None
+
+    def test_strip_parenthetical(self):
+        from limbic.hippocampus.resolve import strip_parenthetical
+        assert strip_parenthetical("Ibsen, Henrik (1828-1906)") == "Ibsen, Henrik"
+        assert strip_parenthetical("Henrik Ibsen") is None
+        assert strip_parenthetical(1984) is None
+
+
+def test_resolve_imports_without_heavy_dependencies():
+    """A consumer without numpy or yaml installed must be able to import the
+    resolver, and a CLI built on it must not pay their import time."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    code = (
+        "import sys\n"
+        "import limbic.hippocampus.resolve\n"
+        "from limbic.hippocampus import fold\n"
+        "heavy = [m for m in ('numpy', 'yaml', 'limbic.amygdala') if m in sys.modules]\n"
+        "assert not heavy, heavy\n"
+    )
+    root = Path(__file__).resolve().parent.parent
+    done = subprocess.run([sys.executable, "-c", code], cwd=root, capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+
+
+def test_hippocampus_lazy_exports_are_complete():
+    import limbic.hippocampus as hippocampus
+    for name in hippocampus.__all__:
+        assert getattr(hippocampus, name) is not None

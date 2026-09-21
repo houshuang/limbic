@@ -43,7 +43,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from limbic.amygdala import connect
+from limbic._sqlite import connect
 
 __all__ = [
     "Card",
@@ -159,9 +159,9 @@ def fold(text: Any, lang: str = "nb", *, expand: bool = False) -> str:
     return _SPACE.sub(" ", out).strip()
 
 
-def _invert(name: str) -> str | None:
+def invert_name(name: Any) -> str | None:
     """"Andre, Bjørn Tore" -> "Bjørn Tore Andre". None when not invertible."""
-    if name.count(",") != 1:
+    if not isinstance(name, str) or name.count(",") != 1:
         return None
     last, first = (part.strip() for part in name.split(","))
     if not last or not first or fold(first) in _SUFFIXES:
@@ -169,9 +169,9 @@ def _invert(name: str) -> str | None:
     return f"{first} {last}"
 
 
-def _strip_parenthetical(name: str) -> str | None:
+def strip_parenthetical(name: Any) -> str | None:
     """"Ibsen, Henrik (1828-1906)" -> "Ibsen, Henrik". None when unchanged."""
-    if "(" not in name:
+    if not isinstance(name, str) or "(" not in name:
         return None
     stripped = re.sub(r"\s*\([^)]*\)", "", name).strip()
     return stripped if stripped and stripped != name.strip() else None
@@ -206,12 +206,12 @@ def name_keys(name: Any, lang: str = "nb") -> list[str]:
     if not isinstance(name, str):
         name = str(name)
     surfaces = [name]
-    for extra in (_invert(name), _strip_parenthetical(name)):
+    for extra in (invert_name(name), strip_parenthetical(name)):
         if extra:
             surfaces.append(extra)
-    inverted_stripped = _strip_parenthetical(name)
+    inverted_stripped = strip_parenthetical(name)
     if inverted_stripped:
-        deeper = _invert(inverted_stripped)
+        deeper = invert_name(inverted_stripped)
         if deeper:
             surfaces.append(deeper)
 
