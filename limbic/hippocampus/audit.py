@@ -47,10 +47,35 @@ from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 __all__ = [
     "AuditError",
     "apply_audit",
+    "blind_view",
+    "bucket_by_verdict",
+    "check_audit_coverage",
 ]
 
 # (field_name, value, row) -> reason to refuse, or None to accept.
 CorrectionValidator = Callable[[str, Any, Mapping[str, Any]], "str | None"]
+
+# Fields the four Kulturbase campaigns of 21 September 2026 each stripped by
+# hand before a record reached the auditor: the researcher's own verdict, in
+# whatever name a given batch used for it, plus the confidence signals
+# blind-audit.md's brief already says to withhold ("the pipeline's
+# confidence, its checks_passed, its held/not-held status, or a previous
+# auditor's notes"). Extend per campaign; a field this list does not name
+# simply is not stripped.
+DEFAULT_HIDDEN_FIELDS: tuple[str, ...] = (
+    "disposition", "verdict", "my_verdict", "auditor_verdict",
+    "final", "final_action", "final_reason",
+    "score", "tier", "confidence", "checks_passed",
+    "audit_note", "hold_reasons",
+)
+
+# blind-audit.md's brief template: right / wrong / cannot_tell, and nothing
+# else. A campaign whose auditor needs a different vocabulary passes its own.
+DEFAULT_VOCABULARY: tuple[str, ...] = ("right", "wrong", "cannot_tell")
+
+# Sections `apply_audit` and `check_audit_coverage` never treat as rows to
+# process: bookkeeping about the audit run itself, not about a record.
+_METADATA_KEYS = {"schema", "auditor", "date", "scope", "measured", "full_results", "version"}
 
 
 class AuditError(Exception):
@@ -95,6 +120,142 @@ def _decision_key(decision: Mapping[str, Any], key_fields: Sequence[str]) -> lis
     return [str(decision[f]) for f in key_fields if decision.get(f)]
 
 
+def blind_view(
+    items: Sequence[Mapping[str, Any]],
+    hide: Sequence[str] = DEFAULT_HIDDEN_FIELDS,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Strip the researcher's own verdict from records before they reach the auditor.
+
+    blind-audit.md's brief exists because "a reader shown the answer grades
+    the answer" -- but every one of four Kulturbase campaigns that ran a
+    blind audit on 21 September 2026 built that stripped view by hand, with
+    its own list of fields to drop. This is the shared version, so campaign
+    five does not write it again.
+
+    Returns `(view, hidden)`: the records with `hide` removed, in the same
+    order and never mutated in place, and the sorted list of field names that
+    were actually present on at least one record -- for the audit record, so
+    a brief or a report can state what was withheld rather than leaving it
+    implicit.
+
+    `hide` names fields to drop if present; a field a record does not carry
+    is simply not there, not an error. The default covers the shapes seen
+    across those four campaigns (`my_verdict`, `tier`, `score`, ...) -- pass
+    a narrower or wider tuple when a campaign's own fields differ.
+    """
+
+    hide = tuple(hide)
+    hidden_seen: set[str] = set()
+    view = []
+    for item in items:
+        row = dict(item)
+        for field in hide:
+            if field in row:
+                hidden_seen.add(field)
+                del row[field]
+        view.append(row)
+    return view, sorted(hidden_seen)
+
+
+def bucket_by_verdict(
+    rows: Iterable[Mapping[str, Any]],
+    key_field: str,
+    *,
+    id_field: str = "id",
+    verdict_field: str = "verdict",
+    note_field: str = "reason",
+    vocabulary: Sequence[str] = DEFAULT_VOCABULARY,
+    right_value: str = "right",
+) -> dict[str, list[dict[str, Any]]]:
+    """Turn a raw `{id, verdict, reason}` auditor response into sections ready
+    for `apply_audit`'s `hold_sections`, validating the vocabulary on the way.
+
+    This is the step blind-audit.md's brief asks every campaign to do before
+    the fold-in: bucket by verdict, keep only the non-`right` rows, and check
+    that every verdict is one the brief actually offered. Nobody had written
+    it, so c02 hand-rolled its own bucketing and quietly drifted the verdict
+    vocabulary to `same_work`/`different`/`unsure` -- nothing caught it, and
+    it shipped as "do not ship" only because someone happened to notice.
+
+    A row whose `verdict_field` is not in `vocabulary` raises `AuditError`
+    naming every offending row: an unbriefed vocabulary means either the
+    auditor was not given this brief or drifted mid-run, and folding those
+    rows in under an assumed meaning would be worse than refusing the whole
+    response. A campaign whose auditor genuinely uses another vocabulary
+    passes its own `vocabulary=` (and matching `right_value=`) here -- that
+    mapping happens before the fold-in, never inside `apply_audit`, which
+    stays agnostic to what a hold_section's name means.
+
+    Rows whose verdict equals `right_value` are dropped: blind-audit.md's
+    brief asks the auditor never to return them, and if one arrives anyway
+    this is where it is discarded rather than mistakenly folded in as a hold.
+    """
+
+    sections: dict[str, list[dict[str, Any]]] = {}
+    bad: list[tuple[Any, Any]] = []
+    for row in rows:
+        verdict = row.get(verdict_field)
+        if verdict not in vocabulary:
+            bad.append((row.get(id_field), verdict))
+            continue
+        if verdict == right_value:
+            continue
+        sections.setdefault(verdict, []).append(
+            {key_field: row.get(id_field), "note": row.get(note_field)}
+        )
+    if bad:
+        raise AuditError(
+            f"{len(bad)} audit row(s) used a verdict outside {list(vocabulary)!r}: "
+            f"{bad[:5]!r} (id, verdict). A campaign whose auditor needs a different "
+            "vocabulary maps it onto this one, or passes vocabulary= here, before "
+            "folding in -- a vocabulary the brief never offered was not validated by "
+            "anyone."
+        )
+    return sections
+
+
+def check_audit_coverage(
+    sent_keys: Iterable[str],
+    audit: Mapping[str, Any],
+    *,
+    key_fields: Sequence[str] = ("id",),
+) -> dict[str, Any]:
+    """Report which of the ids sent to the auditor never appear anywhere in
+    its response.
+
+    `apply_audit` already reports the opposite direction: a returned id that
+    matches no decision (`unknown_ids`). This is the direction c02's own
+    `reconcile.py` checked and nothing in the library did: an id that was
+    sent and never came back at all, in any section. Missing is not the same
+    as `right` -- a silent auditor row is blind-audit.md's convention for
+    agreement, but a row dropped by a truncated batch or a briefed-on-the-
+    wrong-set auditor looks identical from the data alone. This function does
+    not guess which one happened; it only counts and surfaces the gap, so the
+    caller decides rather than silently reading absence as agreement.
+
+    Every section actually present in `audit` (other than the run's own
+    metadata -- `auditor`, `date`, `scope`, ...) counts as accounting for an
+    id, not only the ones the caller passed as `hold_sections`: a correction
+    or a finding is still the auditor having said something about that id.
+    """
+
+    sent = {str(key) for key in sent_keys}
+    seen: set[str] = set()
+    for section_name, section in audit.items():
+        if section_name in _METADATA_KEYS or not section:
+            continue
+        try:
+            for key, _ in _rows(section, key_fields):
+                seen.add(key)
+        except AuditError:
+            continue
+    return {
+        "sent": len(sent),
+        "returned": len(sent & seen),
+        "missing": sorted(sent - seen),
+    }
+
+
 def apply_audit(
     decisions: Sequence[Mapping[str, Any]],
     audit: Mapping[str, Any],
@@ -111,6 +272,7 @@ def apply_audit(
     reason_field: str = "hold_reasons",
     reason: str = "independent_audit",
     clear_fields: Sequence[str] = (),
+    sent_keys: Iterable[str] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Fold an independent audit into a settled decision set, demote-only.
 
@@ -144,6 +306,26 @@ def apply_audit(
     demoted, matched or reported about it silently means something else. A
     caller who really wants to re-key does it outside the audit, where it reads
     as the migration it is.
+
+    `sent_keys`, when given, is every key that was actually sent to the
+    auditor (a `blind_view` call's own keys, typically). The report then
+    carries `coverage`: which of those keys never showed up in *any* section
+    of `audit`, not only `hold_sections` — a correction or a finding still
+    counts as the auditor having judged that id. A missing key is left
+    exactly as it was, never demoted on the strength of an absence; this only
+    counts and surfaces the gap; see `check_audit_coverage` for what "showed
+    up" means precisely. Omit `sent_keys` and `coverage` is left out of the
+    report entirely, rather than reported empty, so a caller that checks
+    `"coverage" in report` can tell whether this ran at all.
+
+    This function is one key at a time, on purpose: it never looks across
+    decisions to ask whether the *set* it is about to return is internally
+    consistent (one canonical id per entity, no orphaned reference, no
+    reintroduced duplicate). Those are group invariants, properties of the
+    union of accepted decisions rather than of any single row, and they
+    belong to the project's own validator, run once over the full post-fold-in
+    state before the write — not here, and not by widening what one row's
+    audit is allowed to see.
     """
 
     protected = set(identity_fields) if identity_fields is not None else set(key_fields)
@@ -184,8 +366,10 @@ def apply_audit(
     }
 
     named = {*hold_sections, *(s for s, _ in correction_sections), *finding_sections}
-    metadata = {"schema", "auditor", "date", "scope", "measured", "full_results", "version"}
-    report["ignored_sections"] = sorted(k for k in audit if k not in named and k not in metadata)
+    report["ignored_sections"] = sorted(k for k in audit if k not in named and k not in _METADATA_KEYS)
+
+    if sent_keys is not None:
+        report["coverage"] = check_audit_coverage(sent_keys, audit, key_fields=key_fields)
 
     for section_name in hold_sections:
         for key, payload in _rows(audit.get(section_name) or [], key_fields):

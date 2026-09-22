@@ -4,6 +4,39 @@ All notable changes to the limbic monorepo (formerly amygdala) are documented he
 
 ---
 
+## 2026-09-22 -- Closing the gaps a fit check found in `apply_audit`
+
+A fit check of `hippocampus.audit.apply_audit` against four real Kulturbase
+blind-audit campaigns (21 Sep 2026) found `apply_audit` itself was not
+missing anything those campaigns needed — replaying their raw auditor output
+through it reproduced every hand-computed verdict exactly (48/48, 18/18,
+8/8, 74/74) — but found three things around it that every campaign had
+either reimplemented by hand or was missing outright.
+
+### Added
+
+- **`hippocampus.audit.blind_view`** — strips the researcher's own verdict
+  (`my_verdict`, `score`, `tier`, `disposition`, ...) from records before
+  they reach the auditor, and reports which fields it actually found and
+  removed. Every one of the four campaigns built this by hand.
+- **`hippocampus.audit.bucket_by_verdict`** — turns a raw `{id, verdict,
+  reason}` auditor response into `apply_audit`-ready sections, and raises
+  `AuditError` on any verdict outside an explicit `vocabulary=` (default
+  `right`/`wrong`/`cannot_tell`). One campaign's raw output had drifted to
+  `same_work`/`different`/`unsure`; nothing caught it at the time, and this
+  is the guard that would have.
+- **`hippocampus.audit.check_audit_coverage`**, and `apply_audit`'s new
+  `sent_keys=` argument — reports which of the ids actually sent to the
+  auditor never appear in any section of its response, the direction
+  `unknown_ids` did not cover. Folded into `apply_audit`'s report under
+  `coverage` when `sent_keys` is given; omitted otherwise.
+- `apply_audit`'s docstring now says explicitly that group invariants (one
+  canonical id per entity, no reintroduced duplicate) are out of scope by
+  design — a per-key audit cannot see them, and they are the calling
+  project's validator's job, not this function's.
+
+[`docs/audit.md`](docs/audit.md), [`docs/blind-audit.md`](docs/blind-audit.md)
+
 ## 2026-09-21 -- Guards that refuse, lifted with a fit check each
 
 A read-only survey of every QA mechanism skard and Kulturbase built against
