@@ -26,6 +26,15 @@ an unsettled row is not something an audit can act on.
 decide() → replicate agreement → reconcile → apply_audit() → schema_refusals() → write
 ```
 
+`apply_audit` works one key at a time, on purpose, and never asks whether the
+resulting *set* is internally consistent (one canonical id per entity, no
+orphaned reference, no reintroduced duplicate). Those are group invariants —
+properties of the union of accepted decisions, not of any single row — and
+they are the calling project's validator's job, run once over the full
+post-fold-in state before the write, not something to widen this function to
+see. A per-key audit cannot catch them by construction; a validation gate
+between fold-in and write can.
+
 ## The audit file
 
 Sections are named by the caller, so an existing project's file shape works
@@ -97,6 +106,38 @@ an audit file that happens to carry none today cannot make a re-keying setup
 look safe. A caller who really wants to re-key does it outside the audit, where
 it reads as the migration it is.
 
+## Before the fold-in
+
+Three small, pure helpers cover the ground every campaign that ran a blind
+audit on 21 September 2026 re-did by hand (see
+[`blind-audit.md`](blind-audit.md) for the full brief and worked example):
+
+- **`blind_view(items, hide=DEFAULT_HIDDEN_FIELDS)`** strips the researcher's
+  own verdict (`my_verdict`, `score`, `tier`, `disposition`, ...) before a
+  record reaches the auditor, and returns `(view, hidden)` — the stripped
+  records plus which fields were actually present and removed, so the
+  brief's own record of what it withheld does not have to be reconstructed
+  by hand.
+- **`bucket_by_verdict(rows, key_field, vocabulary=DEFAULT_VOCABULARY)`** turns
+  a raw `{id, verdict, reason}` auditor response into sections keyed by
+  verdict, ready to pass as `apply_audit`'s `audit` argument with
+  `hold_sections=("wrong", "cannot_tell")`. A row whose verdict is not in
+  `vocabulary` raises `AuditError` naming every offending row — the guard
+  that would have caught the one campaign that drifted its vocabulary to
+  `same_work`/`different`/`unsure` with nothing to notice at the time. A
+  campaign with a genuinely different vocabulary maps it onto this one, or
+  passes its own `vocabulary=` and `right_value=`, before the fold-in — this
+  mapping is deliberately not `apply_audit`'s job, since it does not and
+  should not know what a `hold_sections` name means.
+- **`check_audit_coverage(sent_keys, audit, key_fields=...)`** reports which
+  of the ids actually sent to the auditor never appear in *any* section of
+  its response — the direction `unknown_ids` does not cover. `apply_audit`
+  runs it automatically when called with `sent_keys=`, under `report["coverage"]`.
+  A missing id is left exactly as it was; under the silence-means-right
+  convention most "missing" ids are legitimately silent agreement, so a large
+  count there is normal — but it is now a number you can see, not an
+  assumption baked into the fold-in.
+
 ## The report
 
 | Key | Meaning |
@@ -108,6 +149,7 @@ it reads as the migration it is.
 | `already_held` | audit rows on a decision that was already held |
 | `findings` | the finding sections, verbatim |
 | `ignored_sections` | sections present in the file that the caller did not name |
+| `coverage` | present only when called with `sent_keys=`: `{sent, returned, missing}` |
 
 An unknown id means the auditor read something this batch is not writing: a
 stale pack, a renamed key, an auditor briefed on the wrong set. Every one of

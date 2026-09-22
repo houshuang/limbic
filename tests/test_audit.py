@@ -2,7 +2,13 @@
 
 import pytest
 
-from limbic.hippocampus.audit import AuditError, apply_audit
+from limbic.hippocampus.audit import (
+    AuditError,
+    apply_audit,
+    blind_view,
+    bucket_by_verdict,
+    check_audit_coverage,
+)
 
 
 DECISIONS = [
@@ -184,3 +190,137 @@ def test_every_disposition_is_unchanged_or_held():
     )
     for old, new in zip(DECISIONS, out):
         assert new["disposition"] in (old["disposition"], "hold")
+
+
+# ---------------------------------------------------------------------------
+# blind_view -- strip the researcher's own verdict before the auditor reads it
+# ---------------------------------------------------------------------------
+
+ITEMS = [
+    {"work_id": "w1", "title": "Brand", "my_verdict": "accept", "score": 0.9, "tier": "A"},
+    {"work_id": "w2", "title": "Peer Gynt", "my_verdict": "hold", "tier": "B"},
+]
+
+
+def test_blind_view_strips_the_default_hidden_fields():
+    view, hidden = blind_view(ITEMS)
+    assert view == [
+        {"work_id": "w1", "title": "Brand"},
+        {"work_id": "w2", "title": "Peer Gynt"},
+    ]
+    assert hidden == ["my_verdict", "score", "tier"]
+
+
+def test_blind_view_only_reports_fields_actually_present():
+    view, hidden = blind_view([{"work_id": "w1", "title": "Brand"}])
+    assert view == [{"work_id": "w1", "title": "Brand"}]
+    assert hidden == []
+
+
+def test_blind_view_honours_a_custom_hide_list():
+    view, hidden = blind_view(
+        [{"work_id": "w1", "current_status": "missing", "title": "Brand"}],
+        hide=("current_status",),
+    )
+    assert view == [{"work_id": "w1", "title": "Brand"}]
+    assert hidden == ["current_status"]
+
+
+def test_blind_view_does_not_mutate_the_input():
+    before = [dict(it) for it in ITEMS]
+    blind_view(ITEMS)
+    assert ITEMS == before
+
+
+# ---------------------------------------------------------------------------
+# bucket_by_verdict -- turn a raw {id, verdict, reason} response into
+# apply_audit-ready sections, validating the vocabulary on the way
+# ---------------------------------------------------------------------------
+
+RAW_VERDICTS = [
+    {"id": "28", "verdict": "wrong", "reason": "different creator"},
+    {"id": "29", "verdict": "cannot_tell", "reason": "no evidence given"},
+    {"id": "30", "verdict": "right", "reason": "matches"},
+]
+
+
+def test_bucket_by_verdict_groups_non_right_rows_by_verdict_and_renames_the_key():
+    sections = bucket_by_verdict(RAW_VERDICTS, "work_id")
+    assert sections == {
+        "wrong": [{"work_id": "28", "note": "different creator"}],
+        "cannot_tell": [{"work_id": "29", "note": "no evidence given"}],
+    }
+
+
+def test_bucket_by_verdict_drops_right_rows():
+    sections = bucket_by_verdict(RAW_VERDICTS, "work_id")
+    all_ids = [row["work_id"] for rows in sections.values() for row in rows]
+    assert "30" not in all_ids
+
+
+def test_bucket_by_verdict_rejects_a_drifted_vocabulary():
+    """c02 returned same_work/different/unsure instead of right/wrong/cannot_tell,
+    and nothing caught it. This is the catch."""
+
+    with pytest.raises(AuditError, match="verdict outside"):
+        bucket_by_verdict(
+            [{"id": "1", "verdict": "different", "reason": "not the same person"}],
+            "prf_id",
+        )
+
+
+def test_bucket_by_verdict_accepts_an_explicit_vocabulary():
+    sections = bucket_by_verdict(
+        [{"id": "1", "verdict": "different", "reason": "not the same person"},
+         {"id": "2", "verdict": "same_work", "reason": "ok"}],
+        "prf_id",
+        vocabulary=("same_work", "different", "unsure"),
+        right_value="same_work",
+    )
+    assert sections == {"different": [{"prf_id": "1", "note": "not the same person"}]}
+
+
+# ---------------------------------------------------------------------------
+# check_audit_coverage / apply_audit(sent_keys=...) -- an id sent but never
+# judged is not the same as an id silently marked right
+# ---------------------------------------------------------------------------
+
+def test_check_audit_coverage_reports_a_sent_id_missing_from_every_section():
+    report = check_audit_coverage(
+        ["c1", "c2", "c3", "c4"],
+        {"citations": [{"citation_key": "c1", "note": "wrong person"}]},
+        key_fields=KEYS,
+    )
+    assert report["sent"] == 4
+    assert report["missing"] == ["c2", "c3", "c4"]
+
+
+def test_check_audit_coverage_counts_an_id_found_via_any_named_section():
+    """An id can be accounted for by a correction or a finding, not only a hold."""
+
+    report = check_audit_coverage(
+        ["c1", "c2"],
+        {"citations": [{"citation_key": "c1", "note": "x"}],
+         "definitions": {"c2": "a correction"}},
+        key_fields=KEYS,
+    )
+    assert report["missing"] == []
+
+
+def test_apply_audit_reports_coverage_when_sent_keys_is_given():
+    out, report = apply_audit(
+        DECISIONS, {"citations": [{"citation_key": "c1", "note": "wrong person"}]},
+        key_fields=KEYS, hold_sections=("citations",),
+        sent_keys=["c1", "c2", "c3", "c4"],
+    )
+    assert report["coverage"]["missing"] == ["c2", "c3", "c4"]
+    # missing ids are not touched -- kept as-is, not demoted
+    assert [d["disposition"] for d in out] == ["hold", "new", "variant_of", "hold"]
+
+
+def test_apply_audit_omits_coverage_when_sent_keys_is_not_given():
+    _, report = apply_audit(
+        DECISIONS, {"citations": [{"citation_key": "c1", "note": "wrong person"}]},
+        key_fields=KEYS, hold_sections=("citations",),
+    )
+    assert "coverage" not in report

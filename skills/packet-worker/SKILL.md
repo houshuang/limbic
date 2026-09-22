@@ -110,11 +110,25 @@ pass where there is no schema to fail):
   Decide inside, commit outside, and a miscount raises before the write.
 
 **Any batch that decided something about the world** — as opposed to rendering
-or wording it — gets **one independent audit pass**, and its output can only
-move a decision to `hold`. Brief it per `docs/blind-audit.md` (different model
-family, blind, full set when cheap, `right`/`wrong`/`cannot_tell`), fold it in
-with `hippocampus.audit.apply_audit` **after reconciliation**. An auditor that
-may promote is a second proposer: you only hear from it when it agrees.
+or wording it — gets **one independent audit pass**, demote-only:
+
+    from limbic.hippocampus.audit import apply_audit
+    decisions, report = apply_audit(decisions, audit, key_fields=(...), hold_sections=(...))
+
+Call it; do not hand-roll the fold-in. Four Kulturbase campaigns on 21 Sep 2026
+each hand-transcribed the fold-in instead; replaying their raw auditor output
+through `apply_audit` reproduced every final verdict (48/48, 18/18, 8/8, 74/74),
+so the hand work bought nothing — and the one campaign that wrote its own code
+drifted the verdict vocabulary away from `right`/`wrong`/`cannot_tell` with
+nothing to catch it. Brief the auditor per `docs/blind-audit.md` (different
+model family, blind view, full set when cheap, that vocabulary, non-`right`
+rows only) **after reconciliation**. An auditor that may promote is a second
+proposer: you only hear from it when it agrees.
+
+**A per-item audit cannot see set-level invariants** (one authority id per
+entity, every entity reachable). Before approval, simulate the whole batch
+against the project's own validator; do not let the commit hook be the first
+thing that runs it.
 
 ## Report what is NOT known
 
