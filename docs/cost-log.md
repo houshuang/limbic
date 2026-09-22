@@ -132,6 +132,10 @@ a call that has already burned its tokens. `cost_log=False` per call, or
 it. A ledger that is locked or unwritable is logged and ignored — the model's
 answer is already in hand.
 
+`metadata.prompt_transport` records how the prompt reached `codex exec`:
+`"argv"` for the ordinary case, `"stdin"` once it passes `PROMPT_ARGV_LIMIT`
+and has to be piped in to stay under the kernel's per-argument cap.
+
 One assumption worth knowing: `input_tokens` is read as *including*
 `cached_input_tokens`, and `output_tokens` as including reasoning tokens, which
 is the OpenAI Responses convention that `cost_for` already expects. If Codex

@@ -65,6 +65,19 @@ QUOTA_COOLDOWN_S = int(os.environ.get("LIMBIC_CODEX_QUOTA_COOLDOWN_S", "21600"))
 # stream until the parent runs out of memory.
 OUTPUT_LIMIT = int(os.environ.get("LIMBIC_CODEX_OUTPUT_LIMIT", str(2 * 1024 * 1024)))
 
+# Longest prompt still handed to `codex exec` as an argv entry. Linux caps a
+# *single* entry at MAX_ARG_STRLEN — 32 pages, 128 KiB — regardless of the 2 MiB
+# ARG_MAX the whole vector gets, and execve fails with E2BIG ("[Errno 7]
+# Argument list too long") the moment one argument crosses it. Anything longer
+# goes down the child's stdin, which the kernel does not bound; `codex exec -`
+# reads its instructions from there. 64 KiB leaves headroom for the rest of the
+# argv and for prompts whose UTF-8 byte length runs well past their length in
+# characters.
+PROMPT_ARGV_LIMIT = int(os.environ.get("LIMBIC_CODEX_PROMPT_ARGV_LIMIT", str(64 * 1024)))
+
+# `codex exec`'s positional prompt, spelled so it reads stdin instead.
+STDIN_PROMPT_ARG = "-"
+
 # Keys never passed through to the child. CLAUDECODE is stripped so a nested call
 # from a Claude Code session doesn't inherit in-session state. (We deliberately
 # leave OpenAI auth env alone so Codex uses whatever its own `codex auth`
@@ -534,28 +547,47 @@ def _rejects_json_flag(proc: subprocess.CompletedProcess) -> bool:
     ))
 
 
-def _run(cmd: list[str], timeout: int) -> subprocess.CompletedProcess:
+def _prompt_arg(cmd: list[str], prompt: str) -> str | None:
+    """Put the prompt where the kernel will take it, and say where that was.
+
+    Short prompts stay on argv, exactly as before. A prompt past
+    ``PROMPT_ARGV_LIMIT`` becomes a ``-`` argument and is returned for the
+    caller to hand to ``_run``/``_exec`` as stdin.
+    """
+    if len(prompt.encode("utf-8", "surrogatepass")) <= PROMPT_ARGV_LIMIT:
+        cmd.append(prompt)
+        return None
+    cmd.append(STDIN_PROMPT_ARG)
+    return prompt
+
+
+def _run(cmd: list[str], timeout: int,
+         stdin_text: str | None = None) -> subprocess.CompletedProcess:
     """Run `codex exec` with bounded output and a process-group kill on timeout."""
     if not is_available():
         raise CodexCLIError("codex CLI not available — install from https://github.com/openai/codex and run `codex auth`")
     if temporarily_disabled():
         raise CodexCLIError(f"codex CLI temporarily disabled (quota): {_DISABLED_REASON}")
-    proc = _spawn(cmd, timeout)
+    proc = _spawn(cmd, timeout, stdin_text)
     if proc.returncode != 0 and "--json" in cmd and _rejects_json_flag(proc):
         global _JSON_EVENTS_SUPPORTED
         _JSON_EVENTS_SUPPORTED = False
         log.warning("codex CLI does not support --json; retrying without it. "
                     "Token usage will not be logged for this process.")
-        proc = _spawn([a for a in cmd if a != "--json"], timeout)
+        proc = _spawn([a for a in cmd if a != "--json"], timeout, stdin_text)
     return proc
 
 
-def _spawn(cmd: list[str], timeout: int) -> subprocess.CompletedProcess:
+def _spawn(cmd: list[str], timeout: int,
+           stdin_text: str | None = None) -> subprocess.CompletedProcess:
     try:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             errors="replace",  # one undecodable byte must not kill a drain thread
-            env=_codex_env(), stdin=subprocess.DEVNULL,  # codex exec blocks on stdin otherwise
+            env=_codex_env(),
+            # DEVNULL unless we're feeding the prompt in: `codex exec` blocks
+            # waiting on stdin otherwise.
+            stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
             start_new_session=(os.name == "posix"),      # own process group, so we can kill the tree
         )
     except (FileNotFoundError, OSError) as exc:
@@ -577,6 +609,28 @@ def _spawn(cmd: list[str], timeout: int) -> subprocess.CompletedProcess:
                threading.Thread(target=drain, args=(proc.stderr, err), daemon=True)]
     for reader in readers:
         reader.start()
+
+    def feed(stream, text):
+        # A prompt larger than the pipe buffer only fits while the child is
+        # reading it, and the child only reads while *we* are reading its
+        # output — hence a thread, started after the drains. A child that never
+        # reads stdin parks this thread instead of the wait() below, so the
+        # timeout and the process-group kill still bound the call.
+        try:
+            stream.write(text)
+            stream.flush()
+        except (OSError, ValueError):  # the child died before it read the prompt
+            pass
+        finally:
+            try:
+                stream.close()  # EOF, or `codex exec -` waits for more input
+            except (OSError, ValueError):
+                pass
+
+    writer = None
+    if stdin_text is not None:
+        writer = threading.Thread(target=feed, args=(proc.stdin, stdin_text), daemon=True)
+        writer.start()
     timed_out = False
     try:
         proc.wait(timeout=timeout)
@@ -606,6 +660,10 @@ def _spawn(cmd: list[str], timeout: int) -> subprocess.CompletedProcess:
                 stream.close()
             except (OSError, ValueError):
                 pass
+        # The child is gone by now, so a writer still parked in write() is about
+        # to take EPIPE; it closes its own pipe on the way out.
+        if writer is not None:
+            writer.join(timeout=1.0)
     if timed_out:
         raise CodexCLIError(f"codex CLI timed out after {timeout}s",
                             stdout=out.get(), stderr=err.get())
@@ -662,7 +720,8 @@ def _is_transient(err: CodexCLIError) -> bool:
 
 
 def _exec(cmd: list[str], timeout: int, output_path: str | None,
-          schema: dict | None, ctx: _LogContext | None = None) -> Any:
+          schema: dict | None, ctx: _LogContext | None = None,
+          stdin_text: str | None = None) -> Any:
     """Run + parse with automatic retry on transient failures (a flaky `codex exec`
     non-zero exit or garbled output). Quota errors and timeouts do NOT retry: quota
     needs its cooldown, and a timeout retry would double the stage's worst case.
@@ -673,7 +732,7 @@ def _exec(cmd: list[str], timeout: int, output_path: str | None,
     for attempt in range(RETRIES + 1):
         started = time.monotonic()
         try:
-            proc = _run(cmd, timeout)
+            proc = _run(cmd, timeout, stdin_text)
             result = _finish(proc, output_path, schema)
         except CodexCLIError as e:
             _log_usage(ctx, parse_usage(getattr(e, "stdout", "")),
@@ -730,8 +789,9 @@ def codex_json(
                 json.dump(strict_response_schema(schema), sf, ensure_ascii=False)
                 schema_path = sf.name
             cmd += ["--output-schema", schema_path]
-        cmd.append(f"{system}\n\n{prompt}" if system else prompt)
-        return _exec(cmd, timeout, output_path, schema, ctx)
+        stdin_text = _prompt_arg(cmd, f"{system}\n\n{prompt}" if system else prompt)
+        ctx.metadata["prompt_transport"] = "stdin" if stdin_text is not None else "argv"
+        return _exec(cmd, timeout, output_path, schema, ctx, stdin_text)
     finally:
         for p in (schema_path, output_path):
             if p:
@@ -825,8 +885,9 @@ def codex_research(
                 json.dump(strict_response_schema(schema), sf, ensure_ascii=False)
                 schema_path = sf.name
             cmd += ["--output-schema", schema_path]
-        cmd.append(mission)
-        return _exec(cmd, timeout, output_path, schema, ctx)
+        stdin_text = _prompt_arg(cmd, mission)
+        ctx.metadata["prompt_transport"] = "stdin" if stdin_text is not None else "argv"
+        return _exec(cmd, timeout, output_path, schema, ctx, stdin_text)
     finally:
         for p in (schema_path, output_path):
             if p:

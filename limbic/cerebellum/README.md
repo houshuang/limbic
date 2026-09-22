@@ -585,6 +585,15 @@ Both Codex entry points also write a `cost_log` row per attempt, parsed from
 `project=`/`purpose=` to attribute it; `cost_log=False` or
 `LIMBIC_CODEX_COST_LOG=0` turns it off. See [`docs/cost-log.md`](../../docs/cost-log.md).
 
+**Big prompts go down stdin, not argv.** Linux caps a *single* argv entry at
+`MAX_ARG_STRLEN` — 128 KiB, regardless of the 2 MiB `ARG_MAX` the whole vector
+gets — so a mission past that used to kill the call before any model ran, with
+`[Errno 7] Argument list too long: 'codex'`. Anything over `PROMPT_ARGV_LIMIT`
+(64 KiB of UTF-8, `LIMBIC_CODEX_PROMPT_ARGV_LIMIT`) is therefore passed as
+`codex exec … -` and written to the child's stdin while its output is drained,
+which no kernel limit bounds. Shorter prompts are unchanged. The ledger row's
+`metadata.prompt_transport` says which route a call took.
+
 Both calls run with `--ephemeral --ignore-user-config`, so they leave no rollout
 behind and read none of the host's `~/.codex/config.toml`. That never changes
 which model runs — model and reasoning are always passed explicitly — but it does

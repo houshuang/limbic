@@ -23,13 +23,22 @@ from limbic.cerebellum import codex_cli as cc
 # ---------------------------------------------------------------------------
 
 
+class _Calls(list):
+    """The argv of each call, with that call's stdin payload alongside it."""
+
+    def __init__(self):
+        super().__init__()
+        self.stdin: list[str | None] = []
+
+
 @pytest.fixture
 def captured_cmd(monkeypatch):
     """Run codex_json/codex_research against a stub _run and return the argv."""
-    seen: list[list[str]] = []
+    seen = _Calls()
 
-    def _run(cmd, timeout):
+    def _run(cmd, timeout, stdin_text=None):
         seen.append(list(cmd))
+        seen.stdin.append(stdin_text)
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
 
     monkeypatch.setattr(cc, "_run", _run)
@@ -70,6 +79,93 @@ class TestIsolationFlags:
         assert "sandbox_workspace_write.network_access=true" in cmd
         assert cmd[:2] == ["codex", "exec"]
         assert cmd[-1] == "mission"
+
+
+# ---------------------------------------------------------------------------
+# Prompt transport
+# ---------------------------------------------------------------------------
+
+
+# Linux caps a *single* argv entry at MAX_ARG_STRLEN = 32 pages = 128 KiB, far
+# below the 2 MiB ARG_MAX for the vector as a whole. hvaskjer's adjudication
+# missions crossed it and every nightly run died with
+# "[Errno 7] Argument list too long: 'codex'".
+MAX_ARG_STRLEN = 128 * 1024
+
+
+class TestLargePromptTransport:
+    def test_a_mission_past_the_kernel_limit_never_reaches_argv(self, captured_cmd):
+        mission = "m" * (200 * 1024)
+        cc.codex_research(mission)
+        cmd = captured_cmd[0]
+        assert max(len(a.encode()) for a in cmd) < MAX_ARG_STRLEN
+        assert cmd[-1] == "-"
+        assert captured_cmd.stdin[0] == mission
+
+    def test_a_prompt_past_the_kernel_limit_never_reaches_argv(self, captured_cmd):
+        prompt = "p" * (200 * 1024)
+        cc.codex_json(prompt, system="be brief")
+        cmd = captured_cmd[0]
+        assert max(len(a.encode()) for a in cmd) < MAX_ARG_STRLEN
+        assert cmd[-1] == "-"
+        assert captured_cmd.stdin[0] == f"be brief\n\n{prompt}"
+
+    def test_the_threshold_is_measured_in_bytes_not_characters(self, captured_cmd):
+        """A multibyte mission that fits as characters still blows the arg limit."""
+        mission = "æ" * (cc.PROMPT_ARGV_LIMIT - 10)  # 2 bytes each in UTF-8
+        cc.codex_research(mission)
+        assert captured_cmd[0][-1] == "-"
+        assert captured_cmd.stdin[0] == mission
+
+    def test_a_short_prompt_still_goes_on_argv(self, captured_cmd):
+        cc.codex_research("mission")
+        assert captured_cmd[0][-1] == "mission"
+        assert captured_cmd.stdin[0] is None
+
+    def test_the_json_retry_keeps_the_stdin_prompt(self, monkeypatch):
+        """Dropping --json must not drop the prompt with it."""
+        seen: list[tuple[list[str], str | None]] = []
+
+        def _spawn(cmd, timeout, stdin_text=None):
+            seen.append((list(cmd), stdin_text))
+            return subprocess.CompletedProcess(
+                args=cmd, returncode=2, stdout="",
+                stderr="error: unexpected argument '--json' found")
+
+        monkeypatch.setattr(cc, "_spawn", _spawn)
+        monkeypatch.setattr(cc, "is_available", lambda: True)
+        monkeypatch.setattr(cc, "temporarily_disabled", lambda: False)
+        cc._run(["codex", "exec", "--json", "-"], timeout=5, stdin_text="mission")
+        assert len(seen) == 2
+        assert "--json" not in seen[1][0]
+        assert seen[1][1] == "mission"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process-group kill is POSIX-only")
+class TestStdinDelivery:
+    def test_a_huge_prompt_reaches_the_child_without_deadlocking(self, fake_codex):
+        """Writing 200 KiB in while the child writes 200 KiB out must not wedge."""
+        fake_codex("""
+            import sys
+            payload = sys.stdin.read()
+            sys.stdout.write("z" * 200000)
+            sys.stdout.write(f"\\nGOT {len(payload)}\\n")
+        """)
+        prompt = "q" * 200000
+        proc = cc._run(["codex", "-"], timeout=60, stdin_text=prompt)
+        assert proc.returncode == 0
+        assert f"GOT {len(prompt)}" in proc.stdout
+
+    def test_a_child_that_ignores_stdin_is_still_killed_on_timeout(self, fake_codex):
+        """A full pipe the child never drains must not outlast the timeout."""
+        fake_codex("""
+            import time
+            time.sleep(60)
+        """)
+        started = time.monotonic()
+        with pytest.raises(cc.CodexCLIError, match="timed out"):
+            cc._run(["codex", "-"], timeout=1, stdin_text="q" * 500000)
+        assert time.monotonic() - started < 15
 
 
 # ---------------------------------------------------------------------------
@@ -253,7 +349,7 @@ def ledger():
 
 
 def _stub_run(monkeypatch, stdout, *, returncode=0, stderr=""):
-    def _run(cmd, timeout):
+    def _run(cmd, timeout, stdin_text=None):
         return subprocess.CompletedProcess(args=cmd, returncode=returncode,
                                            stdout=stdout, stderr=stderr)
     monkeypatch.setattr(cc, "_run", _run)
@@ -376,6 +472,16 @@ class TestUsageLogging:
         assert row["script"] == "codex_cli.codex_json"
         assert json.loads(row["metadata"])["transport"] == "codex_cli"
 
+    def test_the_row_records_how_the_prompt_was_delivered(self, monkeypatch, ledger):
+        """Which transport a call used has to be readable after the fact — the
+        argv path is the one with a kernel limit behind it."""
+        _stub_run(monkeypatch, REAL_EVENTS)
+        cc.codex_json("hi", project="demo")
+        cc.codex_research("m" * (200 * 1024), project="demo")
+
+        transports = [json.loads(r["metadata"])["prompt_transport"] for r in ledger.query()]
+        assert sorted(transports) == ["argv", "stdin"]
+
     def test_notional_matches_the_api_price_of_the_same_tokens(self, monkeypatch, ledger):
         from limbic.cerebellum.cost_log import cost_for
         _stub_run(monkeypatch, REAL_EVENTS)
@@ -415,7 +521,7 @@ class TestUsageLogging:
         assert meta["usage"] == "no usage events in output"
 
     def test_a_timeout_still_bills_the_tokens_it_burned(self, monkeypatch, ledger):
-        def _run(cmd, timeout):
+        def _run(cmd, timeout, stdin_text=None):
             raise cc.CodexCLIError("codex CLI timed out after 900s", stdout=REAL_EVENTS)
         monkeypatch.setattr(cc, "_run", _run)
         with pytest.raises(cc.CodexCLIError):
@@ -429,7 +535,7 @@ class TestUsageLogging:
     def test_every_retried_attempt_gets_its_own_row(self, monkeypatch, ledger):
         calls = {"n": 0}
 
-        def _run(cmd, timeout):
+        def _run(cmd, timeout, stdin_text=None):
             calls["n"] += 1
             if calls["n"] == 1:
                 return subprocess.CompletedProcess(cmd, 1, "", "transient blip")
@@ -474,7 +580,7 @@ class TestJsonFlagUnsupported:
     def test_rejection_retries_without_the_flag(self, monkeypatch):
         seen: list[list[str]] = []
 
-        def _spawn(cmd, timeout):
+        def _spawn(cmd, timeout, stdin_text=None):
             seen.append(list(cmd))
             if "--json" in cmd:
                 return subprocess.CompletedProcess(
@@ -491,7 +597,7 @@ class TestJsonFlagUnsupported:
     def test_a_real_failure_is_not_mistaken_for_a_flag_problem(self, monkeypatch):
         seen: list[list[str]] = []
 
-        def _spawn(cmd, timeout):
+        def _spawn(cmd, timeout, stdin_text=None):
             seen.append(list(cmd))
             return subprocess.CompletedProcess(cmd, 1, "", "model error: overloaded")
 
@@ -512,7 +618,7 @@ class TestJsonFlagUnsupported:
         """
         seen: list[list[str]] = []
 
-        def _spawn(cmd, timeout):
+        def _spawn(cmd, timeout, stdin_text=None):
             seen.append(list(cmd))
             return subprocess.CompletedProcess(
                 cmd, 2, REAL_EVENTS,
@@ -529,7 +635,7 @@ class TestJsonFlagUnsupported:
     def test_only_the_argument_parsers_exit_code_counts(self, monkeypatch):
         seen: list[list[str]] = []
 
-        def _spawn(cmd, timeout):
+        def _spawn(cmd, timeout, stdin_text=None):
             seen.append(list(cmd))
             return subprocess.CompletedProcess(
                 cmd, 1, "", "error: unexpected argument '--json' found")
@@ -545,7 +651,7 @@ class TestJsonFlagUnsupported:
         stdout is not the CLI refusing the flag."""
         seen: list[list[str]] = []
 
-        def _spawn(cmd, timeout):
+        def _spawn(cmd, timeout, stdin_text=None):
             seen.append(list(cmd))
             return subprocess.CompletedProcess(
                 cmd, 2, "error: unexpected argument '--json' found", "")

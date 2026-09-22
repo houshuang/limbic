@@ -4,6 +4,31 @@ All notable changes to the limbic monorepo (formerly amygdala) are documented he
 
 ---
 
+## 2026-09-22 -- A prompt too big for argv
+
+### Fixed
+
+- **`cerebellum.codex_cli` no longer hands an oversized prompt to `execve`.**
+  Linux caps a *single* argv entry at `MAX_ARG_STRLEN` — 128 KiB — whatever the
+  2 MiB `ARG_MAX` the whole vector gets, so a mission past that died before any
+  model ran: `[Errno 7] Argument list too long: 'codex'`, surfacing as
+  `CodexCLIError("codex CLI subprocess error: …")`. On alif that took out
+  hvaskjer's podcast and Kulturbase adjudication on every nightly run from
+  19 Sep — 64 failures, both scripts silently falling back to "preserving
+  existing matches", four days with nothing adjudicated.
+
+  A prompt over `PROMPT_ARGV_LIMIT` (64 KiB of UTF-8, overridable with
+  `LIMBIC_CODEX_PROMPT_ARGV_LIMIT`) now goes to `codex exec … -`, which reads
+  its instructions from stdin — written from a thread started *after* the
+  stdout/stderr drains, so a prompt larger than the pipe buffer cannot deadlock
+  against the child's own output, and a child that never reads stdin parks that
+  thread rather than the `wait()` the timeout and process-group kill depend on.
+  Shorter prompts keep the argv path unchanged. The verification call that
+  proves it: 152,974 bytes, answered in 6s. `metadata.prompt_transport` on the
+  ledger row records which route each call took.
+
+---
+
 ## 2026-09-21 -- Guards that refuse, lifted with a fit check each
 
 A read-only survey of every QA mechanism skard and Kulturbase built against

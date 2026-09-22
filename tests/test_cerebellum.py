@@ -572,7 +572,7 @@ class TestCodexCLIRetry:
         from limbic.cerebellum import codex_cli as cc
         calls = []
         procs = [self._proc(rc=1, stderr="banner\nboom"), self._proc(rc=0, stdout="ok")]
-        monkeypatch.setattr(cc, "_run", lambda cmd, timeout: calls.append(1) or procs[len(calls) - 1])
+        monkeypatch.setattr(cc, "_run", lambda cmd, timeout, stdin_text=None: calls.append(1) or procs[len(calls) - 1])
         monkeypatch.setattr(cc.time, "sleep", lambda s: None)
         assert cc._exec(["codex"], 10, None, None) == "ok"
         assert len(calls) == 2
@@ -581,7 +581,7 @@ class TestCodexCLIRetry:
         from limbic.cerebellum import codex_cli as cc
         calls = []
         monkeypatch.setattr(cc, "_run",
-                            lambda cmd, timeout: calls.append(1) or self._proc(rc=1, stderr="usage limit reached"))
+                            lambda cmd, timeout, stdin_text=None: calls.append(1) or self._proc(rc=1, stderr="usage limit reached"))
         monkeypatch.setattr(cc, "_DISABLED_UNTIL", 0.0)
         with pytest.raises(cc.CodexCLIError):
             cc._exec(["codex"], 10, None, None)
@@ -593,7 +593,7 @@ class TestCodexCLIRetry:
         from limbic.cerebellum import codex_cli as cc
         calls = []
 
-        def _run(cmd, timeout):
+        def _run(cmd, timeout, stdin_text=None):
             calls.append(1)
             raise cc.CodexCLIError("codex CLI timed out after 10s")
 
@@ -607,6 +607,6 @@ class TestCodexCLIRetry:
         banner = "Reading additional input from stdin...\n" + "x" * 800
         stderr = banner + "\nFATAL: the real reason"
         monkeypatch.setattr(cc, "RETRIES", 0)
-        monkeypatch.setattr(cc, "_run", lambda cmd, timeout: self._proc(rc=1, stderr=stderr))
+        monkeypatch.setattr(cc, "_run", lambda cmd, timeout, stdin_text=None: self._proc(rc=1, stderr=stderr))
         with pytest.raises(cc.CodexCLIError, match="the real reason"):
             cc._exec(["codex"], 10, None, None)
