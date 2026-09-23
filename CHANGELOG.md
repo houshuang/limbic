@@ -38,14 +38,12 @@ All notable changes to the limbic monorepo (formerly amygdala) are documented he
 
 ### Changed
 
-- `cerebellum.codex_cli` defaults to `gpt-5.6-sol` instead of `gpt-5.5`.
-  `LIMBIC_CODEX_MODEL` still overrides it. Not `gpt-6-sol`: Codex signed in
-  with a ChatGPT account rejects `gpt-6-sol` and `gpt-6-luna` with a 400
-  ("not supported when using Codex with a ChatGPT account"); `gpt-5.6-sol`,
-  `gpt-5.6-luna` and `gpt-6-astra` are accepted (checked with codex-cli
-  0.153.4). Codex on a subscription draws on usage limits, not per-token
-  price, so the newest accepted sol is the default and astra is left for
-  interactive use.
+- `cerebellum.codex_cli` defaults to `gpt-6-sol` instead of `gpt-5.5`.
+  `LIMBIC_CODEX_MODEL` still overrides it. Needs codex-cli 0.156 or later:
+  0.153 and older, signed in with a ChatGPT account, reject `gpt-6-sol` and
+  `gpt-6-luna` with a 400 ("not supported when using Codex with a ChatGPT
+  account"). The laptop and the alif server both run 0.156.1 as of this
+  entry; an older install fails every call rather than falling back.
 
 ### Fixed
 
