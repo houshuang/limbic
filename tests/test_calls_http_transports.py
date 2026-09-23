@@ -355,7 +355,7 @@ class TestRawRequestPassthrough:
 
         posted = []
 
-        def fake_urlopen(req, timeout=None):
+        def fake_urlopen(req, timeout=None, context=None):
             posted.append(req)
             return _FakeHTTPResponse(response)
 
@@ -527,3 +527,73 @@ class TestReasoningEffort:
         assert len(sent) == 2
         assert "reasoning" not in sent[0]
         assert sent[1]["reasoning"] == {"effort": "low"}
+
+
+# ---------------------------------------------------------------------------
+# Image input
+# ---------------------------------------------------------------------------
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+JPEG = b"\xff\xd8\xff\xe0" + b"\x01" * 16
+
+
+class TestImages:
+    def test_openai_sends_input_image_parts(self, tmp_cost_log, cache_db, monkeypatch):
+        monkeypatch.setenv("OPENAI_KEY", "sk-test")
+        captured = {}
+
+        def _fake_post(url, payload, *, headers, timeout):
+            captured["payload"] = payload
+            return _openai_response(text="Norsk tekst")
+
+        monkeypatch.setattr(calls, "_http_post_json", _fake_post)
+        result, _ = cached_call("transcribe", project="p", purpose="ocr", transport="openai",
+                                model="gpt-5.6-luna", images=[PNG], cache_db_path=cache_db)
+        assert result == "Norsk tekst"
+        content = captured["payload"]["input"][0]["content"]
+        assert content[0] == {"type": "input_text", "text": "transcribe"}
+        assert content[1]["type"] == "input_image"
+        assert content[1]["image_url"].startswith("data:image/png;base64,")
+
+    def test_gemini_sends_inline_data(self, tmp_cost_log, cache_db, monkeypatch):
+        monkeypatch.setenv("GEMINI_KEY", "g-test")
+        captured = {}
+
+        def _fake_post(url, payload, *, headers, timeout):
+            captured["payload"] = payload
+            return {"candidates": [{"content": {"parts": [{"text": "ok"}]}}],
+                    "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 2}}
+
+        monkeypatch.setattr(calls, "_http_post_json", _fake_post)
+        cached_call("read", project="p", purpose="ocr", transport="gemini", model="gemini-2.5-pro",
+                    images=[("image/webp", b"x"), JPEG], cache_db_path=cache_db)
+        parts = captured["payload"]["contents"][0]["parts"]
+        assert parts[0] == {"text": "read"}
+        assert [p["inline_data"]["mime_type"] for p in parts[1:]] == ["image/webp", "image/jpeg"]
+
+    def test_images_are_part_of_the_cache_key(self, tmp_cost_log, cache_db, monkeypatch):
+        monkeypatch.setenv("OPENAI_KEY", "sk-test")
+        calls_made = []
+
+        def _fake_post(url, payload, *, headers, timeout):
+            calls_made.append(payload)
+            return _openai_response(text=f"page {len(calls_made)}")
+
+        monkeypatch.setattr(calls, "_http_post_json", _fake_post)
+        kw = dict(project="p", purpose="ocr", transport="openai", model="gpt-5.6-luna", cache_db_path=cache_db)
+        a, _ = cached_call("transcribe", images=[PNG], **kw)
+        b, _ = cached_call("transcribe", images=[JPEG], **kw)
+        a2, meta = cached_call("transcribe", images=[PNG], **kw)
+        assert (a, b, a2) == ("page 1", "page 2", "page 1")
+        assert meta.cache_hit and len(calls_made) == 2
+
+    def test_text_only_cache_key_is_unchanged(self):
+        before = calls._cache_key(model="m", system="s", prompt="p", schema=None, version="")
+        assert before == calls._cache_key(model="m", system="s", prompt="p", schema=None, version="", images_sha="")
+
+    def test_rejects_images_on_claude_cli_and_unknown_bytes(self, cache_db):
+        with pytest.raises(ValueError, match="claude_cli"):
+            cached_call("x", project="p", purpose="ocr", images=[PNG], cache_db_path=cache_db)
+        with pytest.raises(ValueError, match="image type"):
+            cached_call("x", project="p", purpose="ocr", transport="openai", images=[b"nope"],
+                        cache_db_path=cache_db)

@@ -41,6 +41,8 @@ the time, but exact agreement between two reads lifted precision 0.71 -> 0.97):
 
 from __future__ import annotations
 
+import base64
+import functools
 import hashlib
 import json
 import logging
@@ -128,7 +130,8 @@ def _hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _cache_key(*, model: str, system: str, prompt: str, schema: dict | None, version: str) -> str:
+def _cache_key(*, model: str, system: str, prompt: str, schema: dict | None, version: str,
+               images_sha: str = "") -> str:
     schema_json = json.dumps(schema, sort_keys=True) if schema else ""
     payload = {
         "model": model,
@@ -137,7 +140,35 @@ def _cache_key(*, model: str, system: str, prompt: str, schema: dict | None, ver
         "schema_sha256": _hash(schema_json) if schema_json else "",
         "version": version or "",
     }
+    # Added only when present, so text-only keys are the same as before images existed.
+    if images_sha:
+        payload["images_sha256"] = images_sha
     return _hash(json.dumps(payload, sort_keys=True))
+
+
+_IMAGE_MAGIC = ((b"\x89PNG", "image/png"), (b"\xff\xd8", "image/jpeg"), (b"GIF8", "image/gif"))
+
+
+def _normalize_images(images: Any) -> list[tuple[str, bytes]]:
+    """`images` entries are raw bytes (PNG/JPEG/GIF/WEBP sniffed) or `(mime_type, bytes)`."""
+    out = []
+    for item in images or ():
+        if isinstance(item, tuple):
+            mime, data = item
+        else:
+            data = bytes(item)
+            if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+                mime = "image/webp"
+            else:
+                mime = next((m for magic, m in _IMAGE_MAGIC if data.startswith(magic)), None)
+            if mime is None:
+                raise ValueError("cannot tell the image type; pass (mime_type, bytes)")
+        out.append((mime, data))
+    return out
+
+
+def _images_sha(images: list[tuple[str, bytes]]) -> str:
+    return _hash("|".join(f"{m}:{hashlib.sha256(d).hexdigest()}" for m, d in images)) if images else ""
 
 
 def _infer_project() -> str:
@@ -250,6 +281,17 @@ def _http_post_json(url: str, payload: dict, *, headers: dict, timeout: int) -> 
     return _http_post_bytes(url, json.dumps(payload).encode("utf-8"), headers=headers, timeout=timeout)
 
 
+@functools.lru_cache(maxsize=1)
+def _ssl_context():
+    """python.org builds of Python ship without a CA bundle; certifi's works everywhere."""
+    import ssl
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
+
+
 def _http_post_bytes(url: str, body: bytes, *, headers: dict, timeout: int) -> dict:
     import urllib.error
     import urllib.request
@@ -259,7 +301,7 @@ def _http_post_bytes(url: str, body: bytes, *, headers: dict, timeout: int) -> d
         headers={"Content-Type": "application/json", **headers},
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", errors="replace")[:500]
@@ -321,9 +363,12 @@ def _openai_generate(
     prompt: str, *, project: str, purpose: str, system: str = "", schema: dict | None = None,
     model: str = "gpt-6-luna", max_output_tokens: int = 4096, timeout: int = 120,
     request: bytes | None = None, packet_id: str | None = None, reasoning_effort: str | None = None,
-    ledger_metadata: dict | None = None, **_ignored: Any,
+    ledger_metadata: dict | None = None, images: Any = None, **_ignored: Any,
 ) -> tuple[Any, dict]:
     """Built-in transport: OpenAI Responses API via stdlib `urllib`.
+
+    `images` (raw bytes or `(mime_type, bytes)`) are sent after the prompt
+    as `input_image` parts of the same user turn.
 
     With `request` (the exact body bytes, as `cached_call(request=...)` hands
     them over) nothing is rebuilt: those bytes are posted unchanged, the model
@@ -364,7 +409,13 @@ def _openai_generate(
         body = request
         model = json.loads(body).get("model") or model
     else:
-        payload: dict[str, Any] = {"model": model, "input": prompt, "max_output_tokens": max_output_tokens}
+        imgs = _normalize_images(images)
+        user_input: Any = prompt
+        if imgs:
+            user_input = [{"role": "user", "content": [{"type": "input_text", "text": prompt}] + [
+                {"type": "input_image", "image_url": f"data:{m};base64,{base64.b64encode(d).decode()}"}
+                for m, d in imgs]}]
+        payload: dict[str, Any] = {"model": model, "input": user_input, "max_output_tokens": max_output_tokens}
         if system:
             payload["instructions"] = system
         if reasoning_effort:
@@ -447,7 +498,7 @@ def _gemini_generate(
     prompt: str, *, project: str, purpose: str, system: str = "", schema: dict | None = None,
     model: str = "gemini-2.5-flash", max_output_tokens: int = 8192, timeout: int = 120,
     request: bytes | None = None, packet_id: str | None = None,
-    ledger_metadata: dict | None = None, **_ignored: Any,
+    ledger_metadata: dict | None = None, images: Any = None, **_ignored: Any,
 ) -> tuple[Any, dict]:
     """Built-in transport: Gemini REST via stdlib `urllib` — deliberately not
     the `google-genai` SDK (see module-section docstring above). Self-logs to
@@ -467,7 +518,9 @@ def _gemini_generate(
 
     if request is None:
         payload: dict[str, Any] = {
-            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "contents": [{"role": "user", "parts": [{"text": prompt}] + [
+                {"inline_data": {"mime_type": m, "data": base64.b64encode(d).decode()}}
+                for m, d in _normalize_images(images)]}],
             "generationConfig": {"maxOutputTokens": max_output_tokens},
         }
         if system:
@@ -555,6 +608,7 @@ def cached_call(
     cache_db_path: str | Path | None = None,
     request: dict | bytes | None = None,
     cache_key: str | None = None,
+    images: Any = None,
     **transport_kwargs: Any,
 ) -> tuple[Any | Held, CallMeta]:
     """Call an LLM transport once, cached by (model, system, prompt, schema, version).
@@ -570,6 +624,10 @@ def cached_call(
             transports accept it; a callable transport receives it as the
             `request=` keyword. Not combinable with `replicates` — give each
             replicate its own `cache_key` instead.
+        images: Images sent with the prompt, each raw bytes (PNG, JPEG, GIF
+            or WEBP, sniffed) or `(mime_type, bytes)`. Their hashes join the
+            cache key. Supported by the `openai` and `gemini` transports; a
+            callable transport receives them as `images=`.
         cache_key: Caller-supplied response-cache key, replacing the derived
             one (e.g. a key that carries a replicate number or a packet's own
             input hash).
@@ -611,6 +669,15 @@ def cached_call(
         # Same prompt at a different effort is a different answer; keep them apart in the cache.
         version = f"{version or ''}|effort={transport_kwargs['reasoning_effort']}"
 
+    imgs = _normalize_images(images)
+    if imgs:
+        if request is not None:
+            raise ValueError("images= goes into the request body you built; pass one or the other")
+        if transport == "claude_cli":
+            raise ValueError("the claude_cli transport cannot send images; use transport='openai' or 'gemini'")
+        transport_kwargs["images"] = imgs
+    images_sha = _images_sha(imgs)
+
     request_sha = ""
     if request is not None:
         if prompt or system or schema:
@@ -630,10 +697,12 @@ def cached_call(
         prompt_sha = _hash(prompt)
         system_sha = _hash(system) if system else ""
         schema_sha = _hash(json.dumps(schema, sort_keys=True)) if schema else ""
-        key = cache_key or _cache_key(model=model, system=system, prompt=prompt, schema=schema, version=version)
+        key = cache_key or _cache_key(model=model, system=system, prompt=prompt, schema=schema,
+                                      version=version, images_sha=images_sha)
     hashes = {
         "cache_key": key, "prompt_sha256": prompt_sha, "system_sha256": system_sha,
         "schema_sha256": schema_sha, **({"request_sha256": request_sha} if request_sha else {}),
+        **({"images_sha256": images_sha} if images_sha else {}),
     }
 
     if replicates and replicates > 1:
