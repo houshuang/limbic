@@ -163,10 +163,14 @@ _FALLBACK_PRICES: dict[str, tuple[float, float]] = {  # (input/M, output/M)
     "gemini-3.5-flash-lite":      (0.30, 2.50),
     "gemini-3.8-flash":           (0.75, 3.75),
     "claude-fable-5-1":           (10.00, 50.00),
+    "claude-opus-5-5":            (4.00, 20.00),
     "claude-opus-5":              (5.00, 25.00),
     "claude-sonnet-5":            (2.00, 10.00),
     "claude-sonnet-4-20250514":   (3.00, 15.00),
     "claude-haiku-4-5-20251001":  (1.00, 5.00),
+    "gpt-6-astra":                (10.00, 50.00),
+    "gpt-6-sol":                  (2.00, 10.00),
+    "gpt-6-luna":                 (0.10, 0.50),
     "gpt-5.6-sol":                (4.00, 20.00),
     "gpt-5.6-terra":              (2.00, 12.00),
     "gpt-5.6-luna":               (0.20, 1.20),
@@ -180,13 +184,16 @@ _FALLBACK_PRICES: dict[str, tuple[float, float]] = {  # (input/M, output/M)
 
 # Cached-input prices (USD per 1M tokens): what the provider bills for the part
 # of `prompt_tokens` it served from its prompt cache. Sources, both read on
-# 2026-09-21: OpenAI https://developers.openai.com/api/docs/pricing (standard
+# 2026-09-21 (GPT-6 rows 2026-09-23): OpenAI https://developers.openai.com/api/docs/pricing (standard
 # tier, "Cached input"); Gemini https://ai.google.dev/gemini-api/docs/pricing
 # (paid tier, "Context caching", page dated 2026-09-16; gemini-2.0-flash from
 # its earlier listing). Anthropic is left out on purpose: its cache has a
 # separate write surcharge that a single cached-token count cannot express.
 # A model absent here is billed at the full input price — never guessed.
 _CACHED_INPUT_PRICES: dict[str, float] = {
+    "gpt-6-astra":            1.00,
+    "gpt-6-sol":              0.20,
+    "gpt-6-luna":             0.01,
     "gpt-5.6-sol":            0.40,
     "gpt-5.6-terra":          0.20,
     "gpt-5.6-luna":           0.02,

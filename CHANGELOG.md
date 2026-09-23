@@ -4,6 +4,39 @@ All notable changes to the limbic monorepo (formerly amygdala) are documented he
 
 ---
 
+## 2026-09-23 -- GPT-6 Luna/Sol and Claude Opus 5.5 become the default aliases
+
+Prices from https://developers.openai.com/api/docs/pricing and
+https://platform.claude.com/docs/en/models/overview, both read 2026-09-23.
+
+### Changed
+
+- `luna` now maps to `gpt-6-luna` ($0.10 / $0.50 per M, cached input $0.01),
+  half or less of `gpt-5.6-luna` ($0.20 / $1.20). `sol` maps to `gpt-6-sol`
+  ($2 / $10, against $4 / $20). `opus` maps to `claude-opus-5-5` ($4 / $20,
+  against $5 / $25). There is no GPT-6 Terra and no Claude Sonnet 5.5, so
+  `terra` and `sonnet` are unchanged.
+- The OpenAI HTTP transport in `cerebellum.calls` defaults to `gpt-6-luna`
+  instead of `gpt-5.4-mini`. Callers that relied on the default get cache
+  misses once, because the model is part of the cache key.
+
+### Added
+
+- `astra` (`gpt-6-astra`, $10 / $50). The previous generation stays
+  addressable as `luna56`, `sol56` and `opus5`.
+- GPT-6 and Opus 5.5 rows in `cost_log`'s fallback and cached-input price tables.
+
+### Fixed
+
+- `generate_structured` on any Claude 5 alias (`opus`, `sonnet`, `fable`)
+  failed with a 400: it prefilled the assistant turn with `{`, which those
+  models reject. It now asks for JSON through Anthropic structured outputs
+  (`output_config.format`), closes every object in the schema with
+  `additionalProperties: false` as that API requires, and reads the text
+  block rather than `content[0]`, which can be a thinking block.
+
+---
+
 ## 2026-09-22 -- Closing the gaps a fit check found in `apply_audit`
 
 A fit check of `hippocampus.audit.apply_audit` against four real Kulturbase

@@ -662,6 +662,10 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
+    { name = "anthropic" },
+    { name = "edtf" },
+    { name = "google-genai" },
+    { name = "openai" },
     { name = "pytest" },
     { name = "pyyaml" },
 ]
@@ -683,10 +687,10 @@ requires-dist = [
     { name = "certifi", specifier = ">=2024.0" },
     { name = "edtf", marker = "extra == 'temporal'", specifier = ">=4.0" },
     { name = "google-genai", marker = "extra == 'llm'" },
+    { name = "limbic", extras = ["hippocampus", "llm", "temporal"], marker = "extra == 'dev'" },
     { name = "numpy", specifier = ">=1.24,<2" },
     { name = "openai", marker = "extra == 'llm'" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
-    { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
     { name = "pyyaml", marker = "extra == 'hippocampus'", specifier = ">=6.0" },
     { name = "sentence-transformers", specifier = ">=2.2" },
     { name = "transformers", specifier = ">=4.30,<5" },
