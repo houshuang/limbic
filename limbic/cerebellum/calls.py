@@ -552,7 +552,8 @@ def _gemini_generate(
 
     usage = data.get("usageMetadata") or {}
     input_tokens = usage.get("promptTokenCount", 0)
-    output_tokens = usage.get("candidatesTokenCount", 0)
+    # Gemini bills thinking tokens at the output rate but reports them separately.
+    output_tokens = usage.get("candidatesTokenCount", 0) + usage.get("thoughtsTokenCount", 0)
     cached_tokens = usage.get("cachedContentTokenCount", 0)
     cost_usd = cost_for(model, input_tokens, output_tokens, cached_tokens, strict=False)
 

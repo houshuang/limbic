@@ -597,3 +597,13 @@ class TestImages:
         with pytest.raises(ValueError, match="image type"):
             cached_call("x", project="p", purpose="ocr", transport="openai", images=[b"nope"],
                         cache_db_path=cache_db)
+
+
+def test_gemini_thinking_tokens_are_billed_as_output(tmp_cost_log, cache_db, monkeypatch):
+    monkeypatch.setenv("GEMINI_KEY", "g-test")
+    monkeypatch.setattr(calls, "_http_post_json", lambda url, payload, *, headers, timeout: {
+        "candidates": [{"content": {"parts": [{"text": "ok"}]}}],
+        "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 20, "thoughtsTokenCount": 300}})
+    _, meta = cached_call("x", project="p", purpose="t", transport="gemini", model="gemini-2.5-flash",
+                          cache_db_path=cache_db)
+    assert meta.raw["output_tokens"] == 320

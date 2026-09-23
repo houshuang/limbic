@@ -48,6 +48,11 @@ All notable changes to the limbic monorepo (formerly amygdala) are documented he
   `.venv` is one), which ship without a CA bundle. They now verify against
   certifi's bundle, which was already a dependency.
 
+- The `gemini` transport logged only `candidatesTokenCount` as output, so
+  every thinking Gemini model (2.5 and 3.x) was under-costed in `cost_log`.
+  `thoughtsTokenCount` is billed at the output rate and is now included.
+  (`amygdala.llm` already counted it.)
+
 ### Not changed, on evidence
 
 An OCR check on 23 Sep 2026 (skard's hand-verified crop, plus four 1814
