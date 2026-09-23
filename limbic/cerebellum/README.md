@@ -97,7 +97,7 @@ hand-rolling the HTTP call:
 result, meta = cached_call(
     "Classify: I love it", project="skard", purpose="sentiment",
     schema={"type": "object", "properties": {"label": {"type": "string"}}},
-    transport="openai", model="gpt-5.4-mini",   # or transport="gemini", model="gemini-2.5-flash"
+    transport="openai", model="gpt-6-luna",   # or transport="gemini", model="gemini-2.5-flash"
 )
 ```
 

@@ -287,7 +287,7 @@ def _extract_openai_text(data: dict) -> str:
 
 def _openai_generate(
     prompt: str, *, project: str, purpose: str, system: str = "", schema: dict | None = None,
-    model: str = "gpt-5.4-mini", max_output_tokens: int = 4096, timeout: int = 120,
+    model: str = "gpt-6-luna", max_output_tokens: int = 4096, timeout: int = 120,
     request: bytes | None = None, packet_id: str | None = None,
     ledger_metadata: dict | None = None, **_ignored: Any,
 ) -> tuple[Any, dict]:

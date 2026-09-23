@@ -32,12 +32,18 @@ class TestRegistry:
             assert m["input_price"] > 0 and m["output_price"] > 0, f"{key} has non-positive prices"
 
     def test_current_generation_models_registered(self):
-        for key in ("luna", "sol", "terra", "opus", "sonnet", "haiku", "gemini38-flash"):
+        for key in ("luna", "sol", "astra", "terra", "opus", "sonnet", "haiku", "gemini38-flash"):
             assert key in MODELS
 
-    def test_gpt56_tiers_map_to_wire_ids(self):
-        assert MODELS["luna"]["id"] == "gpt-5.6-luna"
-        assert MODELS["sol"]["id"] == "gpt-5.6-sol"
+    def test_bare_aliases_map_to_newest_wire_ids(self):
+        assert MODELS["luna"]["id"] == "gpt-6-luna"
+        assert MODELS["sol"]["id"] == "gpt-6-sol"
+        assert MODELS["astra"]["id"] == "gpt-6-astra"
+        assert MODELS["opus"]["id"] == "claude-opus-5-5"
+
+    def test_gpt56_tiers_stay_addressable(self):
+        assert MODELS["luna56"]["id"] == "gpt-5.6-luna"
+        assert MODELS["sol56"]["id"] == "gpt-5.6-sol"
         assert MODELS["terra"]["id"] == "gpt-5.6-terra"
 
     def test_fallbacks_point_at_registered_models(self):
@@ -45,9 +51,21 @@ class TestRegistry:
             assert src in MODELS, f"fallback source {src} is not registered"
             assert dst in MODELS, f"fallback target {dst} is not registered"
 
+    def test_anthropic_schema_closes_objects_it_leaves_open(self):
+        schema = {"type": "object", "properties": {
+            "a": {"type": "object", "properties": {"b": {"type": "string"}}},
+            "c": {"type": "array", "items": {"type": ["object", "null"], "properties": {}}},
+            "d": {"type": "object", "additionalProperties": {"type": "string"}}}}
+        closed = llm._close_anthropic_schema(schema)
+        assert closed["additionalProperties"] is False
+        assert closed["properties"]["a"]["additionalProperties"] is False
+        assert closed["properties"]["c"]["items"]["additionalProperties"] is False
+        assert closed["properties"]["d"]["additionalProperties"] == {"type": "string"}
+        assert "additionalProperties" not in schema
+
     def test_cost_uses_registry_prices(self):
-        # luna: $0.20/M in, $1.20/M out
-        assert llm._calc_cost("luna", 1_000_000, 1_000_000) == pytest.approx(1.40)
+        # luna: $0.10/M in, $0.50/M out
+        assert llm._calc_cost("luna", 1_000_000, 1_000_000) == pytest.approx(0.60)
 
 
 # ---------------------------------------------------------------------------
@@ -155,14 +173,14 @@ class TestFallback:
 
         async def fake_openai(model_id, sys, user, schema, max_tok, **kw):
             calls.append(model_id)
-            text = "" if model_id == "gpt-5.6-luna" else '{"capital": "Paris"}'
+            text = "" if model_id == "gpt-6-luna" else '{"capital": "Paris"}'
             return {"text": text, "input_tokens": 10, "output_tokens": 5, "duration_s": 0.1}
 
         with patch.dict(llm._PROVIDERS, {"openai": fake_openai}):
             result, meta = _run(generate_structured("Capital?", SCHEMA, model="luna"))
 
         assert result == {"capital": "Paris"}
-        assert calls == ["gpt-5.6-luna", "gpt-5.6-terra"]
+        assert calls == ["gpt-6-luna", "gpt-5.6-terra"]
         assert meta["model"] == "terra"
 
 

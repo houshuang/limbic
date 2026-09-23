@@ -22,7 +22,7 @@ report = probe(packets, n=50, yield_fn=lambda r: len(r["items"]),  # 50 packets 
                project="skard", purpose="code_spans", transport="openai",
                execute=True, min_yield=0.2)                     # raises LowYield if it is not worth it
 result = run_packets(packets, project="skard", purpose="code_spans", transport="openai",
-                     model="gpt-5.6-luna", max_calls=200, max_tokens=2_000_000,
+                     model="gpt-6-luna", max_calls=200, max_tokens=2_000_000,
                      split=halve, execute=True)
 ```
 

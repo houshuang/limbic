@@ -28,12 +28,16 @@ MODELS = {
     "gemini25-flash": {"provider": "gemini", "id": "gemini-2.5-flash", "input_price": 0.30, "output_price": 2.50},
     "gemini25-pro": {"provider": "gemini", "id": "gemini-2.5-pro", "input_price": 1.25, "output_price": 10.0},
     "fable": {"provider": "anthropic", "id": "claude-fable-5-1", "input_price": 10.0, "output_price": 50.0},
-    "opus": {"provider": "anthropic", "id": "claude-opus-5", "input_price": 5.0, "output_price": 25.0},
+    "opus": {"provider": "anthropic", "id": "claude-opus-5-5", "input_price": 4.0, "output_price": 20.0},
+    "opus5": {"provider": "anthropic", "id": "claude-opus-5", "input_price": 5.0, "output_price": 25.0},
     "sonnet": {"provider": "anthropic", "id": "claude-sonnet-5", "input_price": 2.0, "output_price": 10.0},
     "haiku": {"provider": "anthropic", "id": "claude-haiku-4-5-20251001", "input_price": 1.0, "output_price": 5.0},
-    "sol": {"provider": "openai", "id": "gpt-5.6-sol", "input_price": 4.0, "output_price": 20.0},
+    "astra": {"provider": "openai", "id": "gpt-6-astra", "input_price": 10.0, "output_price": 50.0},
+    "sol": {"provider": "openai", "id": "gpt-6-sol", "input_price": 2.0, "output_price": 10.0},
+    "luna": {"provider": "openai", "id": "gpt-6-luna", "input_price": 0.10, "output_price": 0.50},
+    "sol56": {"provider": "openai", "id": "gpt-5.6-sol", "input_price": 4.0, "output_price": 20.0},
     "terra": {"provider": "openai", "id": "gpt-5.6-terra", "input_price": 2.0, "output_price": 12.0},
-    "luna": {"provider": "openai", "id": "gpt-5.6-luna", "input_price": 0.20, "output_price": 1.20},
+    "luna56": {"provider": "openai", "id": "gpt-5.6-luna", "input_price": 0.20, "output_price": 1.20},
     "gpt55": {"provider": "openai", "id": "gpt-5.5", "input_price": 5.0, "output_price": 30.0},
     "gpt54-mini": {"provider": "openai", "id": "gpt-5.4-mini", "input_price": 0.75, "output_price": 4.50},
     "gpt54-nano": {"provider": "openai", "id": "gpt-5.4-nano", "input_price": 0.20, "output_price": 1.25},
@@ -46,7 +50,10 @@ FALLBACK = {
     "gemini35-flash": "gemini3-flash",
     "gemini3-flash": "gemini25-flash",
     "luna": "terra",
+    "luna56": "terra",
     "sol": "terra",
+    "sol56": "terra",
+    "astra": "sol",
 }
 MAX_RETRIES, BACKOFF_BASE = 3, 2
 
@@ -60,6 +67,16 @@ except ImportError:
 def _calc_cost(key, inp, out):
     m = MODELS[key]
     return (inp * m["input_price"] + out * m["output_price"]) / 1_000_000
+
+
+def _close_anthropic_schema(s):
+    """Anthropic structured outputs require every object to set additionalProperties: false."""
+    if isinstance(s, list): return [_close_anthropic_schema(i) for i in s]
+    if not isinstance(s, dict): return s
+    r = {k: _close_anthropic_schema(v) for k, v in s.items()}
+    if r.get("type") == "object" or (isinstance(r.get("type"), list) and "object" in r["type"]):
+        r.setdefault("additionalProperties", False)
+    return r
 
 
 def _strip_gemini_schema(s):
@@ -104,10 +121,11 @@ async def _call_anthropic(model_id, sys, user, schema, max_tok, **kw):
     client = anthropic.AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_KEY") or os.environ.get("ANTHROPIC_API_KEY"))
     t0 = time.time()
     try:
-        msgs = [{"role": "user", "content": user + ("\n\nRespond with valid JSON." if schema else "")}]
-        if schema: msgs.append({"role": "assistant", "content": "{"})
-        r = await client.messages.create(model=model_id, max_tokens=max_tok, system=sys, messages=msgs)
-        text = ("{" + r.content[0].text) if schema else r.content[0].text
+        # Claude 5 models reject an assistant prefill, so JSON comes from structured outputs.
+        extra = {"output_config": {"format": {"type": "json_schema", "schema": _close_anthropic_schema(schema)}}} if schema else None
+        r = await client.messages.create(model=model_id, max_tokens=max_tok, system=sys,
+                                         messages=[{"role": "user", "content": user}], extra_body=extra)
+        text = "".join(b.text for b in r.content if b.type == "text")
         return {"text": text, "input_tokens": r.usage.input_tokens,
                 "output_tokens": r.usage.output_tokens, "duration_s": time.time() - t0}
     finally:

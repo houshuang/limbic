@@ -601,12 +601,12 @@ consistency = intra_rater_reliability(pass1_labels, pass2_labels)
 Multi-provider async LLM client with structured output, retry, auto-fallback, and cost tracking.
 
 Supported providers and models:
-Aliases as of 2026-09-21 — `limbic.amygdala.llm.MODELS` is the list that is
+Aliases as of 2026-09-23 — `limbic.amygdala.llm.MODELS` is the list that is
 actually true:
 
 - **Gemini**: gemini38-flash, gemini35-flash, gemini35-flash-lite, gemini31-pro, gemini31-flash-lite, gemini3-flash, gemini25-flash, gemini25-pro
-- **Anthropic**: fable (Claude Fable 5.1), opus (Claude Opus 5), sonnet (Claude Sonnet 5), haiku (Claude Haiku 4.5)
-- **OpenAI**: sol, terra, luna (GPT-5.6 family), gpt55, gpt54-mini, gpt54-nano, gpt41-mini, gpt41-nano
+- **Anthropic**: fable (Claude Fable 5.1), opus (Claude Opus 5.5), opus5 (Claude Opus 5), sonnet (Claude Sonnet 5), haiku (Claude Haiku 4.5)
+- **OpenAI**: astra, sol, luna (GPT-6 family), sol56, terra, luna56 (GPT-5.6 family), gpt55, gpt54-mini, gpt54-nano, gpt41-mini, gpt41-nano
 
 ```python
 from limbic.amygdala.llm import generate, generate_structured
