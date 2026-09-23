@@ -24,6 +24,42 @@ All notable changes to the limbic monorepo (formerly amygdala) are documented he
 
 ---
 
+## 2026-09-23 -- Images in `cached_call`, Codex defaults to GPT-6 Sol
+
+### Added
+
+- `cached_call(images=[...])` sends images with the prompt through the
+  `openai` (`input_image`) and `gemini` (`inline_data`) transports. Entries
+  are raw bytes (PNG, JPEG, GIF, WEBP sniffed) or `(mime_type, bytes)`.
+  Image hashes join the cache key only when images are present, so every
+  existing text-only cache entry still hits. The `claude_cli` transport
+  refuses images rather than silently dropping them. This lets OCR and
+  vision scripts stop hand-building request bodies.
+
+### Changed
+
+- `cerebellum.codex_cli` defaults to `gpt-6-sol` ($2 / $10) instead of
+  `gpt-5.5` ($5 / $30). `LIMBIC_CODEX_MODEL` still overrides it.
+
+### Fixed
+
+- The `openai` and `gemini` HTTP transports failed with
+  `CERTIFICATE_VERIFY_FAILED` on python.org builds of Python (limbic's own
+  `.venv` is one), which ship without a CA bundle. They now verify against
+  certifi's bundle, which was already a dependency.
+
+### Not changed, on evidence
+
+An OCR check on 23 Sep 2026 (skard's hand-verified crop, plus four 1814
+fraktur poems scored against their published scan-verified text) found no
+newer model better for vision. `gpt-6-luna` cannot read fraktur: it marks
+nearly every word `[ulæseligt]` (word recall 7-18% against 68-93% for
+`gpt-5.6-luna`, 92-98% for `gpt-6-sol`). `gemini-3.1-pro-preview` scored
+slightly below `gemini-2.5-pro` while spending 2-4x the output tokens.
+Keep `gemini-2.5-pro` / `gpt-5.6-luna` for image transcription.
+
+---
+
 ## 2026-09-23 -- GPT-6 Luna/Sol and Claude Opus 5.5 become the default aliases
 
 Prices from https://developers.openai.com/api/docs/pricing and
