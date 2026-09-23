@@ -177,9 +177,9 @@ for s in scan_claude_sessions(since=parse_since("1d")):
 Real output from one day of this machine's sessions:
 
 ```
-/Users/stian/src/research  main=19,848,168  subagents=179,619,595 (22)
+~/src/research             main=19,848,168  subagents=179,619,595 (22)
     entrance fee 61,449  claude-sonnet-5
-/Users/stian/src/nrk       main=11,820,737  subagents=2,157,058 (1)
+~/src/nrk                  main=11,820,737  subagents=2,157,058 (1)
     entrance fee 19,238  claude-opus-5
 ```
 
