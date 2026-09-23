@@ -285,10 +285,42 @@ def _extract_openai_text(data: dict) -> str:
     return "".join(chunks)
 
 
+def _strict_openai_schema(schema: Any) -> Any:
+    """Rewrite a JSON schema into the subset OpenAI's strict structured outputs accept.
+
+    Strict mode requires every object to set `additionalProperties: false` and to list
+    every property in `required`. A property the caller left optional becomes nullable,
+    so the model can still decline to fill it.
+    """
+    if isinstance(schema, list):
+        return [_strict_openai_schema(s) for s in schema]
+    if not isinstance(schema, dict):
+        return schema
+    out = {k: _strict_openai_schema(v) for k, v in schema.items()}
+    types = out.get("type")
+    if types == "object" or (isinstance(types, list) and "object" in types):
+        out.setdefault("additionalProperties", False)
+        props = out.get("properties") or {}
+        required = set(out.get("required") or [])
+        for name, sub in props.items():
+            if name in required or not isinstance(sub, dict):
+                continue
+            t = sub.get("type")
+            if isinstance(t, str) and t != "null":
+                sub["type"] = [t, "null"]
+            elif isinstance(t, list) and "null" not in t:
+                sub["type"] = [*t, "null"]
+            if "enum" in sub and None not in sub["enum"]:
+                sub["enum"] = [*sub["enum"], None]
+        if props:
+            out["required"] = list(props)
+    return out
+
+
 def _openai_generate(
     prompt: str, *, project: str, purpose: str, system: str = "", schema: dict | None = None,
     model: str = "gpt-6-luna", max_output_tokens: int = 4096, timeout: int = 120,
-    request: bytes | None = None, packet_id: str | None = None,
+    request: bytes | None = None, packet_id: str | None = None, reasoning_effort: str | None = None,
     ledger_metadata: dict | None = None, **_ignored: Any,
 ) -> tuple[Any, dict]:
     """Built-in transport: OpenAI Responses API via stdlib `urllib`.
@@ -335,8 +367,10 @@ def _openai_generate(
         payload: dict[str, Any] = {"model": model, "input": prompt, "max_output_tokens": max_output_tokens}
         if system:
             payload["instructions"] = system
+        if reasoning_effort:
+            payload["reasoning"] = {"effort": reasoning_effort}
         if schema:
-            payload["text"] = {"format": {"type": "json_schema", "name": "response", "strict": True, "schema": schema}}
+            payload["text"] = {"format": {"type": "json_schema", "name": "response", "strict": True, "schema": _strict_openai_schema(schema)}}
     extra = dict(ledger_metadata or {})
 
     t0 = time.time()
@@ -573,6 +607,9 @@ def cached_call(
         )
     project = project or _infer_project()
     fn = _resolve_transport(transport)
+    if transport_kwargs.get("reasoning_effort"):
+        # Same prompt at a different effort is a different answer; keep them apart in the cache.
+        version = f"{version or ''}|effort={transport_kwargs['reasoning_effort']}"
 
     request_sha = ""
     if request is not None:
