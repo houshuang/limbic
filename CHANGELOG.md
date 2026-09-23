@@ -4,6 +4,26 @@ All notable changes to the limbic monorepo (formerly amygdala) are documented he
 
 ---
 
+## 2026-09-23 -- OpenAI transport: strict schemas and reasoning effort
+
+### Fixed
+
+- The built-in `openai` transport sent caller schemas unchanged in strict
+  mode, and OpenAI rejects any object without `additionalProperties: false`
+  and a complete `required` list. Every packet run with a typical schema on an
+  OpenAI model failed with HTTP 400, which is why `lit_llm.py` could only run
+  on Gemini. `_strict_openai_schema` now closes each object and makes
+  properties the caller left optional nullable, so they keep their meaning.
+
+### Added
+
+- `reasoning_effort=` on the `openai` transport (`none`/`low`/`medium`/`high`),
+  passed through `cached_call` and `run_packets`. It is part of the cache key.
+  On a 398-abstract screening benchmark, `gpt-6-luna` at `low` took 183 s and
+  $0.018, against 388 s and $0.027 at the default, with the same accuracy.
+
+---
+
 ## 2026-09-23 -- GPT-6 Luna/Sol and Claude Opus 5.5 become the default aliases
 
 Prices from https://developers.openai.com/api/docs/pricing and

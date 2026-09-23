@@ -124,7 +124,10 @@ class TestOpenAITransport:
         assert result == {"label": "positive"}
         assert captured["payload"]["text"]["format"]["type"] == "json_schema"
         assert captured["payload"]["text"]["format"]["strict"] is True
-        assert captured["payload"]["text"]["format"]["schema"] == schema
+        # OpenAI's strict mode rejects this schema as written; the transport closes it.
+        assert captured["payload"]["text"]["format"]["schema"] == {
+            "type": "object", "properties": {"label": {"type": ["string", "null"]}},
+            "additionalProperties": False, "required": ["label"]}
 
     def test_system_prompt_becomes_instructions(self, tmp_cost_log, cache_db, monkeypatch):
         monkeypatch.setenv("OPENAI_KEY", "sk-test")
@@ -481,3 +484,46 @@ class TestRawRequestPassthrough:
         assert posted[0].data == body
         assert "gemini-2.5-flash:generateContent" in posted[0].full_url
         assert result == response and meta.raw["cached_tokens"] == 4
+
+
+class TestStrictOpenAISchema:
+    def test_closes_objects_and_makes_optional_fields_nullable(self):
+        from limbic.cerebellum.calls import _strict_openai_schema
+        schema = {"type": "object", "properties": {
+            "decisions": {"type": "array", "items": {"type": "object", "properties": {
+                "slot": {"type": "string", "enum": ["i01"]},
+                "note": {"type": "string"}}, "required": ["slot"]}},
+            "label": {"type": "string", "enum": ["a", "b"]}},
+            "required": ["decisions"]}
+        strict = _strict_openai_schema(schema)
+        assert strict["additionalProperties"] is False
+        assert strict["required"] == ["decisions", "label"]
+        assert strict["properties"]["label"]["type"] == ["string", "null"]
+        assert strict["properties"]["label"]["enum"] == ["a", "b", None]
+        item = strict["properties"]["decisions"]["items"]
+        assert item["additionalProperties"] is False
+        assert item["required"] == ["slot", "note"]
+        assert item["properties"]["slot"]["type"] == "string"
+        assert item["properties"]["note"]["type"] == ["string", "null"]
+        assert "additionalProperties" not in schema
+        assert schema["properties"]["label"]["type"] == "string"
+
+
+class TestReasoningEffort:
+    def test_effort_is_sent_and_keyed_separately(self, tmp_cost_log, cache_db, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "test")
+        sent = []
+
+        def fake_post(url, payload, headers=None, timeout=None):
+            sent.append(payload)
+            return {"output": [{"type": "message", "content": [{"type": "output_text", "text": "hi"}]}],
+                    "usage": {"input_tokens": 1, "output_tokens": 1}}
+
+        monkeypatch.setattr(calls, "_http_post_json", fake_post)
+        for effort in (None, "low", "low"):
+            calls.cached_call("same prompt", project="p", purpose="t", transport="openai",
+                              model="gpt-6-luna", cache_db_path=cache_db,
+                              **({"reasoning_effort": effort} if effort else {}))
+        assert len(sent) == 2
+        assert "reasoning" not in sent[0]
+        assert sent[1]["reasoning"] == {"effort": "low"}
