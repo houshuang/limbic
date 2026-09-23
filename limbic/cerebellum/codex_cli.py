@@ -58,7 +58,7 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-DEFAULT_MODEL = os.environ.get("LIMBIC_CODEX_MODEL", "gpt-6-sol")
+DEFAULT_MODEL = os.environ.get("LIMBIC_CODEX_MODEL", "gpt-5.6-sol")
 DEFAULT_REASONING = os.environ.get("LIMBIC_CODEX_REASONING", "medium")
 QUOTA_COOLDOWN_S = int(os.environ.get("LIMBIC_CODEX_QUOTA_COOLDOWN_S", "21600"))
 # Cap on captured stdout/stderr per call. An agentic run is otherwise free to
