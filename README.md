@@ -45,6 +45,11 @@ external services.
 | `limbic.cerebellum` | [→](limbic/cerebellum/README.md) |
 | `limbic.drive` | [→](limbic/drive/README.md) |
 
+The repo also ships four Claude Code skills that encode how the library is meant
+to be used — `packet-worker`, `thin-worker-brief`, `coordinator-hygiene` and
+`drive`. See [**skills/README.md**](skills/README.md) for what each is for and
+how to install it into `~/.claude/skills`.
+
 ## Start here if you care about LLM pipelines
 
 This is the part of the library with the most recent thinking in it, and the
@@ -283,7 +288,7 @@ packaging change and has not been made.
 
 ## Tests
 
-872 tests:
+1,039 tests:
 
 ```bash
 pip install -e ".[dev]"      # pulls the llm/temporal/hippocampus extras too
@@ -292,9 +297,9 @@ python -m pytest tests/ -v
 
 | Package | Tests |
 |---------|-------|
-| limbic.amygdala | 371 |
-| limbic.hippocampus | 194 |
-| limbic.cerebellum | 302 |
+| limbic.amygdala | 377 |
+| limbic.hippocampus | 264 |
+| limbic.cerebellum | 393 |
 | limbic.drive | 5 |
 
 Ten of those hit the live Wikidata API (`test_wikidata_live.py`,
