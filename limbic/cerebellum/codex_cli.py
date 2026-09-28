@@ -287,6 +287,9 @@ class _LogContext:
     packet_id: str | None = None
     enabled: bool = True
     metadata: dict = field(default_factory=dict)
+    # Filled by `_log_usage` for the latest attempt, so a caller can surface them.
+    usage: "CodexUsage | None" = None
+    call_id: str | None = None
 
 
 _PROJECT_CACHE: dict[str, str] = {}
@@ -325,6 +328,8 @@ def _log_usage(ctx: _LogContext | None, usage: CodexUsage, *,
     for, and a failed attempt with no usage at all still leaves a zero-token row
     with an error marker so the attempt itself is countable.
     """
+    if ctx is not None:
+        ctx.usage, ctx.call_id = usage, None
     if ctx is None or not ctx.enabled or not cost_log_enabled():
         return
     try:
@@ -357,7 +362,7 @@ def _log_usage(ctx: _LogContext | None, usage: CodexUsage, *,
         if error:
             metadata["error"] = error[:500]
 
-        cost_log.log(
+        record = cost_log.log(
             project=_project(ctx.project),
             model=ctx.model,
             prompt_tokens=usage.input_tokens,
@@ -372,6 +377,7 @@ def _log_usage(ctx: _LogContext | None, usage: CodexUsage, *,
             packet_id=ctx.packet_id,
             outcome="error" if error else None,
         )
+        ctx.call_id = record.id
     except Exception as failure:  # the call already happened; bookkeeping must not undo it
         log.warning("codex usage ledger write failed (%s): %s", ctx.purpose, failure)
 
@@ -760,9 +766,14 @@ def codex_json(
     purpose: str = "",
     packet_id: str | None = None,
     cost_log: bool = True,
+    meta_out: dict | None = None,
 ) -> Any:
     """Locked-down, single-shot structured generation. Returns parsed JSON (if
     ``schema`` given) or text. No web, no file writes — just classify/transform.
+
+    ``meta_out``, when given, receives ``input_tokens``, ``output_tokens``,
+    ``cached_tokens`` and the ledger row's ``call_id`` (None when not logged),
+    which is what the ``codex`` transport of ``calls.cached_call`` needs.
 
     ``project``/``purpose``/``packet_id`` attribute the usage row this writes;
     ``project`` falls back to ``$LIMBIC_CODEX_PROJECT`` and then the enclosing
@@ -791,7 +802,12 @@ def codex_json(
             cmd += ["--output-schema", schema_path]
         stdin_text = _prompt_arg(cmd, f"{system}\n\n{prompt}" if system else prompt)
         ctx.metadata["prompt_transport"] = "stdin" if stdin_text is not None else "argv"
-        return _exec(cmd, timeout, output_path, schema, ctx, stdin_text)
+        result = _exec(cmd, timeout, output_path, schema, ctx, stdin_text)
+        if meta_out is not None:
+            usage = ctx.usage or CodexUsage()
+            meta_out.update(input_tokens=usage.input_tokens, output_tokens=usage.output_tokens,
+                            cached_tokens=usage.cached_input_tokens, call_id=ctx.call_id)
+        return result
     finally:
         for p in (schema_path, output_path):
             if p:

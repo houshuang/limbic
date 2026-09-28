@@ -45,6 +45,7 @@ import base64
 import functools
 import hashlib
 import json
+import re
 import sqlite3
 import logging
 import os
@@ -242,6 +243,10 @@ def _log_call(
     existing = raw_meta.get("call_id")
     if existing:
         return existing
+    if raw_meta.get("self_logged"):
+        # The transport owns its ledger and chose not to write (an opt-out or a
+        # failed write): a billed row here would misstate a subscription call.
+        return None
     return _log_billed(
         project=project, model=model, purpose=purpose, script="cached_call",
         cost_usd=cost_usd, cache_hit=cache_hit, metadata=metadata,
@@ -598,10 +603,42 @@ def _gemini_generate(
     }
 
 
+_CODEX_MODEL = re.compile(r"^(gpt-|o\d|codex)")
+
+
+def _codex_generate(
+    prompt: str, *, project: str, purpose: str, system: str = "", schema: dict | None = None,
+    model: str | None = None, timeout: int = 300, packet_id: str | None = None,
+    reasoning_effort: str | None = None, **_ignored: Any,
+) -> tuple[Any, dict]:
+    """Built-in transport: `codex exec` on the ChatGPT subscription (no API key),
+    via `codex_cli.codex_json` — locked down, no tools, no web. That function
+    writes its own subscription ledger row (cost 0, notional cost recorded), whose
+    id is returned so `cached_call` does not log the call twice. `max_output_tokens`
+    has no Codex equivalent and is ignored."""
+    from . import codex_cli
+
+    meta: dict = {}
+    try:
+        result = codex_cli.codex_json(
+            prompt, schema=schema, system=system, model=model, reasoning=reasoning_effort,
+            timeout=timeout, project=project, purpose=purpose, packet_id=packet_id, meta_out=meta)
+    except Exception as error:
+        # codex_json already wrote a row per failed attempt; run_packets must not add one.
+        error.ledgered = True  # type: ignore[attr-defined]
+        raise
+    return result, {
+        "cost": 0.0, "model": model, "call_id": meta.get("call_id"), "self_logged": True,
+        "input_tokens": meta.get("input_tokens", 0), "output_tokens": meta.get("output_tokens", 0),
+        "cached_tokens": meta.get("cached_tokens", 0),
+    }
+
+
 _DEFAULT_TRANSPORTS: dict[str, Callable[..., tuple[Any, dict]]] = {
     "claude_cli": _claude_cli_generate,
     "openai": _openai_generate,
     "gemini": _gemini_generate,
+    "codex": _codex_generate,
 }
 
 
@@ -744,6 +781,16 @@ def cached_call(
     project = project or _infer_project()
     fn = _resolve_transport(transport)
     version = _versioned(version, transport_kwargs)
+
+    if transport == "codex":
+        # Refused before the cache: codex_json takes text only, so an answer to
+        # the text alone would otherwise be cached under the image or request key.
+        if images:
+            raise ValueError("the codex transport cannot send images; use transport='openai' or 'gemini'")
+        if request is not None:
+            raise ValueError("the codex transport cannot send a pre-built request= body")
+        if not _CODEX_MODEL.match(model or ""):
+            raise ValueError(f"the codex transport needs an OpenAI model name (e.g. gpt-6-luna), got {model!r}")
 
     imgs = _normalize_images(images)
     if imgs:

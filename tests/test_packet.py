@@ -253,6 +253,19 @@ class TestRunPackets:
         assert "max_tokens" in report["stopped"]
         assert report["remaining"] == 5
 
+    def test_a_failure_the_transport_already_ledgered_gets_no_second_row(self, monkeypatch):
+        rows = []
+        monkeypatch.setattr(cost_log, "log", lambda **kw: rows.append(kw) or type("R", (), {"id": "x"})())
+
+        def transport(prompt, **kwargs):
+            error = RuntimeError("codex exec failed")
+            error.ledgered = True
+            raise error
+
+        report = run_packets([packet(1)], purpose="t", project="p", transport=transport, execute=True, cache=False)
+        assert report["failures"][0]["error"].startswith("codex exec failed")
+        assert rows == []
+
     def test_failure_is_ledgered_not_swallowed(self):
         transport = fake_transport(None, fail=True)
         report = run_packets([packet(1)], purpose="t", project="p",
