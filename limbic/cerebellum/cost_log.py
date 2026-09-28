@@ -382,12 +382,14 @@ class CostLog:
         # One connection per thread: run_packets fans out over thread pools, and a
         # single shared connection interleaved commits ("cannot commit - no
         # transaction is active", "bad parameter or other API misuse"). WAL plus
-        # busy_timeout serialise the writers. ":memory:" stays one shared
-        # connection, since each new one would be a different empty database.
+        # busy_timeout serialise the writers. ":memory:" stays one shared,
+        # unlocked connection (each new one would be a different empty database),
+        # so an in-memory CostLog is a single-thread test fixture.
+        # No registry of connections is kept: a thread's connection is released
+        # with its thread-local slot when the thread exits.
         self._local = threading.local()
         self._shared: sqlite3.Connection | None = None
-        self._all: list[sqlite3.Connection] = []
-        self._lock = threading.Lock()
+        self._init_lock = threading.Lock()
 
     @property
     def db_path(self) -> Path:
@@ -404,17 +406,18 @@ class CostLog:
             str(self._db_path), timeout=30, check_same_thread=False
         )
         conn.row_factory = sqlite3.Row
-        if str(self._db_path) != ":memory:":
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA cache_size=-64000")
-        conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute("PRAGMA busy_timeout=30000")
-        conn.executescript(_SCHEMA)
-        _migrate_columns(conn)
-        conn.commit()
-        with self._lock:
-            self._all.append(conn)
+        # Serialised: two threads migrating an old database at once would both
+        # see a column missing and the second ALTER TABLE would fail.
+        with self._init_lock:
+            if not memory:
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA cache_size=-64000")
+            conn.execute("PRAGMA foreign_keys=ON")
+            conn.execute("PRAGMA busy_timeout=30000")
+            conn.executescript(_SCHEMA)
+            _migrate_columns(conn)
+            conn.commit()
         if memory:
             self._shared = conn
         else:
@@ -804,13 +807,12 @@ class CostLog:
         return count
 
     def close(self):
-        with self._lock:
-            conns, self._all = self._all, []
-        for conn in conns:
-            try:
-                conn.close()
-            except sqlite3.ProgrammingError:
-                pass  # closed from another thread than its creator; sqlite still frees it
+        """Close this thread's connection (and the shared `:memory:` one).
+
+        Other threads' connections close when those threads exit."""
+        conn = getattr(self._local, "conn", None) or self._shared
+        if conn is not None:
+            conn.close()
         self._shared = None
         self._local = threading.local()
 

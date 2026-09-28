@@ -445,3 +445,49 @@ def test_log_is_safe_from_many_threads(tmp_path):
         list(ex.map(burst, range(8)))
     conn = sqlite3.connect(str(tmp_path / "costs.db"))
     assert conn.execute("select count(*) from llm_costs").fetchone()[0] == 400
+
+
+def test_first_connections_migrate_an_old_db_once(tmp_path):
+    # Every thread's first connection runs the column migrations; unserialised,
+    # two threads both saw a column missing and the second ALTER TABLE failed.
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    db = tmp_path / "old.db"
+    _make_pre_migration_db(db)
+    cl = CostLog(db)
+    start = threading.Barrier(8)
+
+    def first_write(n):
+        start.wait()
+        cl.log(project="p", model="gpt-6-luna", cost_usd=0.0, purpose=f"t{n}")
+
+    with ThreadPoolExecutor(8) as ex:
+        list(ex.map(first_write, range(8)))
+    conn = sqlite3.connect(str(db))
+    assert conn.execute("select count(*) from llm_costs where project = ?", ("p",)).fetchone()[0] == 8
+
+
+def test_connections_of_finished_threads_are_released(tmp_path):
+    # The module-level ledger is never closed, and callers open a fresh thread
+    # pool per batch; a registry of every thread's connection leaked one open
+    # database (db, -wal, -shm) per worker thread for the life of the process.
+    import gc
+    import os
+    from concurrent.futures import ThreadPoolExecutor
+
+    cl = CostLog(tmp_path / "costs.db")
+    cl.log(project="p", model="gpt-6-luna", cost_usd=0.0, purpose="warm")
+
+    def batch():
+        with ThreadPoolExecutor(8) as ex:
+            list(ex.map(lambda n: cl.log(project="p", model="gpt-6-luna", cost_usd=0.0, purpose="t"), range(8)))
+        gc.collect()
+
+    counts = []
+    for _ in range(12):
+        batch()
+        counts.append(len(os.listdir("/dev/fd")))
+    # A leak costs ~2 fds per worker per batch (~150 here); thread teardown
+    # timing moves a released connection's close by a batch or two.
+    assert counts[-1] - counts[2] < 8, counts

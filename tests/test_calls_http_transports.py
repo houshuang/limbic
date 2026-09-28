@@ -260,7 +260,8 @@ class TestGeminiTransport:
         captured = {}
         schema = {"type": "object", "additionalProperties": False, "properties": {
             "items": {"type": "array", "items": {"type": "object", "additionalProperties": False,
-                                                 "properties": {"kind": {"type": ["string", "null"], "enum": ["a", "b", None]}}}},
+                                                 "properties": {"kind": {"type": ["string", "null"], "enum": ["a", "b", None]},
+                                                                "gone": {"type": ["string", "null"], "enum": [None]}}}},
             "additionalProperties": {"type": "string"}}}
 
         def _fake_post(url, payload, *, headers, timeout):
@@ -274,6 +275,7 @@ class TestGeminiTransport:
         item = sent["properties"]["items"]["items"]
         assert "additionalProperties" not in item
         assert item["properties"]["kind"] == {"type": "string", "enum": ["a", "b"], "nullable": True}
+        assert item["properties"]["gone"] == {"type": "string", "nullable": True}
         assert sent["properties"]["additionalProperties"] == {"type": "string"}
 
     def test_system_prompt_becomes_system_instruction(self, tmp_cost_log, cache_db, monkeypatch):
