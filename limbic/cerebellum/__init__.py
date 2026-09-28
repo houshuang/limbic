@@ -29,7 +29,7 @@ from .cost_log import (
     record_outcome,
     UnknownModelPriceError,
 )
-from .calls import cached_call, Held, CallMeta, TransportError
+from .calls import cached_call, is_cached, Held, CallMeta, TransportError
 from .packet import (
     LowYield,
     Packet,
@@ -103,6 +103,7 @@ __all__ = [
     "record_outcome",
     "UnknownModelPriceError",
     "cached_call",
+    "is_cached",
     "LowYield",
     "Packet",
     "corpus_lowercase_words",

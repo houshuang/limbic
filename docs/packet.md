@@ -92,6 +92,11 @@ right/wrong pass cost ~6× its input-only estimate. Set `max_output_tokens` on t
 packet (the dry run warns when it is missing) and, on Gemini, pass
 `thinking_budget=0` for a well-specified classification.
 
+A batch that is mostly unchanged since the last run costs mostly nothing: the dry
+run reports `cached_packets` and `estimated_cost_usd_max_uncached`, the worst case
+over the packets the response cache cannot answer. Check a recurring job's budget
+against that figure, not the whole-batch maximum.
+
 ## Truncation: split once, never re-ask
 
 Re-asking the same packet spends the same tokens on the same overflow. Pass
