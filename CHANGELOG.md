@@ -12,13 +12,17 @@ All notable changes to the limbic monorepo (formerly amygdala) are documented he
   members to `responseSchema`, and Gemini rejects both with HTTP 400. A schema
   written for the strict `openai` transport therefore failed every call on
   Gemini. `_strip_gemini_schema` now drops `additionalProperties` at any depth,
-  removes `None` from `enum`, marks such fields `nullable`, and leaves
-  property names that happen to match a keyword alone.
+  removes `None` from `enum` (dropping an enum left empty), marks such fields
+  `nullable`, and leaves property names that happen to match a keyword alone.
 - `CostLog` shared one SQLite connection across threads without a lock, so
   `run_packets` fanned out over a thread pool crashed with "bad parameter or
   other API misuse" or "cannot commit - no transaction is active" while logging.
   Each thread now gets its own connection (WAL and `busy_timeout` serialise the
-  writers); `:memory:` keeps a single shared connection.
+  writers), released when the thread exits, so a long-running process that opens
+  a fresh pool per batch does not accumulate open databases. Schema setup and
+  column migration are serialised, since two threads migrating an older ledger
+  at once raised "duplicate column name". `:memory:` keeps a single shared,
+  unlocked connection and remains a single-thread test fixture.
 
 ---
 

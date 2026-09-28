@@ -486,7 +486,9 @@ def _strip_gemini_schema(schema: Any) -> Any:
             out[k] = next((t for t in v if t != "null"), "string")
         elif k == "enum" and isinstance(v, list):
             nullable = nullable or None in v
-            out[k] = [i for i in v if i is not None]
+            kept = [i for i in v if i is not None]
+            if kept:  # an all-null enum would become `[]`, which Gemini also rejects
+                out[k] = kept
         elif k == "properties" and isinstance(v, dict):
             out[k] = {name: _strip_gemini_schema(sub) for name, sub in v.items()}
         elif isinstance(v, dict):
