@@ -56,9 +56,11 @@ read `docs/packet.md` and `docs/resolve.md` before writing a runner, and
 `run_packets(max_calls=…, max_tokens=…)` stops and reports what is left rather
 than finishing over budget. `execute=False` is the default: dry-run first,
 always — it prices the batch for free. Read `estimated_cost_usd_max`, not just
-the input-only estimate: set `max_output_tokens` on every packet, and on Gemini
-pass `thinking_budget=0` for classification (Flash thinking ran one pass ~6×
-over its input estimate). For speed use `workers=N`; never split a batch over
+the input-only estimate (for a recurring job, `estimated_cost_usd_max_uncached`),
+and set `max_output_tokens` on every packet. On Gemini, `thinking_budget=0` is
+for mechanical classification only; keep thinking on for identity or match
+judgements. Off, Flash accepted Les Misérables the musical as Hugo's novel and a
+play as the same-titled opera, both of which it rejected with thinking on. For speed use `workers=N`; never split a batch over
 your own threads, which gives each split its own budget.
 
 **Truncation: split once, never re-ask.** Pass `split=`; re-asking the same
