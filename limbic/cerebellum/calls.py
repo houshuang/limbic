@@ -466,23 +466,37 @@ def _openai_generate(
 
 
 def _strip_gemini_schema(schema: Any) -> Any:
-    """Gemini's REST schema doesn't accept a `"type": [..., "null"]` union
-    (the JSON-Schema style `oas3plus`/pydantic emits) — drop "null" and keep
-    the first remaining type. Small local copy of `amygdala.llm`'s private
-    helper of the same shape, to avoid depending on another module's
-    underscore-prefixed internal."""
+    """Rewrite a JSON Schema into the OpenAPI subset Gemini's REST `responseSchema` accepts.
+
+    Gemini rejects (HTTP 400) three things routine in a schema shared with the strict
+    OpenAI transport: a `"type": [..., "null"]` union, a `None` inside `enum`, and
+    `additionalProperties` at any depth. Nullability becomes `"nullable": true`.
+    Keys of a `properties` map are property names, not keywords, and are kept.
+    Small local copy of `amygdala.llm`'s private helper of the same shape, to avoid
+    depending on another module's underscore-prefixed internal."""
     if not isinstance(schema, dict):
         return schema
     out = {}
+    nullable = False
     for k, v in schema.items():
+        if k == "additionalProperties":
+            continue
         if k == "type" and isinstance(v, list):
+            nullable = nullable or "null" in v
             out[k] = next((t for t in v if t != "null"), "string")
+        elif k == "enum" and isinstance(v, list):
+            nullable = nullable or None in v
+            out[k] = [i for i in v if i is not None]
+        elif k == "properties" and isinstance(v, dict):
+            out[k] = {name: _strip_gemini_schema(sub) for name, sub in v.items()}
         elif isinstance(v, dict):
             out[k] = _strip_gemini_schema(v)
         elif isinstance(v, list):
             out[k] = [_strip_gemini_schema(i) if isinstance(i, dict) else i for i in v]
         else:
             out[k] = v
+    if nullable:
+        out["nullable"] = True
     return out
 
 

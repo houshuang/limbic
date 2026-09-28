@@ -252,6 +252,30 @@ class TestGeminiTransport:
         assert gen_cfg["responseMimeType"] == "application/json"
         assert gen_cfg["responseSchema"]["properties"]["label"]["type"] == "string"
 
+    def test_schema_drops_keywords_gemini_rejects(self, tmp_cost_log, cache_db, monkeypatch):
+        # Gemini's responseSchema 400s on `additionalProperties` (at any depth) and on a
+        # null inside `enum`; both are routine in a schema shared with the strict
+        # OpenAI transport. A *property* named like a keyword must survive.
+        monkeypatch.setenv("GEMINI_KEY", "gk-test")
+        captured = {}
+        schema = {"type": "object", "additionalProperties": False, "properties": {
+            "items": {"type": "array", "items": {"type": "object", "additionalProperties": False,
+                                                 "properties": {"kind": {"type": ["string", "null"], "enum": ["a", "b", None]}}}},
+            "additionalProperties": {"type": "string"}}}
+
+        def _fake_post(url, payload, *, headers, timeout):
+            captured["payload"] = payload
+            return _gemini_response(text='{"items": []}')
+
+        monkeypatch.setattr(calls, "_http_post_json", _fake_post)
+        cached_call("x", project="p", purpose="x", transport="gemini", schema=schema, cache_db_path=cache_db)
+        sent = captured["payload"]["generationConfig"]["responseSchema"]
+        assert "additionalProperties" not in sent
+        item = sent["properties"]["items"]["items"]
+        assert "additionalProperties" not in item
+        assert item["properties"]["kind"] == {"type": "string", "enum": ["a", "b"], "nullable": True}
+        assert sent["properties"]["additionalProperties"] == {"type": "string"}
+
     def test_system_prompt_becomes_system_instruction(self, tmp_cost_log, cache_db, monkeypatch):
         monkeypatch.setenv("GEMINI_KEY", "gk-test")
         captured = {}

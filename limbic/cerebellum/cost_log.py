@@ -33,6 +33,7 @@ import os
 import platform
 import re
 import sqlite3
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -378,16 +379,27 @@ class CostLog:
 
     def __init__(self, db_path: str | Path | None = None):
         self._db_path = Path(db_path) if db_path else _default_db_path()
-        self._conn: sqlite3.Connection | None = None
+        # One connection per thread: run_packets fans out over thread pools, and a
+        # single shared connection interleaved commits ("cannot commit - no
+        # transaction is active", "bad parameter or other API misuse"). WAL plus
+        # busy_timeout serialise the writers. ":memory:" stays one shared
+        # connection, since each new one would be a different empty database.
+        self._local = threading.local()
+        self._shared: sqlite3.Connection | None = None
+        self._all: list[sqlite3.Connection] = []
+        self._lock = threading.Lock()
 
     @property
     def db_path(self) -> Path:
         return self._db_path
 
     def _connect(self) -> sqlite3.Connection:
-        if self._conn is not None:
-            return self._conn
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        memory = str(self._db_path) == ":memory:"
+        conn = self._shared if memory else getattr(self._local, "conn", None)
+        if conn is not None:
+            return conn
+        if not memory:
+            self._db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(
             str(self._db_path), timeout=30, check_same_thread=False
         )
@@ -401,7 +413,12 @@ class CostLog:
         conn.executescript(_SCHEMA)
         _migrate_columns(conn)
         conn.commit()
-        self._conn = conn
+        with self._lock:
+            self._all.append(conn)
+        if memory:
+            self._shared = conn
+        else:
+            self._local.conn = conn
         return conn
 
     def log(self, *, project: str, model: str,
@@ -787,9 +804,15 @@ class CostLog:
         return count
 
     def close(self):
-        if self._conn:
-            self._conn.close()
-            self._conn = None
+        with self._lock:
+            conns, self._all = self._all, []
+        for conn in conns:
+            try:
+                conn.close()
+            except sqlite3.ProgrammingError:
+                pass  # closed from another thread than its creator; sqlite still frees it
+        self._shared = None
+        self._local = threading.local()
 
 
 # ---------------------------------------------------------------------------
