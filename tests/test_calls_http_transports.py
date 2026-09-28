@@ -694,3 +694,24 @@ class TestCodexTransport:
         for _ in range(2):
             cached_call("hi", project="p", purpose="t", transport="codex", model="gpt-6-luna", cache_db_path=cache_db)
         assert calls_made == ["hi"]
+
+
+    def test_refuses_what_codex_cannot_do_before_anything_is_cached(self, tmp_cost_log, cache_db, monkeypatch):
+        from limbic.cerebellum import codex_cli
+        monkeypatch.setattr(codex_cli, "codex_json", lambda *a, **k: pytest.fail("must not run"))
+        png = b"\x89PNG\r\n\x1a\n" + b"0" * 16
+        with pytest.raises(ValueError, match="images"):
+            cached_call("x", project="p", purpose="t", transport="codex", model="gpt-6-luna", images=[png], cache_db_path=cache_db)
+        with pytest.raises(ValueError, match="request"):
+            cached_call("", project="p", purpose="t", transport="codex", model="gpt-6-luna",
+                        request=b'{"input": "x"}', cache_db_path=cache_db)
+        with pytest.raises(ValueError, match="OpenAI model"):
+            cached_call("x", project="p", purpose="t", transport="codex", cache_db_path=cache_db)  # default "haiku"
+
+    def test_an_unlogged_codex_call_gets_no_billed_row(self, tmp_cost_log, cache_db, monkeypatch):
+        # LIMBIC_CODEX_COST_LOG=0 (or a failed ledger write): codex_json writes no row,
+        # and cached_call must not write a billed one in its place.
+        from limbic.cerebellum import codex_cli
+        monkeypatch.setattr(codex_cli, "codex_json", lambda prompt, **k: k["meta_out"].update(call_id=None) or "ok")
+        cached_call("x", project="p", purpose="t", transport="codex", model="gpt-6-luna", cache_db_path=cache_db)
+        assert tmp_cost_log._connect().execute("SELECT COUNT(*) FROM llm_costs").fetchone()[0] == 0

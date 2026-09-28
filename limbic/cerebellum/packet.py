@@ -460,6 +460,13 @@ def run_packets(
             split_children: list[Mapping[str, Any]] = []
             for packet, (result, meta, error) in zip(group, outcomes):
                 estimate = int(packet.get("estimated_input_tokens") or 0)
+                if error is not None and getattr(error, "ledgered", False):
+                    # The transport already wrote this failure's row(s).
+                    report["calls"] += replicates
+                    report["tokens"] += estimate * replicates
+                    report["failures"].append({
+                        "packet_id": packet["packet_id"], "error": str(error)[:500], "call_id": None})
+                    continue
                 if error is not None:
                     record = cost_log.log(
                         project=project or "unknown", model=model, purpose=purpose,

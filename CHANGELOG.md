@@ -14,7 +14,11 @@ All notable changes to the limbic monorepo (formerly amygdala) are documented he
   ledger. `reasoning_effort=` maps to Codex's reasoning setting;
   `max_output_tokens` has no Codex equivalent and is ignored.
 - `codex_json(..., meta_out={})` receives the call's token counts and its ledger
-  row id; the transport returns that id so the call is not logged twice.
+  row id; the transport returns that id so the call is not logged twice, never
+  adds a billed row when Codex logging is off, and marks its failures as already
+  ledgered so `run_packets` does not add another. Images, a pre-built
+  `request=` and non-OpenAI model names (including the `haiku` default) are
+  refused before anything is cached.
 
 ---
 
