@@ -530,8 +530,9 @@ def _gemini_generate(
     so `model` still selects the endpoint.
 
     `thinking_budget` caps the model's thinking tokens (billed at the output
-    rate); 0 turns thinking off on 2.5 Flash, which is what a well-specified
-    classification call usually wants."""
+    rate); 0 turns thinking off on 2.5 Flash. Suitable for mechanical
+    classification; identity and match judgements got measurably worse without
+    thinking (docs/packet.md)."""
     if not project:
         raise ValueError("project is required (used for cost_log attribution)")
     if request is not None and thinking_budget is not None:

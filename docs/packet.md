@@ -89,8 +89,12 @@ A dry run reports `estimated_cost_usd` (input only) and `estimated_cost_usd_max`
 (every packet's output priced at its `max_output_tokens`). The gap matters on
 reasoning models, whose thinking is billed at the output rate: a Gemini 2.5 Flash
 right/wrong pass cost ~6× its input-only estimate. Set `max_output_tokens` on the
-packet (the dry run warns when it is missing) and, on Gemini, pass
-`thinking_budget=0` for a well-specified classification.
+packet (the dry run warns when it is missing). On Gemini, `thinking_budget=0`
+cuts a call's output ~25× (188 → 7 tokens on one right/wrong verdict) and suits
+mechanical classification. Keep thinking on for identity and match judgements:
+in one Kulturbase run, Flash with thinking off accepted Les Misérables the
+musical as Hugo's novel and a play as the opera of the same title, both of which
+it had rejected with thinking on.
 
 A batch that is mostly unchanged since the last run costs mostly nothing: the dry
 run reports `cached_packets` and `estimated_cost_usd_max_uncached`, the worst case
