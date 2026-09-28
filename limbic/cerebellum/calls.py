@@ -598,10 +598,34 @@ def _gemini_generate(
     }
 
 
+def _codex_generate(
+    prompt: str, *, project: str, purpose: str, system: str = "", schema: dict | None = None,
+    model: str | None = None, timeout: int = 300, packet_id: str | None = None,
+    reasoning_effort: str | None = None, **_ignored: Any,
+) -> tuple[Any, dict]:
+    """Built-in transport: `codex exec` on the ChatGPT subscription (no API key),
+    via `codex_cli.codex_json` — locked down, no tools, no web. That function
+    writes its own subscription ledger row (cost 0, notional cost recorded), whose
+    id is returned so `cached_call` does not log the call twice. `max_output_tokens`
+    has no Codex equivalent and is ignored."""
+    from . import codex_cli
+
+    meta: dict = {}
+    result = codex_cli.codex_json(
+        prompt, schema=schema, system=system, model=model, reasoning=reasoning_effort,
+        timeout=timeout, project=project, purpose=purpose, packet_id=packet_id, meta_out=meta)
+    return result, {
+        "cost": 0.0, "model": model or codex_cli.DEFAULT_MODEL, "call_id": meta.get("call_id"),
+        "input_tokens": meta.get("input_tokens", 0), "output_tokens": meta.get("output_tokens", 0),
+        "cached_tokens": meta.get("cached_tokens", 0),
+    }
+
+
 _DEFAULT_TRANSPORTS: dict[str, Callable[..., tuple[Any, dict]]] = {
     "claude_cli": _claude_cli_generate,
     "openai": _openai_generate,
     "gemini": _gemini_generate,
+    "codex": _codex_generate,
 }
 
 

@@ -655,3 +655,42 @@ def test_gemini_thinking_tokens_are_billed_as_output(tmp_cost_log, cache_db, mon
     _, meta = cached_call("x", project="p", purpose="t", transport="gemini", model="gemini-2.5-flash",
                           cache_db_path=cache_db)
     assert meta.raw["output_tokens"] == 320
+
+
+
+# ---------------------------------------------------------------------------
+# Codex CLI transport (subscription, no API key)
+# ---------------------------------------------------------------------------
+
+class TestCodexTransport:
+    def test_routes_through_codex_json_and_reuses_its_ledger_row(self, tmp_cost_log, cache_db, monkeypatch):
+        from limbic.cerebellum import codex_cli
+        seen = {}
+
+        def fake_codex_json(prompt, **kwargs):
+            seen.update(kwargs, prompt=prompt)
+            kwargs["meta_out"].update({"call_id": "codex-row-1", "input_tokens": 120, "output_tokens": 9})
+            return {"label": "pos"}
+
+        monkeypatch.setattr(codex_cli, "codex_json", fake_codex_json)
+        schema = {"type": "object", "properties": {"label": {"type": "string"}}}
+        result, meta = cached_call("classify", project="p", purpose="t", transport="codex", model="gpt-6-luna",
+                                   system="Be terse.", schema=schema, reasoning_effort="low", cache_db_path=cache_db)
+        assert result == {"label": "pos"}
+        assert (seen["model"], seen["system"], seen["schema"], seen["reasoning"]) == ("gpt-6-luna", "Be terse.", schema, "low")
+        assert meta.call_id == "codex-row-1" and meta.cost_usd == 0.0
+        # codex_json wrote the (subscription) row; cached_call must not add a second.
+        assert tmp_cost_log._connect().execute("SELECT COUNT(*) FROM llm_costs").fetchone()[0] == 0
+
+    def test_a_repeat_is_a_cache_hit(self, tmp_cost_log, cache_db, monkeypatch):
+        from limbic.cerebellum import codex_cli
+        calls_made = []
+
+        def fake_codex_json(prompt, **kwargs):
+            calls_made.append(prompt)
+            return "ok"
+
+        monkeypatch.setattr(codex_cli, "codex_json", fake_codex_json)
+        for _ in range(2):
+            cached_call("hi", project="p", purpose="t", transport="codex", model="gpt-6-luna", cache_db_path=cache_db)
+        assert calls_made == ["hi"]

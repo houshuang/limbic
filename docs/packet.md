@@ -101,6 +101,11 @@ run reports `cached_packets` and `estimated_cost_usd_max_uncached`, the worst ca
 over the packets the response cache cannot answer. Check a recurring job's budget
 against that figure, not the whole-batch maximum.
 
+On a host with a Codex subscription and no API keys, pass `transport="codex"`:
+the same packets run through `codex exec` (about 6–10 s per call, so use
+`workers=`), billed to the subscription. Budget such a run by `max_calls`, not
+dollars: the dry-run price is notional.
+
 ## Truncation: split once, never re-ask
 
 Re-asking the same packet spends the same tokens on the same overflow. Pass

@@ -9,6 +9,7 @@ import json
 import os
 import sqlite3
 import subprocess
+from pathlib import Path
 import sys
 import textwrap
 import time
@@ -661,3 +662,23 @@ class TestJsonFlagUnsupported:
         cc._run(["codex", "exec", "--json"], timeout=5)
         assert len(seen) == 1
         assert cc._JSON_EVENTS_SUPPORTED is True
+
+
+
+def test_codex_json_reports_usage_and_its_ledger_row_through_meta_out(monkeypatch, tmp_path):
+    from limbic.cerebellum.cost_log import CostLog
+    import limbic.cerebellum.cost_log as cl
+    fresh = CostLog(db_path=tmp_path / "costs.db")
+    monkeypatch.setattr(cl, "cost_log", fresh)
+    monkeypatch.setattr(cc, "_JSON_EVENTS_SUPPORTED", True)
+
+    def _run(cmd, timeout, stdin_text=None):
+        out = cmd[cmd.index("--output-last-message") + 1]
+        Path(out).write_text("ok")
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=REAL_EVENTS, stderr="")
+
+    monkeypatch.setattr(cc, "_run", _run)
+    meta = {}
+    assert cc.codex_json("q", project="p", purpose="t", meta_out=meta) == "ok"
+    assert meta["input_tokens"] == 14169 and meta["output_tokens"] == 5
+    assert meta["call_id"] and fresh._connect().execute("SELECT id FROM llm_costs").fetchone()[0] == meta["call_id"]
