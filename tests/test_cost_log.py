@@ -423,3 +423,25 @@ class TestMergeAcrossSchemaVersions:
         assert cl.merge_from(remote) == 0
         assert cl.query()[0]["billing_mode"] == "subscription"
         assert cl.total_notional() == pytest.approx(0.02)
+
+
+# ---------------------------------------------------------------------------
+# Concurrency
+# ---------------------------------------------------------------------------
+
+
+def test_log_is_safe_from_many_threads(tmp_path):
+    # run_packets is routinely fanned out over a thread pool; one shared sqlite
+    # connection raised "bad parameter or other API misuse" mid-campaign.
+    from concurrent.futures import ThreadPoolExecutor
+
+    cl = CostLog(tmp_path / "costs.db")
+
+    def burst(n):
+        for i in range(50):
+            cl.log(project="p", model="gpt-6-luna", cost_usd=0.0, purpose=f"t{n}", packet_id=f"{n}:{i}")
+
+    with ThreadPoolExecutor(8) as ex:
+        list(ex.map(burst, range(8)))
+    conn = sqlite3.connect(str(tmp_path / "costs.db"))
+    assert conn.execute("select count(*) from llm_costs").fetchone()[0] == 400
