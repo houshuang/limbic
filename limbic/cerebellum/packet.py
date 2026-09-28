@@ -329,9 +329,10 @@ def run_packets(
     """Send a batch of frozen packets as stateless calls, under hard budgets.
 
     `workers` sends up to that many calls at once. Budgets are still checked
-    before each call is admitted (a concurrent group reserves its estimated
-    tokens up front), and results, failures and splits are recorded in packet
-    order, so a report is the same shape at any concurrency.
+    before each call is admitted: every call reserves its input estimate plus
+    its output cap, since a concurrent group is sent before any usage is
+    counted. Results, failures and split halves are recorded in packet order,
+    so a report is the same shape at any concurrency.
 
     `execute=False` (the default) prices the batch and returns what it *would*
     send without calling anything — run that first, always.
@@ -351,7 +352,11 @@ def run_packets(
     packets = list(packets)
     is_truncated = is_truncated or _default_is_truncated
     estimated = sum(int(p.get("estimated_input_tokens") or 0) for p in packets) * replicates
-    output_cap = sum(int(p.get("max_output_tokens") or 0) for p in packets) * replicates
+    def cap(packet: Mapping[str, Any]) -> int:
+        # Same precedence as the call itself: a run-level max_output_tokens wins.
+        return int(transport_kwargs.get("max_output_tokens") or packet.get("max_output_tokens") or 0)
+
+    output_cap = sum(cap(p) for p in packets) * replicates
     inp_price, out_price = price_for(model, strict=False)
     report: dict[str, Any] = {
         "packets": len(packets),
@@ -365,10 +370,10 @@ def run_packets(
         "estimated_cost_usd_max": round((estimated * inp_price + output_cap * out_price) / 1_000_000, 4),
         "model": model,
         "warnings": lint_packet(packets) + (
-            [f"{sum(1 for p in packets if not p.get('max_output_tokens'))} packet(s) have no "
+            [f"{sum(1 for p in packets if not cap(p))} packet(s) have no "
              "max_output_tokens, so the cost estimate covers input only; set a cap to bound "
              "the output (thinking tokens are billed as output)."]
-            if any(not p.get("max_output_tokens") for p in packets) else []),
+            if any(not cap(p) for p in packets) else []),
         "executed": bool(execute),
         "calls": 0,
         "tokens": 0,
@@ -409,18 +414,21 @@ def run_packets(
             group: list[Mapping[str, Any]] = []
             reserved = 0
             while queue and len(group) < max(1, workers):
-                estimate = int(queue[0].get("estimated_input_tokens") or 0)
+                # A group is sent before any usage is counted, so each admitted
+                # call reserves its input estimate plus its output cap.
+                need = (int(queue[0].get("estimated_input_tokens") or 0) + cap(queue[0])) * replicates
                 if report["calls"] + (len(group) + 1) * replicates > max_calls:
                     report["stopped"] = f"max_calls={max_calls} reached"
                     break
-                if report["tokens"] + reserved + estimate * replicates > max_tokens:
+                if report["tokens"] + reserved + need > max_tokens:
                     report["stopped"] = f"max_tokens={max_tokens} would be exceeded"
                     break
                 group.append(queue.pop(0))
-                reserved += estimate * replicates
+                reserved += need
             if not group:
                 break
             outcomes = list(pool.map(send, group)) if pool else [send(p) for p in group]
+            split_children: list[Mapping[str, Any]] = []
             for packet, (result, meta, error) in zip(group, outcomes):
                 estimate = int(packet.get("estimated_input_tokens") or 0)
                 if error is not None:
@@ -457,7 +465,7 @@ def run_packets(
                     report["split"].append({"packet_id": packet["packet_id"],
                                             "into": [c["packet_id"] for c in children]})
                     if children:
-                        queue = list(children) + queue
+                        split_children.extend(children)
                     else:
                         report["failures"].append({
                             "packet_id": packet["packet_id"],
@@ -473,6 +481,9 @@ def run_packets(
                     "packet_id": packet["packet_id"], "call_id": meta.call_id,
                     "cache_hit": meta.cache_hit, "cost_usd": meta.cost_usd,
                     "result": result})
+            # Halves go to the front once per group, in packet order, as a
+            # sequential run would send them.
+            queue = split_children + queue
             if report["stopped"]:
                 break
     finally:

@@ -79,8 +79,9 @@ returns what it *would* send — the cheapest thing you can do before committing
 ## Concurrency and the cost estimate
 
 `run_packets(workers=N)` sends up to N calls at once. Budgets are still checked
-before each call is admitted — a concurrent group reserves its estimated tokens
-up front — and results, failures and splits are recorded in packet order.
+before each call is admitted — every call reserves its input estimate plus its
+output cap, because a concurrent group is sent before any usage is counted —
+and results, failures and split halves are recorded in packet order.
 Do not hand-roll a thread split around `run_packets`: each split gets its own
 budget, so the caps no longer bound the whole run.
 

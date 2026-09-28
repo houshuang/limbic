@@ -294,6 +294,12 @@ class TestGeminiTransport:
         cached_call("hi", project="p", purpose="x", transport="gemini", cache_db_path=cache_db)
         assert len(sent) == 2 and "thinkingConfig" not in sent[1]["generationConfig"]
 
+    def test_thinking_budget_with_a_prebuilt_request_is_refused(self, tmp_cost_log, cache_db, monkeypatch):
+        monkeypatch.setenv("GEMINI_KEY", "gk-test")
+        with pytest.raises(ValueError, match="thinking_budget"):
+            cached_call("", project="p", purpose="x", transport="gemini", thinking_budget=0,
+                        request=b'{"contents": []}', cache_db_path=cache_db)
+
     def test_system_prompt_becomes_system_instruction(self, tmp_cost_log, cache_db, monkeypatch):
         monkeypatch.setenv("GEMINI_KEY", "gk-test")
         captured = {}

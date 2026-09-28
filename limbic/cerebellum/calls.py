@@ -533,6 +533,8 @@ def _gemini_generate(
     classification call usually wants."""
     if not project:
         raise ValueError("project is required (used for cost_log attribution)")
+    if request is not None and thinking_budget is not None:
+        raise ValueError("thinking_budget= goes into the request body you built; pass one or the other")
     api_key = os.environ.get("GEMINI_KEY") or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
         raise TransportError("GEMINI_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY is not set")

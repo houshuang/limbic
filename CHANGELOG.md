@@ -9,13 +9,18 @@ All notable changes to the limbic monorepo (formerly amygdala) are documented he
 ### Added
 
 - `run_packets(workers=N)` sends up to N calls at once. Budgets are checked
-  before each call is admitted (a concurrent group reserves its estimated
-  tokens), and results are recorded in packet order. Callers had been
+  before each call is admitted: every call reserves its input estimate plus its
+  output cap, since a concurrent group is sent before any usage is counted
+  (so a sequential run now also needs room for a call's output cap). Results
+  and split halves are recorded in packet order. Callers had been
   splitting batches over threads by hand, which gave each split its own budget.
 - `thinking_budget=` on the `gemini` transport (`generationConfig.thinkingConfig`);
-  0 turns thinking off on 2.5 Flash. It is folded into the response-cache key.
-- Dry runs report `estimated_output_tokens_max` and `estimated_cost_usd_max`,
-  and warn when a packet has no `max_output_tokens`. The input-only estimate
+  0 turns thinking off on 2.5 Flash (one right/wrong call: 188 → 7 output
+  tokens). It is folded into the response-cache key, and refused alongside a
+  pre-built `request=`, which it could not reach.
+- Dry runs report `estimated_output_tokens_max` and `estimated_cost_usd_max`
+  (using the cap the call will send: a run-level `max_output_tokens` wins),
+  and warn when a packet has no cap. The input-only estimate
   undercounted a Gemini Flash adjudication pass about 6x.
 
 ### Changed

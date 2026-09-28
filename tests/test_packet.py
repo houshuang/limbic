@@ -143,6 +143,44 @@ class TestRunPackets:
         assert len(transport.calls) == 3
         assert report["remaining"] == 7 and "max_calls" in report["stopped"]
 
+    def test_workers_keep_split_children_in_packet_order(self):
+        # Two packets truncated in the same concurrent group must queue their
+        # halves A1, A2, B1, B2 — the order a sequential run would send.
+        def split(p):
+            return [make_packet(PREFIX, f"{p['body_text']}-half{i}", SCHEMA, prompt_version="v1",
+                                packet_id=f"{p['packet_id']}{i}") for i in (1, 2)]
+
+        def transport(prompt, **kwargs):
+            meta = {"cost": 0.0, "model": kwargs.get("model")}
+            if "half" not in prompt:
+                meta["status"] = "incomplete"
+            return {"echo": prompt}, meta
+
+        a = make_packet(PREFIX, "A", SCHEMA, prompt_version="v1", packet_id="A")
+        b = make_packet(PREFIX, "B", SCHEMA, prompt_version="v1", packet_id="B")
+        report = run_packets([a, b], purpose="t", project="p", transport=transport, execute=True,
+                             cache=False, workers=2, split=split,
+                             is_truncated=lambda r, m, p: "half" not in p["body_text"])
+        assert [r["packet_id"] for r in report["results"]] == ["A1", "A2", "B1", "B2"]
+
+    def test_workers_reserve_output_against_max_tokens(self):
+        # A concurrent group is sent before any usage is counted, so admission
+        # must reserve each call's output cap, not just its input estimate.
+        capped = [make_packet(PREFIX, f"p{i}", SCHEMA, prompt_version="v1", max_output_tokens=5000)
+                  for i in range(4)]
+        per_call_input = capped[0]["estimated_input_tokens"]
+        transport = fake_transport({"items": []})
+        report = run_packets(capped, purpose="t", project="p", transport=transport, execute=True,
+                             cache=False, workers=4, max_tokens=2 * (per_call_input + 5000))
+        assert len(transport.calls) == 2
+        assert "max_tokens" in report["stopped"]
+
+    def test_run_level_output_cap_is_what_the_estimate_prices(self):
+        report = run_packets([packet(1)], purpose="t", project="p", model="gemini-2.5-flash",
+                             transport=fake_transport({}), max_output_tokens=2000)
+        assert report["estimated_output_tokens_max"] == 2000
+        assert not any("max_output_tokens" in w for w in report["warnings"])
+
     def test_dry_run_prices_output_up_to_the_cap(self):
         # An input-only estimate undercounted a reasoning model's run ~6x.
         capped = make_packet(PREFIX, {"page": "x"}, SCHEMA, prompt_version="v1", max_output_tokens=4000)
