@@ -80,11 +80,16 @@ class TestLint:
     def test_identical_schema_is_not_flagged(self):
         assert not any("schema varies" in w for w in lint_packet([packet(1), packet(2)]))
 
-    def test_short_prefix_is_flagged(self):
-        assert any("cache minimum" in w for w in lint_packet([packet(1, prefix="hi")]))
+    def test_short_prefix_is_flagged_when_a_cache_key_is_set(self):
+        assert any("cache minimum" in w for w in lint_packet([packet(1, prefix="hi")], prompt_cache_key=True))
+
+    def test_short_prefix_is_not_flagged_without_a_cache_key(self):
+        # The built-in transports never send a prompt cache key, so the advice
+        # "do not set one" was noise on every small-prefix run.
+        assert not any("cache minimum" in w for w in lint_packet([packet(1, prefix="hi")]))
 
     def test_long_prefix_is_not_flagged(self):
-        assert not any("cache minimum" in w for w in lint_packet([packet(1)]))
+        assert not any("cache minimum" in w for w in lint_packet([packet(1)], prompt_cache_key=True))
 
     def test_varying_prefix_is_flagged(self):
         packets = [packet(1), packet(2, prefix=PREFIX + " extra")]
@@ -110,6 +115,84 @@ class TestLint:
 
 
 class TestRunPackets:
+    def test_workers_send_calls_concurrently_and_keep_order(self):
+        import threading
+        import time
+        live, peak, lock = [0], [0], threading.Lock()
+
+        def transport(prompt, **kwargs):
+            with lock:
+                live[0] += 1
+                peak[0] = max(peak[0], live[0])
+            time.sleep(0.05)
+            with lock:
+                live[0] -= 1
+            return {"echo": prompt}, {"cost": 0.001, "model": kwargs.get("model")}
+
+        packets = [packet(i) for i in range(8)]
+        report = run_packets(packets, purpose="t", project="p", transport=transport,
+                             execute=True, cache=False, workers=4)
+        assert peak[0] == 4
+        assert [r["packet_id"] for r in report["results"]] == [p["packet_id"] for p in packets]
+        assert report["calls"] == 8 and report["stopped"] == "all packets sent"
+
+    def test_workers_still_refuse_at_max_calls(self):
+        transport = fake_transport({"items": []})
+        report = run_packets([packet(i) for i in range(10)], purpose="t", project="p",
+                             transport=transport, execute=True, cache=False, max_calls=3, workers=4)
+        assert len(transport.calls) == 3
+        assert report["remaining"] == 7 and "max_calls" in report["stopped"]
+
+    def test_workers_keep_split_children_in_packet_order(self):
+        # Two packets truncated in the same concurrent group must queue their
+        # halves A1, A2, B1, B2 — the order a sequential run would send.
+        def split(p):
+            return [make_packet(PREFIX, f"{p['body_text']}-half{i}", SCHEMA, prompt_version="v1",
+                                packet_id=f"{p['packet_id']}{i}") for i in (1, 2)]
+
+        def transport(prompt, **kwargs):
+            meta = {"cost": 0.0, "model": kwargs.get("model")}
+            if "half" not in prompt:
+                meta["status"] = "incomplete"
+            return {"echo": prompt}, meta
+
+        a = make_packet(PREFIX, "A", SCHEMA, prompt_version="v1", packet_id="A")
+        b = make_packet(PREFIX, "B", SCHEMA, prompt_version="v1", packet_id="B")
+        report = run_packets([a, b], purpose="t", project="p", transport=transport, execute=True,
+                             cache=False, workers=2, split=split,
+                             is_truncated=lambda r, m, p: "half" not in p["body_text"])
+        assert [r["packet_id"] for r in report["results"]] == ["A1", "A2", "B1", "B2"]
+
+    def test_workers_reserve_output_against_max_tokens(self):
+        # A concurrent group is sent before any usage is counted, so admission
+        # must reserve each call's output cap, not just its input estimate.
+        capped = [make_packet(PREFIX, f"p{i}", SCHEMA, prompt_version="v1", max_output_tokens=5000)
+                  for i in range(4)]
+        per_call_input = capped[0]["estimated_input_tokens"]
+        transport = fake_transport({"items": []})
+        report = run_packets(capped, purpose="t", project="p", transport=transport, execute=True,
+                             cache=False, workers=4, max_tokens=2 * (per_call_input + 5000))
+        assert len(transport.calls) == 2
+        assert "max_tokens" in report["stopped"]
+
+    def test_run_level_output_cap_is_what_the_estimate_prices(self):
+        report = run_packets([packet(1)], purpose="t", project="p", model="gemini-2.5-flash",
+                             transport=fake_transport({}), max_output_tokens=2000)
+        assert report["estimated_output_tokens_max"] == 2000
+        assert not any("max_output_tokens" in w for w in report["warnings"])
+
+    def test_dry_run_prices_output_up_to_the_cap(self):
+        # An input-only estimate undercounted a reasoning model's run ~6x.
+        capped = make_packet(PREFIX, {"page": "x"}, SCHEMA, prompt_version="v1", max_output_tokens=4000)
+        report = run_packets([capped], purpose="t", project="p", model="gemini-2.5-flash",
+                             transport=fake_transport({}))
+        assert report["estimated_output_tokens_max"] == 4000
+        assert report["estimated_cost_usd_max"] > report["estimated_cost_usd"]
+
+    def test_dry_run_warns_when_output_is_unbounded(self):
+        report = run_packets([packet(1)], purpose="t", project="p", transport=fake_transport({}))
+        assert any("max_output_tokens" in w for w in report["warnings"])
+
     def test_dry_run_calls_nothing(self):
         transport = fake_transport({"items": []})
         report = run_packets([packet(1), packet(2)], purpose="t", project="p",

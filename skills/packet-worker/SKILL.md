@@ -55,7 +55,11 @@ read `docs/packet.md` and `docs/resolve.md` before writing a runner, and
 
 `run_packets(max_calls=…, max_tokens=…)` stops and reports what is left rather
 than finishing over budget. `execute=False` is the default: dry-run first,
-always — it prices the batch for free.
+always — it prices the batch for free. Read `estimated_cost_usd_max`, not just
+the input-only estimate: set `max_output_tokens` on every packet, and on Gemini
+pass `thinking_budget=0` for classification (Flash thinking ran one pass ~6×
+over its input estimate). For speed use `workers=N`; never split a batch over
+your own threads, which gives each split its own budget.
 
 **Truncation: split once, never re-ask.** Pass `split=`; re-asking the same
 packet spends the same tokens on the same overflow.

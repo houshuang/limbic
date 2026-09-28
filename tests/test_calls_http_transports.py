@@ -278,6 +278,28 @@ class TestGeminiTransport:
         assert item["properties"]["gone"] == {"type": "string", "nullable": True}
         assert sent["properties"]["additionalProperties"] == {"type": "string"}
 
+    def test_thinking_budget_is_sent_and_splits_the_cache(self, tmp_cost_log, cache_db, monkeypatch):
+        # Flash spent ~6x the estimate on thinking tokens for a right/wrong
+        # classification; the caller needs a way to turn thinking down or off.
+        monkeypatch.setenv("GEMINI_KEY", "gk-test")
+        sent = []
+
+        def _fake_post(url, payload, *, headers, timeout):
+            sent.append(payload)
+            return _gemini_response(text="ok")
+
+        monkeypatch.setattr(calls, "_http_post_json", _fake_post)
+        cached_call("hi", project="p", purpose="x", transport="gemini", thinking_budget=0, cache_db_path=cache_db)
+        assert sent[0]["generationConfig"]["thinkingConfig"] == {"thinkingBudget": 0}
+        cached_call("hi", project="p", purpose="x", transport="gemini", cache_db_path=cache_db)
+        assert len(sent) == 2 and "thinkingConfig" not in sent[1]["generationConfig"]
+
+    def test_thinking_budget_with_a_prebuilt_request_is_refused(self, tmp_cost_log, cache_db, monkeypatch):
+        monkeypatch.setenv("GEMINI_KEY", "gk-test")
+        with pytest.raises(ValueError, match="thinking_budget"):
+            cached_call("", project="p", purpose="x", transport="gemini", thinking_budget=0,
+                        request=b'{"contents": []}', cache_db_path=cache_db)
+
     def test_system_prompt_becomes_system_instruction(self, tmp_cost_log, cache_db, monkeypatch):
         monkeypatch.setenv("GEMINI_KEY", "gk-test")
         captured = {}

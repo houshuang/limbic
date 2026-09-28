@@ -514,7 +514,8 @@ def _gemini_generate(
     prompt: str, *, project: str, purpose: str, system: str = "", schema: dict | None = None,
     model: str = "gemini-2.5-flash", max_output_tokens: int = 8192, timeout: int = 120,
     request: bytes | None = None, packet_id: str | None = None,
-    ledger_metadata: dict | None = None, images: Any = None, **_ignored: Any,
+    ledger_metadata: dict | None = None, images: Any = None, thinking_budget: int | None = None,
+    **_ignored: Any,
 ) -> tuple[Any, dict]:
     """Built-in transport: Gemini REST via stdlib `urllib` — deliberately not
     the `google-genai` SDK (see module-section docstring above). Self-logs to
@@ -525,9 +526,15 @@ def _gemini_generate(
 
     `request`, `packet_id` and `ledger_metadata` behave as in the `openai`
     transport, except that a `generateContent` body does not name its model,
-    so `model` still selects the endpoint."""
+    so `model` still selects the endpoint.
+
+    `thinking_budget` caps the model's thinking tokens (billed at the output
+    rate); 0 turns thinking off on 2.5 Flash, which is what a well-specified
+    classification call usually wants."""
     if not project:
         raise ValueError("project is required (used for cost_log attribution)")
+    if request is not None and thinking_budget is not None:
+        raise ValueError("thinking_budget= goes into the request body you built; pass one or the other")
     api_key = os.environ.get("GEMINI_KEY") or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
         raise TransportError("GEMINI_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY is not set")
@@ -539,6 +546,8 @@ def _gemini_generate(
                 for m, d in _normalize_images(images)]}],
             "generationConfig": {"maxOutputTokens": max_output_tokens},
         }
+        if thinking_budget is not None:
+            payload["generationConfig"]["thinkingConfig"] = {"thinkingBudget": int(thinking_budget)}
         if system:
             payload["systemInstruction"] = {"parts": [{"text": system}]}
         if schema:
@@ -685,6 +694,8 @@ def cached_call(
     if transport_kwargs.get("reasoning_effort"):
         # Same prompt at a different effort is a different answer; keep them apart in the cache.
         version = f"{version or ''}|effort={transport_kwargs['reasoning_effort']}"
+    if transport_kwargs.get("thinking_budget") is not None:
+        version = f"{version or ''}|thinking={transport_kwargs['thinking_budget']}"
 
     imgs = _normalize_images(images)
     if imgs:

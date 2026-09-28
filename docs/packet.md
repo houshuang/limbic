@@ -62,7 +62,9 @@ returns what it *would* send — the cheapest thing you can do before committing
 - **A shared prefix under ~1,024 tokens should not carry a cache key.** In one
   35k-episode campaign, 20 unique records per packet left the shared prefix
   under the minimum, 92.5% of input was billed as cache *writes*, and caching
-  **cost 9.7% more** than not caching.
+  **cost 9.7% more** than not caching. The built-in transports never send a
+  cache key, so `lint_packet` only raises this when you pass
+  `prompt_cache_key=True` (a caller building its own `request=` with one).
 - **Derivable fields are not data.** 46% of each packet in that campaign was an
   `evidence_fields` list identical on every record. The lint flags a body field
   that is byte-identical across the batch (move it to the prefix, pay once) and
@@ -73,6 +75,22 @@ returns what it *would* send — the cheapest thing you can do before committing
   the second warning and not the first.
 - **Past ~25 items per call a model drops items silently.** Cut the packet
   rather than raising the output cap.
+
+## Concurrency and the cost estimate
+
+`run_packets(workers=N)` sends up to N calls at once. Budgets are still checked
+before each call is admitted — every call reserves its input estimate plus its
+output cap, because a concurrent group is sent before any usage is counted —
+and results, failures and split halves are recorded in packet order.
+Do not hand-roll a thread split around `run_packets`: each split gets its own
+budget, so the caps no longer bound the whole run.
+
+A dry run reports `estimated_cost_usd` (input only) and `estimated_cost_usd_max`
+(every packet's output priced at its `max_output_tokens`). The gap matters on
+reasoning models, whose thinking is billed at the output rate: a Gemini 2.5 Flash
+right/wrong pass cost ~6× its input-only estimate. Set `max_output_tokens` on the
+packet (the dry run warns when it is missing) and, on Gemini, pass
+`thinking_budget=0` for a well-specified classification.
 
 ## Truncation: split once, never re-ask
 

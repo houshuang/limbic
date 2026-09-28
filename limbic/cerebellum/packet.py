@@ -16,7 +16,7 @@ Usage — build packets, check they are worth building machinery for, then run:
 
     packets = [make_packet(PREFIX, body, SCHEMA, prompt_version="v1")
                for body in bodies]
-    print(lint_packet(packets))                      # cache and schema warnings
+    print(lint_packet(packets))                      # schema and packet-size warnings
     report = probe(packets, n=50, yield_fn=len, project="skard",
                    purpose="code_spans", execute=True)
     if report["yield_rate"] < 0.2:
@@ -30,6 +30,8 @@ committing to a campaign.
 """
 
 from __future__ import annotations
+
+from concurrent.futures import ThreadPoolExecutor
 
 import hashlib
 import json
@@ -184,8 +186,13 @@ def make_packet(
 # Lint
 # ---------------------------------------------------------------------------
 
-def lint_packet(packet: Packet | Mapping[str, Any] | Sequence[Mapping[str, Any]]) -> list[str]:
+def lint_packet(packet: Packet | Mapping[str, Any] | Sequence[Mapping[str, Any]], *,
+                prompt_cache_key: bool = False) -> list[str]:
     """Warnings about a packet, or about a batch given several.
+
+    `prompt_cache_key`: whether the caller sends a provider prompt-cache key.
+    The built-in transports never do, and the short-prefix warning is only
+    actionable for a caller that does.
 
     Cross-packet checks (a schema or prefix that varies) need the batch, so
     pass the list. Each warning names the measured failure behind it, because
@@ -215,7 +222,7 @@ def lint_packet(packet: Packet | Mapping[str, Any] | Sequence[Mapping[str, Any]]
             "varies into the body.")
 
     smallest = min(int(p.get("static_prefix_tokens") or 0) for p in packets)
-    if smallest < MIN_CACHE_PREFIX_TOKENS:
+    if prompt_cache_key and smallest < MIN_CACHE_PREFIX_TOKENS:
         warnings.append(
             f"the shared prefix is ~{smallest} tokens, under the provider "
             f"cache minimum of {MIN_CACHE_PREFIX_TOKENS}. Do not set a prompt "
@@ -316,9 +323,16 @@ def run_packets(
     is_truncated: Callable[[Any, Any, Mapping[str, Any]], bool] | None = None,
     outcome_fn: Callable[[Any], str | None] | None = None,
     cache: bool | str = True,
+    workers: int = 1,
     **transport_kwargs: Any,
 ) -> dict[str, Any]:
     """Send a batch of frozen packets as stateless calls, under hard budgets.
+
+    `workers` sends up to that many calls at once. Budgets are still checked
+    before each call is admitted: every call reserves its input estimate plus
+    its output cap, since a concurrent group is sent before any usage is
+    counted. Results, failures and split halves are recorded in packet order,
+    so a report is the same shape at any concurrency.
 
     `execute=False` (the default) prices the batch and returns what it *would*
     send without calling anything — run that first, always.
@@ -338,14 +352,28 @@ def run_packets(
     packets = list(packets)
     is_truncated = is_truncated or _default_is_truncated
     estimated = sum(int(p.get("estimated_input_tokens") or 0) for p in packets) * replicates
+    def cap(packet: Mapping[str, Any]) -> int:
+        # Same precedence as the call itself: a run-level max_output_tokens wins.
+        return int(transport_kwargs.get("max_output_tokens") or packet.get("max_output_tokens") or 0)
+
+    output_cap = sum(cap(p) for p in packets) * replicates
     inp_price, out_price = price_for(model, strict=False)
     report: dict[str, Any] = {
         "packets": len(packets),
         "planned_calls": len(packets) * replicates,
         "estimated_input_tokens": estimated,
         "estimated_cost_usd": round(estimated * inp_price / 1_000_000, 4),
+        # Input is only part of the bill: a reasoning model's thinking and the
+        # answer are billed at the output rate (Flash ran ~6x an input-only
+        # estimate). The max prices every packet's output at its cap.
+        "estimated_output_tokens_max": output_cap,
+        "estimated_cost_usd_max": round((estimated * inp_price + output_cap * out_price) / 1_000_000, 4),
         "model": model,
-        "warnings": lint_packet(packets),
+        "warnings": lint_packet(packets) + (
+            [f"{sum(1 for p in packets if not cap(p))} packet(s) have no "
+             "max_output_tokens, so the cost estimate covers input only; set a cap to bound "
+             "the output (thinking tokens are billed as output)."]
+            if any(not cap(p) for p in packets) else []),
         "executed": bool(execute),
         "calls": 0,
         "tokens": 0,
@@ -362,18 +390,8 @@ def run_packets(
 
     queue = list(packets)
     split_done: set[str] = set()
-    while queue:
-        packet = queue.pop(0)
-        estimate = int(packet.get("estimated_input_tokens") or 0)
-        if report["calls"] + replicates > max_calls:
-            report["stopped"] = f"max_calls={max_calls} reached"
-            queue.insert(0, packet)
-            break
-        if report["tokens"] + estimate * replicates > max_tokens:
-            report["stopped"] = f"max_tokens={max_tokens} would be exceeded"
-            queue.insert(0, packet)
-            break
 
+    def send(packet: Mapping[str, Any]) -> tuple[Any, Any, BaseException | None]:
         kwargs = dict(transport_kwargs)
         if packet.get("max_output_tokens"):
             kwargs.setdefault("max_output_tokens", packet["max_output_tokens"])
@@ -387,56 +405,91 @@ def run_packets(
                 replicates=replicates, agree=agree, **kwargs,
             )
         except Exception as error:  # a failed call is still a paid call
-            record = cost_log.log(
-                project=project or "unknown", model=model, purpose=purpose,
-                script="run_packets", cost_usd=0.0, outcome="error",
-                packet_id=packet["packet_id"],
-                metadata={"failed": True, "error": str(error)[:500],
-                          "input_sha256": packet["input_sha256"]},
-            )
-            report["calls"] += replicates
-            report["tokens"] += estimate * replicates
-            report["failures"].append({
-                "packet_id": packet["packet_id"], "error": str(error)[:500],
-                "call_id": record.id})
-            continue
+            return None, None, error
+        return result, meta, None
 
-        report["calls"] += replicates
-        report["tokens"] += _usage_tokens(meta) or estimate * replicates
-        report["cost_usd"] = round(report["cost_usd"] + (meta.cost_usd or 0.0), 6)
-        cost_log.set_packet_id(meta.call_id, packet["packet_id"])
+    pool = ThreadPoolExecutor(max_workers=workers) if workers > 1 else None
+    try:
+        while queue:
+            group: list[Mapping[str, Any]] = []
+            reserved = 0
+            while queue and len(group) < max(1, workers):
+                # A group is sent before any usage is counted, so each admitted
+                # call reserves its input estimate plus its output cap.
+                need = (int(queue[0].get("estimated_input_tokens") or 0) + cap(queue[0])) * replicates
+                if report["calls"] + (len(group) + 1) * replicates > max_calls:
+                    report["stopped"] = f"max_calls={max_calls} reached"
+                    break
+                if report["tokens"] + reserved + need > max_tokens:
+                    report["stopped"] = f"max_tokens={max_tokens} would be exceeded"
+                    break
+                group.append(queue.pop(0))
+                reserved += need
+            if not group:
+                break
+            outcomes = list(pool.map(send, group)) if pool else [send(p) for p in group]
+            split_children: list[Mapping[str, Any]] = []
+            for packet, (result, meta, error) in zip(group, outcomes):
+                estimate = int(packet.get("estimated_input_tokens") or 0)
+                if error is not None:
+                    record = cost_log.log(
+                        project=project or "unknown", model=model, purpose=purpose,
+                        script="run_packets", cost_usd=0.0, outcome="error",
+                        packet_id=packet["packet_id"],
+                        metadata={"failed": True, "error": str(error)[:500],
+                                  "input_sha256": packet["input_sha256"]},
+                    )
+                    report["calls"] += replicates
+                    report["tokens"] += estimate * replicates
+                    report["failures"].append({
+                        "packet_id": packet["packet_id"], "error": str(error)[:500],
+                        "call_id": record.id})
+                    continue
 
-        if isinstance(result, Held):
-            cost_log.record_outcome(meta.call_id, "held", result.reason)
-            report["held"].append({"packet_id": packet["packet_id"],
-                                   "reason": result.reason,
-                                   "call_id": meta.call_id})
-            continue
+                report["calls"] += replicates
+                report["tokens"] += _usage_tokens(meta) or estimate * replicates
+                report["cost_usd"] = round(report["cost_usd"] + (meta.cost_usd or 0.0), 6)
+                cost_log.set_packet_id(meta.call_id, packet["packet_id"])
 
-        if is_truncated(result, meta, packet):
-            children = list(split(packet)) if (split and packet["packet_id"] not in split_done) else []
-            cost_log.record_outcome(meta.call_id, "rejected", "truncated output")
-            split_done.add(packet["packet_id"])
-            report["split"].append({"packet_id": packet["packet_id"],
-                                    "into": [c["packet_id"] for c in children]})
-            if children:
-                queue = list(children) + queue
-            else:
-                report["failures"].append({
-                    "packet_id": packet["packet_id"],
-                    "error": "output truncated and no split hook produced smaller packets",
-                    "call_id": meta.call_id})
-            continue
+                if isinstance(result, Held):
+                    cost_log.record_outcome(meta.call_id, "held", result.reason)
+                    report["held"].append({"packet_id": packet["packet_id"],
+                                           "reason": result.reason,
+                                           "call_id": meta.call_id})
+                    continue
 
-        if outcome_fn is not None:
-            outcome = outcome_fn(result)
-            if outcome:
-                cost_log.record_outcome(meta.call_id, outcome)
-        report["results"].append({
-            "packet_id": packet["packet_id"], "call_id": meta.call_id,
-            "cache_hit": meta.cache_hit, "cost_usd": meta.cost_usd,
-            "result": result})
-    else:
+                if is_truncated(result, meta, packet):
+                    children = list(split(packet)) if (split and packet["packet_id"] not in split_done) else []
+                    cost_log.record_outcome(meta.call_id, "rejected", "truncated output")
+                    split_done.add(packet["packet_id"])
+                    report["split"].append({"packet_id": packet["packet_id"],
+                                            "into": [c["packet_id"] for c in children]})
+                    if children:
+                        split_children.extend(children)
+                    else:
+                        report["failures"].append({
+                            "packet_id": packet["packet_id"],
+                            "error": "output truncated and no split hook produced smaller packets",
+                            "call_id": meta.call_id})
+                    continue
+
+                if outcome_fn is not None:
+                    outcome = outcome_fn(result)
+                    if outcome:
+                        cost_log.record_outcome(meta.call_id, outcome)
+                report["results"].append({
+                    "packet_id": packet["packet_id"], "call_id": meta.call_id,
+                    "cache_hit": meta.cache_hit, "cost_usd": meta.cost_usd,
+                    "result": result})
+            # Halves go to the front once per group, in packet order, as a
+            # sequential run would send them.
+            queue = split_children + queue
+            if report["stopped"]:
+                break
+    finally:
+        if pool:
+            pool.shutdown(wait=True)
+    if not report["stopped"]:
         report["stopped"] = "all packets sent"
     report["remaining"] = len(queue)
     return report
