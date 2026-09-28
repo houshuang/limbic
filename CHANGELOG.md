@@ -4,6 +4,28 @@ All notable changes to the limbic monorepo (formerly amygdala) are documented he
 
 ---
 
+## 2026-09-28 -- Concurrent run_packets, output-aware estimates, Gemini thinking budget
+
+### Added
+
+- `run_packets(workers=N)` sends up to N calls at once. Budgets are checked
+  before each call is admitted (a concurrent group reserves its estimated
+  tokens), and results are recorded in packet order. Callers had been
+  splitting batches over threads by hand, which gave each split its own budget.
+- `thinking_budget=` on the `gemini` transport (`generationConfig.thinkingConfig`);
+  0 turns thinking off on 2.5 Flash. It is folded into the response-cache key.
+- Dry runs report `estimated_output_tokens_max` and `estimated_cost_usd_max`,
+  and warn when a packet has no `max_output_tokens`. The input-only estimate
+  undercounted a Gemini Flash adjudication pass about 6x.
+
+### Changed
+
+- `lint_packet` raises the short-prefix cache warning only with
+  `prompt_cache_key=True`. The built-in transports never send a cache key,
+  so the warning was noise on every small-prefix run.
+
+---
+
 ## 2026-09-28 -- Gemini schemas and thread-safe cost log
 
 ### Fixed
