@@ -45,6 +45,7 @@ import base64
 import functools
 import hashlib
 import json
+import sqlite3
 import logging
 import os
 import subprocess
@@ -627,22 +628,40 @@ def _versioned(version: str | None, transport_kwargs: dict) -> str | None:
     return version
 
 
+def _open_cache_readonly(cache_db_path: str | Path | None) -> sqlite3.Connection | None:
+    """The response cache opened read-only, or None when it does not exist yet.
+
+    A dry run must not create the cache, its folder or its tables, nor switch the
+    file to WAL: it answers «would this hit?» and nothing else."""
+    path = Path(cache_db_path) if cache_db_path else _default_cache_db_path()
+    if not path.exists():
+        return None
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=30)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
 def is_cached(
     prompt: str, *, model: str, system: str = "", schema: dict | None = None,
-    version: str | None = None, cache_db_path: str | Path | None = None, conn: Any = None,
-    **transport_kwargs: Any,
+    version: str | None = None, cache_key: str | None = None,
+    cache_db_path: str | Path | None = None, conn: Any = None, **transport_kwargs: Any,
 ) -> bool:
     """Whether `cached_call` with these arguments would be a cache hit (unexpired),
-    without calling anything. Text calls only: a pre-built `request=` or images are
-    never reported as cached. Pass `conn` to reuse one connection over a batch."""
+    without calling anything and without writing to the cache. Text calls only: a
+    pre-built `request=` or images are never reported as cached. Pass `conn` (from
+    a read-only open) to reuse one connection over a batch."""
     if transport_kwargs.get("request") is not None or transport_kwargs.get("images"):
         return False
-    key = _cache_key(model=model, system=system, prompt=prompt, schema=schema,
-                     version=_versioned(version, transport_kwargs))
+    key = cache_key or _cache_key(model=model, system=system, prompt=prompt, schema=schema,
+                                  version=_versioned(version, transport_kwargs))
     own = conn is None
-    conn = conn or _open(cache_db_path)
+    conn = conn if conn is not None else _open_cache_readonly(cache_db_path)
+    if conn is None:
+        return False
     try:
         row = conn.execute("SELECT expires_at FROM call_cache WHERE cache_key = ?", (key,)).fetchone()
+    except sqlite3.OperationalError:  # a cache file without the table yet
+        return False
     finally:
         if own:
             conn.close()

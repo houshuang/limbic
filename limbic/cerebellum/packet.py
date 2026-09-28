@@ -309,11 +309,13 @@ def _default_is_truncated(result: Any, meta: Any, packet: Mapping[str, Any]) -> 
 
 def _cached_packet_ids(packets: Sequence[Mapping[str, Any]], *, model: str,
                        transport_kwargs: Mapping[str, Any]) -> set[str]:
-    """Ids of packets `run_packets` would answer from the response cache."""
-    from limbic.cerebellum.calls import _open, is_cached
+    """Ids of packets `run_packets` would answer from the response cache (read-only)."""
+    from limbic.cerebellum.calls import _open_cache_readonly, is_cached
 
     kwargs = {k: v for k, v in transport_kwargs.items() if k != "cache_db_path"}
-    conn = _open(transport_kwargs.get("cache_db_path"))
+    conn = _open_cache_readonly(transport_kwargs.get("cache_db_path"))
+    if conn is None:
+        return set()
     try:
         return {p["packet_id"] for p in packets if is_cached(
             p["body_text"], model=model, system=p["static_prefix"], schema=p.get("schema"),

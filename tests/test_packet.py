@@ -194,6 +194,13 @@ class TestRunPackets:
         one_uncached = run_packets(capped[2:], purpose="t", project="p", model="gemini-2.5-flash", transport=fake_transport({}), cache_db_path=db)
         assert dry["estimated_cost_usd_max_uncached"] == one_uncached["estimated_cost_usd_max"]
 
+    def test_dry_run_never_creates_or_writes_the_cache(self, tmp_path):
+        missing = tmp_path / "not-yet" / "cache.db"
+        dry = run_packets([packet(1)], purpose="t", project="p", transport=fake_transport({}),
+                          cache_db_path=missing)
+        assert dry["cached_packets"] == 0
+        assert not missing.parent.exists()
+
     def test_dry_run_with_cache_off_counts_nothing_as_cached(self, tmp_path):
         db = tmp_path / "cache.db"
         p = [make_packet(PREFIX, "p", SCHEMA, prompt_version="v1", max_output_tokens=100)]

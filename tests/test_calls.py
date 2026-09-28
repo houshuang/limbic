@@ -365,3 +365,22 @@ class TestCacheKeyIsPinned:
         b = {"properties": {"x": {"type": "string"}}, "type": "object"}
         common = dict(model="gpt-5.4-mini", system="", prompt="hello", version="")
         assert calls._cache_key(schema=a, **common) == calls._cache_key(schema=b, **common)
+
+
+def test_is_cached_honours_a_caller_cache_key(tmp_path):
+    from limbic.cerebellum.calls import is_cached
+    db = tmp_path / "cache.db"
+
+    def transport(prompt, **kwargs):
+        return "ok", {"cost": 0.0, "model": kwargs.get("model")}
+
+    cached_call("hi", project="p", purpose="t", transport=transport, model="m", cache_key="rep-2", cache_db_path=db)
+    assert is_cached("hi", model="m", cache_key="rep-2", cache_db_path=db)
+    assert not is_cached("hi", model="m", cache_db_path=db)
+
+
+def test_is_cached_on_a_missing_cache_is_false_and_creates_nothing(tmp_path):
+    from limbic.cerebellum.calls import is_cached
+    missing = tmp_path / "nope" / "cache.db"
+    assert not is_cached("hi", model="m", cache_db_path=missing)
+    assert not missing.parent.exists()

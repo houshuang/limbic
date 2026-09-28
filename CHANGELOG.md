@@ -14,7 +14,9 @@ All notable changes to the limbic monorepo (formerly amygdala) are documented he
   packets had its whole-batch maximum ($2.16) refuse a run that would cost cents.
 - `is_cached(prompt, model=…, system=…, schema=…, version=…)` tells whether
   `cached_call` would hit the cache, without calling anything. It folds
-  `reasoning_effort`/`thinking_budget` into the key exactly as `cached_call` does.
+  `reasoning_effort`/`thinking_budget` into the key exactly as `cached_call` does,
+  honours a caller `cache_key`, and opens the cache read-only: a dry run never
+  creates the cache, its folder or its tables.
 
 ---
 
