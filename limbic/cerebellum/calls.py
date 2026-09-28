@@ -617,6 +617,38 @@ def _resolve_transport(transport: str | Callable[..., tuple[Any, dict]]) -> Call
         ) from None
 
 
+def _versioned(version: str | None, transport_kwargs: dict) -> str | None:
+    """Fold answer-changing transport options into the cache version: the same
+    prompt at a different reasoning effort or thinking budget is a different answer."""
+    if transport_kwargs.get("reasoning_effort"):
+        version = f"{version or ''}|effort={transport_kwargs['reasoning_effort']}"
+    if transport_kwargs.get("thinking_budget") is not None:
+        version = f"{version or ''}|thinking={transport_kwargs['thinking_budget']}"
+    return version
+
+
+def is_cached(
+    prompt: str, *, model: str, system: str = "", schema: dict | None = None,
+    version: str | None = None, cache_db_path: str | Path | None = None, conn: Any = None,
+    **transport_kwargs: Any,
+) -> bool:
+    """Whether `cached_call` with these arguments would be a cache hit (unexpired),
+    without calling anything. Text calls only: a pre-built `request=` or images are
+    never reported as cached. Pass `conn` to reuse one connection over a batch."""
+    if transport_kwargs.get("request") is not None or transport_kwargs.get("images"):
+        return False
+    key = _cache_key(model=model, system=system, prompt=prompt, schema=schema,
+                     version=_versioned(version, transport_kwargs))
+    own = conn is None
+    conn = conn or _open(cache_db_path)
+    try:
+        row = conn.execute("SELECT expires_at FROM call_cache WHERE cache_key = ?", (key,)).fetchone()
+    finally:
+        if own:
+            conn.close()
+    return row is not None and (row["expires_at"] is None or row["expires_at"] > time.time())
+
+
 def cached_call(
     prompt: str = "",
     *,
@@ -691,11 +723,7 @@ def cached_call(
         )
     project = project or _infer_project()
     fn = _resolve_transport(transport)
-    if transport_kwargs.get("reasoning_effort"):
-        # Same prompt at a different effort is a different answer; keep them apart in the cache.
-        version = f"{version or ''}|effort={transport_kwargs['reasoning_effort']}"
-    if transport_kwargs.get("thinking_budget") is not None:
-        version = f"{version or ''}|thinking={transport_kwargs['thinking_budget']}"
+    version = _versioned(version, transport_kwargs)
 
     imgs = _normalize_images(images)
     if imgs:

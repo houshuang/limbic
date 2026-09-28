@@ -307,6 +307,21 @@ def _default_is_truncated(result: Any, meta: Any, packet: Mapping[str, Any]) -> 
     return bool(cap and isinstance(produced, int) and produced >= cap)
 
 
+def _cached_packet_ids(packets: Sequence[Mapping[str, Any]], *, model: str,
+                       transport_kwargs: Mapping[str, Any]) -> set[str]:
+    """Ids of packets `run_packets` would answer from the response cache."""
+    from limbic.cerebellum.calls import _open, is_cached
+
+    kwargs = {k: v for k, v in transport_kwargs.items() if k != "cache_db_path"}
+    conn = _open(transport_kwargs.get("cache_db_path"))
+    try:
+        return {p["packet_id"] for p in packets if is_cached(
+            p["body_text"], model=model, system=p["static_prefix"], schema=p.get("schema"),
+            version=f"{p['prompt_version']}:{p['input_sha256'][:16]}", conn=conn, **kwargs)}
+    finally:
+        conn.close()
+
+
 def run_packets(
     packets: Iterable[Packet | Mapping[str, Any]],
     *,
@@ -358,6 +373,16 @@ def run_packets(
 
     output_cap = sum(cap(p) for p in packets) * replicates
     inp_price, out_price = price_for(model, strict=False)
+
+    # Packets whose answer is already in the response cache cost nothing to
+    # re-send; a weekly job re-sends mostly those, and a worst-case price over
+    # the whole batch refused runs that would have cost cents.
+    cached_ids: set[str] = set()
+    if cache and cache != "refresh" and replicates == 1:
+        cached_ids = _cached_packet_ids(packets, model=model, transport_kwargs=transport_kwargs)
+    uncached = [p for p in packets if p["packet_id"] not in cached_ids]
+    uncached_in = sum(int(p.get("estimated_input_tokens") or 0) for p in uncached)
+    uncached_out = sum(cap(p) for p in uncached)
     report: dict[str, Any] = {
         "packets": len(packets),
         "planned_calls": len(packets) * replicates,
@@ -368,6 +393,8 @@ def run_packets(
         # estimate). The max prices every packet's output at its cap.
         "estimated_output_tokens_max": output_cap,
         "estimated_cost_usd_max": round((estimated * inp_price + output_cap * out_price) / 1_000_000, 4),
+        "cached_packets": len(cached_ids),
+        "estimated_cost_usd_max_uncached": round((uncached_in * inp_price + uncached_out * out_price) / 1_000_000, 4),
         "model": model,
         "warnings": lint_packet(packets) + (
             [f"{sum(1 for p in packets if not cap(p))} packet(s) have no "

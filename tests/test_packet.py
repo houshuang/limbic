@@ -181,6 +181,26 @@ class TestRunPackets:
         assert report["estimated_output_tokens_max"] == 2000
         assert not any("max_output_tokens" in w for w in report["warnings"])
 
+    def test_dry_run_leaves_already_cached_packets_out_of_the_uncached_price(self, tmp_path):
+        # A weekly job re-sends mostly unchanged packets that cost nothing; a
+        # worst-case price over all of them refused a run that would cost cents.
+        db = tmp_path / "cache.db"
+        capped = [make_packet(PREFIX, f"p{i}", SCHEMA, prompt_version="v1", max_output_tokens=4000) for i in range(3)]
+        run_packets(capped[:2], purpose="t", project="p", model="gemini-2.5-flash", transport=fake_transport({"items": []}),
+                    execute=True, cache_db_path=db)
+        dry = run_packets(capped, purpose="t", project="p", model="gemini-2.5-flash", transport=fake_transport({}), cache_db_path=db)
+        assert dry["cached_packets"] == 2
+        assert dry["estimated_cost_usd_max_uncached"] < dry["estimated_cost_usd_max"]
+        one_uncached = run_packets(capped[2:], purpose="t", project="p", model="gemini-2.5-flash", transport=fake_transport({}), cache_db_path=db)
+        assert dry["estimated_cost_usd_max_uncached"] == one_uncached["estimated_cost_usd_max"]
+
+    def test_dry_run_with_cache_off_counts_nothing_as_cached(self, tmp_path):
+        db = tmp_path / "cache.db"
+        p = [make_packet(PREFIX, "p", SCHEMA, prompt_version="v1", max_output_tokens=100)]
+        run_packets(p, purpose="t", project="p", transport=fake_transport({}), execute=True, cache_db_path=db)
+        dry = run_packets(p, purpose="t", project="p", transport=fake_transport({}), cache=False, cache_db_path=db)
+        assert dry["cached_packets"] == 0
+
     def test_dry_run_prices_output_up_to_the_cap(self):
         # An input-only estimate undercounted a reasoning model's run ~6x.
         capped = make_packet(PREFIX, {"page": "x"}, SCHEMA, prompt_version="v1", max_output_tokens=4000)

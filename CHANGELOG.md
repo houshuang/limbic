@@ -4,6 +4,20 @@ All notable changes to the limbic monorepo (formerly amygdala) are documented he
 
 ---
 
+## 2026-09-28 -- Cache-aware dry runs
+
+### Added
+
+- `run_packets` dry runs report `cached_packets` and
+  `estimated_cost_usd_max_uncached`: the worst case over the packets the
+  response cache cannot answer. A weekly job re-sending mostly unchanged
+  packets had its whole-batch maximum ($2.16) refuse a run that would cost cents.
+- `is_cached(prompt, model=…, system=…, schema=…, version=…)` tells whether
+  `cached_call` would hit the cache, without calling anything. It folds
+  `reasoning_effort`/`thinking_budget` into the key exactly as `cached_call` does.
+
+---
+
 ## 2026-09-28 -- Concurrent run_packets, output-aware estimates, Gemini thinking budget
 
 ### Added
