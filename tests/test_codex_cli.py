@@ -909,3 +909,29 @@ class TestCallerRetryOwnership:
         with pytest.raises(ValueError, match="non-negative"):
             cc.codex_json("q", retries=-1, cost_log=False)
         assert captured_cmd == []
+
+
+class TestRequiredStatelessEvents:
+    def test_events_survive_central_log_opt_out(self, monkeypatch, captured_cmd):
+        monkeypatch.setenv("LIMBIC_CODEX_COST_LOG", "0")
+        def run(cmd, timeout, stdin_text=None):
+            captured_cmd.append(list(cmd))
+            return subprocess.CompletedProcess(cmd, 0, REAL_EVENTS, "")
+        monkeypatch.setattr(cc, "_run", run)
+        meta = {}
+        cc.codex_json("q", require_events=True, cost_log=False, meta_out=meta)
+        assert "--json" in captured_cmd[-1]
+        assert meta['turns'] == 1
+        assert meta['input_tokens'] > 0
+
+    def test_missing_events_fail_closed(self, monkeypatch):
+        monkeypatch.setattr(cc, "_run", lambda cmd, timeout, stdin_text=None:
+                            subprocess.CompletedProcess(cmd, 0, "{}", ""))
+        with pytest.raises(cc.CodexCLIError, match="telemetry"):
+            cc.codex_json("q", require_events=True, retries=0, cost_log=False)
+
+    def test_unsupported_events_refused_before_model_dispatch(self, monkeypatch):
+        monkeypatch.setattr(cc, "_JSON_EVENTS_SUPPORTED", False)
+        monkeypatch.setattr(cc, "_run", lambda *a, **k: pytest.fail('model dispatched'))
+        with pytest.raises(cc.CodexCLIError, match="JSON event support"):
+            cc.codex_json("q", require_events=True, cost_log=False)

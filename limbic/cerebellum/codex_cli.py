@@ -789,7 +789,7 @@ def _exec(cmd: list[str], timeout: int, output_path: str | None,
           schema: dict | None, ctx: _LogContext | None = None,
           stdin_text: str | None = None, *, retries: int | None = None,
           quota_cooldown: bool = True, stateless: bool = False,
-          subscription_only: bool = False) -> Any:
+          subscription_only: bool = False, require_events: bool = False) -> Any:
     """Run + parse with automatic retry on transient failures (a flaky `codex exec`
     non-zero exit or garbled output). Quota errors and timeouts do NOT retry: quota
     needs its cooldown, and a timeout retry would double the stage's worst case.
@@ -812,6 +812,9 @@ def _exec(cmd: list[str], timeout: int, output_path: str | None,
             diagnostics = _event_diagnostics(proc.stdout or "", proc.stderr or "")
             if ctx is not None:
                 ctx.diagnostics = diagnostics
+            if require_events and diagnostics["turns"] != 1:
+                raise CodexCLIError("codex stateless event telemetry missing or invalid",
+                                    stdout=proc.stdout or "", stderr=proc.stderr or "")
             if stateless and (diagnostics["tool_item_count"] or diagnostics["turns"] > 1):
                 raise CodexCLIError(
                     f"codex stateless call violated: {diagnostics['turns']} turns, "
@@ -852,6 +855,7 @@ def codex_json(
     retries: int | None = None,
     quota_cooldown: bool = True,
     subscription_only: bool = False,
+    require_events: bool = False,
 ) -> Any:
     """Locked-down, single-shot structured generation. Returns parsed JSON (if
     ``schema`` given) or text. Runs in a fresh empty directory, with tools and
@@ -900,7 +904,9 @@ def codex_json(
             cmd += ["-c", f"features.{feature}=false"]
         cmd += ["-c", 'web_search="disabled"', "-c", "tools.view_image=false",
                 "-c", "project_doc_max_bytes=0", "-c", "features.skip_host_skill_discovery=true"]
-        if cost_log and cost_log_enabled() and _JSON_EVENTS_SUPPORTED:
+        if require_events and not _JSON_EVENTS_SUPPORTED:
+            raise CodexCLIError("codex stateless calls require JSON event support")
+        if require_events or (cost_log and cost_log_enabled() and _JSON_EVENTS_SUPPORTED):
             cmd.append("--json")
         if schema is not None:
             with tempfile.NamedTemporaryFile("w", suffix=".schema.json", delete=False) as sf:
@@ -916,7 +922,7 @@ def codex_json(
         ctx.metadata["prompt_transport"] = "stdin" if stdin_text is not None else "argv"
         return _exec(cmd, timeout, output_path, schema, ctx, stdin_text,
                      retries=retries, quota_cooldown=quota_cooldown, stateless=True,
-                     subscription_only=subscription_only)
+                     subscription_only=subscription_only, require_events=require_events)
     finally:
         if meta_out is not None:
             usage = ctx.usage or CodexUsage()
