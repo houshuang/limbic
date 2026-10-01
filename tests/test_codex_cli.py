@@ -91,7 +91,7 @@ class TestJsonImages:
         cmd = captured_cmd[0]
         image_args = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "-i"]
         assert image_args == [str(image) for image in images]
-        assert cmd[-5:] == ["-i", str(images[0]), "-i", str(images[1]), "read the pages"]
+        assert cmd[-6:] == ["-i", str(images[0]), "-i", str(images[1]), "--", "read the pages"]
 
     @pytest.mark.parametrize("images", [None, []])
     def test_no_images_preserves_the_command(self, captured_cmd, images):
@@ -116,7 +116,7 @@ class TestJsonImages:
         image.write_bytes(b"test pixels")
         prompt = "p" * (cc.PROMPT_ARGV_LIMIT + 1)
         cc.codex_json(prompt, images=[str(image)])
-        assert captured_cmd[0][-3:] == ["-i", str(image), "-"]
+        assert captured_cmd[0][-4:] == ["-i", str(image), "--", "-"]
         assert captured_cmd.stdin[0] == prompt
 
 

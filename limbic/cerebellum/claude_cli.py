@@ -25,11 +25,14 @@ caller may have set for an SDK path.
 from __future__ import annotations
 
 import json
+import base64
+import contextlib
 import logging
 import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 import hashlib
 from concurrent.futures import ThreadPoolExecutor
@@ -68,6 +71,90 @@ def _claude_env() -> dict:
 class ClaudeCLIError(RuntimeError):
     """Raised when `claude -p` exits non-zero, times out, or returns malformed output."""
 
+    def __init__(self, message: str, *, stdout: str | bytes = "", stderr: str | bytes = "",
+                 metadata: dict | None = None):
+        super().__init__(message)
+        self.stdout = _tail(stdout)
+        self.stderr = _tail(stderr)
+        self.metadata = dict(metadata or {})
+        self.meta = self.metadata
+
+
+def _tail(value: str | bytes | None) -> str:
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    return (value or "")[-4000:]
+
+
+def _image_input(prompt: str, images: list[str]) -> tuple[str, dict]:
+    """Freeze supported image bytes before spawning; filenames never select MIME."""
+    content = []
+    hashes = []
+    for filename in images:
+        path = Path(filename)
+        if not path.is_file():
+            raise ValueError(f"image must be a readable file: {filename}")
+        try:
+            data = path.read_bytes()
+        except OSError as error:
+            raise ValueError(f"cannot read image: {filename}") from error
+        if data.startswith(b"\x89PNG\r\n\x1a\n"):
+            mime = "image/png"
+        elif data.startswith(b"\xff\xd8\xff"):
+            mime = "image/jpeg"
+        elif data.startswith((b"GIF87a", b"GIF89a")):
+            mime = "image/gif"
+        elif data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+            mime = "image/webp"
+        else:
+            raise ValueError(f"unsupported image MIME: {filename}; use PNG, JPEG, GIF or WebP")
+        content.append({"type": "image", "source": {"type": "base64", "media_type": mime,
+                         "data": base64.b64encode(data).decode("ascii")}})
+        hashes.append(hashlib.sha256(data).hexdigest())
+    content.append({"type": "text", "text": prompt})
+    message = {"type": "user", "message": {"role": "user", "content": content},
+               "parent_tool_use_id": None, "session_id": ""}
+    return json.dumps(message, ensure_ascii=False) + "\n", {"image_count": len(images), "image_sha256": hashes}
+
+
+def _response_from_stdout(stdout: str, stream: bool) -> dict | None:
+    try:
+        if stream:
+            events = [json.loads(line) for line in stdout.splitlines() if line.strip()]
+            results = [event for event in events if isinstance(event, dict) and event.get("type") == "result"]
+            return results[-1] if results else None
+        value = json.loads(stdout)
+        return value if isinstance(value, dict) else None
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def _response_metadata(response: dict | None, model: str, elapsed: float) -> dict:
+    response = response or {}
+    usage = response.get("usage") or {}
+    models = response.get("modelUsage") or {}
+    if usage:
+        fresh = int(usage.get("input_tokens") or 0)
+        cached = int(usage.get("cache_read_input_tokens") or 0)
+        written = int(usage.get("cache_creation_input_tokens") or 0)
+        outgoing = int(usage.get("output_tokens") or 0)
+    else:
+        fresh = sum(int(u.get("inputTokens") or 0) for u in models.values())
+        cached = sum(int(u.get("cacheReadInputTokens") or 0) for u in models.values())
+        written = sum(int(u.get("cacheCreationInputTokens") or 0) for u in models.values())
+        outgoing = sum(int(u.get("outputTokens") or 0) for u in models.values())
+    notional = response.get("total_cost_usd")
+    if notional is None and models:
+        notional = sum(float(u.get("costUSD") or 0) for u in models.values())
+    incoming = fresh + cached + written
+    return {"cost": float(notional or 0), "cost_usd": 0, "billing_mode": "subscription",
+            "notional_cost_usd": float(notional) if notional is not None else None,
+            "turns": response.get("num_turns", 0), "duration_s": round(elapsed, 1),
+            "session_id": response.get("session_id"), "model": next(iter(models), model),
+            "usage": usage, "input_tokens": incoming, "output_tokens": outgoing,
+            "cached_tokens": cached, "cached_input_tokens": cached, "cache_write_input_tokens": written,
+            "total_tokens": incoming + outgoing}
+
 
 def is_available() -> bool:
     """Check whether the `claude` CLI is installed and on PATH."""
@@ -86,6 +173,7 @@ def _build_cmd(
     work_dir: str | None,
     dangerously_skip_permissions: bool,
     minimal_headless: bool,
+    effort: str | None = None,
 ) -> list[str]:
     cmd = [
         "claude", "-p",
@@ -101,6 +189,8 @@ def _build_cmd(
             "--no-chrome",
             "--setting-sources", "local",
         ])
+    if effort is not None:
+        cmd.extend(["--effort", effort])
     if tools is not None:
         cmd.extend(["--tools", tools])
     if allowed_tools:
@@ -134,7 +224,7 @@ def log_cli_usage(
     via their own subprocess (async, streaming, etc.) but still want rows in the
     shared cost_log. Writes one row per model that the session touched.
 
-    Trusts `costUSD` from Claude's `modelUsage` block. Falls back to top-level
+    Records `costUSD` as notional subscription value, with billed cost zero. Falls back to top-level
     `usage` + `total_cost_usd` if `modelUsage` is missing (older CLI versions).
     `requested_model` is stored in metadata and used as the row's model when
     `modelUsage` is absent.
@@ -176,7 +266,9 @@ def log_cli_usage(
                     prompt_tokens=int(usage.get("inputTokens", 0) or 0),
                     completion_tokens=int(usage.get("outputTokens", 0) or 0),
                     cached_tokens=int(usage.get("cacheReadInputTokens", 0) or 0),
-                    cost_usd=float(usage.get("costUSD", 0.0) or 0.0),
+                    cost_usd=0.0,
+                    billing_mode="subscription",
+                    notional_cost_usd=float(usage["costUSD"]) if usage.get("costUSD") is not None else None,
                     script="claude-cli",
                     purpose=purpose,
                     metadata=metadata,
@@ -193,7 +285,9 @@ def log_cli_usage(
             prompt_tokens=int(usage.get("input_tokens", 0) or 0),
             completion_tokens=int(usage.get("output_tokens", 0) or 0),
             cached_tokens=int(usage.get("cache_read_input_tokens", 0) or 0),
-            cost_usd=float(response.get("total_cost_usd", 0.0) or 0.0),
+            cost_usd=0.0,
+            billing_mode="subscription",
+            notional_cost_usd=float(response["total_cost_usd"]) if response.get("total_cost_usd") is not None else None,
             script="claude-cli",
             purpose=purpose,
             metadata=base_metadata,
@@ -288,6 +382,7 @@ def _log_cli_failure(
             completion_tokens=0,
             cached_tokens=0,
             cost_usd=0.0,
+            billing_mode="subscription",
             script="claude-cli",
             purpose=purpose,
             metadata=metadata,
@@ -338,6 +433,10 @@ def generate(
     dangerously_skip_permissions: bool = False,
     minimal_headless: bool = True,
     timeout: int = 120,
+    images: list[str] | None = None,
+    effort: str | None = None,
+    meta_out: dict | None = None,
+    stateless: bool = False,
 ) -> tuple[Any, dict]:
     """Run a single `claude -p` invocation.
 
@@ -357,6 +456,11 @@ def generate(
         max_budget: `--max-budget-usd` safety cap.
         work_dir: Additional directory to grant file access via `--add-dir`.
         timeout: Subprocess timeout in seconds.
+        images: Optional local PNG/JPEG/GIF/WebP files, sent as base64 content.
+        effort: Optional CLI effort level; omitted preserves the CLI default.
+        meta_out: Optional dictionary populated on both successful and failed calls.
+        stateless: Run from a fresh temporary directory to avoid inheriting
+            project instructions. Keeps work_dir as an explicit --add-dir grant.
 
     Returns:
         `(result, metadata)`. `result` is a dict if `schema` was provided,
@@ -371,6 +475,9 @@ def generate(
     if not project:
         raise ValueError("project is required (used for cost_log attribution)")
 
+    if effort is not None and effort not in {"low", "medium", "high", "xhigh", "max"}:
+        raise ValueError("unsupported Claude effort level")
+    stdin, image_meta = _image_input(prompt, images) if images else (prompt, {})
     cmd = _build_cmd(
         model=model,
         system=system,
@@ -382,7 +489,11 @@ def generate(
         work_dir=work_dir,
         dangerously_skip_permissions=dangerously_skip_permissions,
         minimal_headless=minimal_headless,
+        effort=effort,
     )
+    if images:
+        cmd[cmd.index("--output-format") + 1] = "stream-json"
+        cmd.extend(["--input-format", "stream-json", "--verbose"])
     invocation_meta = _invocation_metadata(
         prompt=prompt,
         system=system,
@@ -398,95 +509,90 @@ def generate(
         timeout=timeout,
     )
 
+    invocation_meta.update(image_meta, effort=effort, stateless=stateless)
     start = time.time()
     try:
-        proc = subprocess.run(
-            cmd,
-            input=prompt,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=_claude_env(),
-        )
-    except subprocess.TimeoutExpired as e:
-        _log_cli_failure(
-            project=project,
-            purpose=purpose,
-            requested_model=model,
-            error_type="timeout",
-            error=f"claude timed out after {timeout}s",
-            extra_metadata=invocation_meta,
-        )
-        raise ClaudeCLIError(f"claude timed out after {timeout}s") from e
+        directory = tempfile.TemporaryDirectory(prefix="limbic-claude-") if stateless else contextlib.nullcontext(None)
+        with directory as invocation_dir:
+            process_options = {"cwd": invocation_dir} if invocation_dir is not None else {}
+            proc = subprocess.run(
+                cmd,
+                input=stdin,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=_claude_env(),
+                **process_options,
+            )
+    except (subprocess.TimeoutExpired, OSError) as error:
+        elapsed = time.time() - start
+        raw_stdout = getattr(error, "stdout", "") or ""
+        if isinstance(raw_stdout, bytes):
+            raw_stdout = raw_stdout.decode("utf-8", errors="replace")
+        stdout = _tail(raw_stdout)
+        stderr = _tail(getattr(error, "stderr", ""))
+        response = _response_from_stdout(raw_stdout, bool(images))
+        metadata = _response_metadata(response, model, elapsed)
+        metadata["effort"] = effort
+        error_type = "timeout" if isinstance(error, subprocess.TimeoutExpired) else "spawn_error"
+        metadata.update(failed=True, error_type=error_type)
+        message = f"claude timed out after {timeout}s" if error_type == "timeout" else f"claude spawn failed: {error}"
+        if response is not None:
+            records = log_cli_usage({**response, "is_error": True}, project=project, purpose=purpose,
+                                    requested_model=model, extra_metadata={**invocation_meta, "failed": True,
+                                    "error_type": error_type, "stdout_tail": stdout, "stderr_tail": stderr})
+            metadata["call_id"] = records[0].id if records else None
+        else:
+            _log_cli_failure(project=project, purpose=purpose, requested_model=model,
+                             error_type=error_type, error=message,
+                             extra_metadata={**invocation_meta, "stdout_tail": stdout, "stderr_tail": stderr})
+        if meta_out is not None:
+            meta_out.update(metadata)
+        raise ClaudeCLIError(message, stdout=stdout, stderr=stderr, metadata=metadata) from error
     elapsed = time.time() - start
-
-    response: dict | None = None
-    if proc.stdout:
-        try:
-            response = json.loads(proc.stdout)
-        except json.JSONDecodeError:
-            response = None
-
-    logged_records: list = []
-    if isinstance(response, dict):
-        response_meta = dict(invocation_meta)
-        response_meta.update(_debug_file_metadata(response.get("session_id")))
-        response_meta["returncode"] = proc.returncode
-        logged_records = log_cli_usage(
-            response,
-            project=project,
-            purpose=purpose,
-            requested_model=model,
-            extra_metadata=response_meta,
-        )
-
+    response = _response_from_stdout(proc.stdout, bool(images))
+    metadata = _response_metadata(response, model, elapsed)
+    metadata["effort"] = effort
+    failure = None
+    error_type = None
+    result = None
     if proc.returncode != 0:
-        raise ClaudeCLIError(
-            f"claude exited {proc.returncode}: {proc.stderr[:300] or proc.stdout[:300]}"
-        )
-    if response is None:
-        _log_cli_failure(
-            project=project,
-            purpose=purpose,
-            requested_model=model,
-            error_type="unparseable_output",
-            error=proc.stdout[:300] or proc.stderr[:300],
-            returncode=proc.returncode,
-            extra_metadata=invocation_meta,
-        )
-        raise ClaudeCLIError(
-            f"claude returned unparseable output: {proc.stdout[:300]}"
-        )
-    if response.get("is_error"):
-        raise ClaudeCLIError(
-            f"claude error: {(response.get('result') or 'unknown')[:300]}"
-        )
-
-    try:
-        result = _parse_result(response, schema)
-    except json.JSONDecodeError as e:
-        raise ClaudeCLIError(
-            f"claude returned unparseable JSON result: {(response.get('result') or '')[:200]}"
-        ) from e
-
-    if result is None or (isinstance(result, str) and not result):
-        raise ClaudeCLIError(
-            f"empty response: {(response.get('result') or '')[:200]}"
-        )
-
-    model_usage = response.get("modelUsage") or {}
-    first_model = next(iter(model_usage), model)
-    metadata = {
-        "cost": response.get("total_cost_usd", 0.0),
-        "turns": response.get("num_turns", 0),
-        "duration_s": round(elapsed, 1),
-        "session_id": response.get("session_id"),
-        "model": first_model,
-        # The primary (first) cost_log row this call already wrote — present
-        # so a caller composing `generate` as a transport (e.g. `cached_call`)
-        # doesn't log a second, cost-doubling row for the same call.
-        "call_id": logged_records[0].id if logged_records else None,
-    }
+        failure = f"claude exited {proc.returncode}: {proc.stderr[:300] or proc.stdout[:300]}"
+        error_type = "nonzero_exit"
+    elif response is None:
+        failure = f"claude returned unparseable output: {proc.stdout[:300]}"
+        error_type = "unparseable_output"
+    elif response.get("is_error"):
+        failure = f"claude error: {(response.get('result') or 'unknown')[:300]}"
+        error_type = "cli_error"
+    else:
+        try:
+            result = _parse_result(response, schema)
+        except json.JSONDecodeError:
+            failure = f"claude returned unparseable JSON result: {(response.get('result') or '')[:200]}"
+            error_type = "unparseable_result"
+        if failure is None and (result is None or (isinstance(result, str) and not result)):
+            failure = f"empty response: {(response.get('result') or '')[:200]}"
+            error_type = "empty_response"
+    response_meta = dict(invocation_meta)
+    response_meta["returncode"] = proc.returncode
+    if failure:
+        metadata.update(failed=True, error_type=error_type, returncode=proc.returncode)
+        response_meta.update(failed=True, error_type=error_type,
+                             stdout_tail=_tail(proc.stdout), stderr_tail=_tail(proc.stderr))
+    if response is not None:
+        response_meta.update(_debug_file_metadata(response.get("session_id")))
+        records = log_cli_usage({**response, "is_error": bool(failure)}, project=project, purpose=purpose,
+                                requested_model=model, extra_metadata=response_meta)
+        metadata["call_id"] = records[0].id if records else None
+    else:
+        _log_cli_failure(project=project, purpose=purpose, requested_model=model,
+                         error_type=error_type, error=failure, returncode=proc.returncode,
+                         extra_metadata=response_meta)
+    if meta_out is not None:
+        meta_out.update(metadata)
+    if failure:
+        raise ClaudeCLIError(failure, stdout=proc.stdout, stderr=proc.stderr, metadata=metadata)
     return result, metadata
 
 
@@ -508,6 +614,9 @@ class Task:
     minimal_headless: bool = True
     timeout: int = 120
     tag: str = ""
+    images: list[str] | None = None
+    effort: str | None = None
+    stateless: bool = False
 
 
 def generate_parallel(
@@ -542,12 +651,15 @@ def generate_parallel(
                 dangerously_skip_permissions=task.dangerously_skip_permissions,
                 minimal_headless=task.minimal_headless,
                 timeout=task.timeout,
+                images=task.images,
+                effort=task.effort,
+                stateless=task.stateless,
             )
             if task.tag:
                 meta["tag"] = task.tag
             return result, meta
         except Exception as e:
-            meta: dict[str, Any] = {"error": str(e)}
+            meta: dict[str, Any] = {**getattr(e, "metadata", {}), "error": str(e)}
             if task.tag:
                 meta["tag"] = task.tag
             return None, meta

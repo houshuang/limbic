@@ -611,6 +611,9 @@ def _prompt_arg(cmd: list[str], prompt: str) -> str | None:
     ``PROMPT_ARGV_LIMIT`` becomes a ``-`` argument and is returned for the
     caller to hand to ``_run``/``_exec`` as stdin.
     """
+    # --image accepts multiple values; terminate options before a prompt or stdin marker.
+    if "-i" in cmd:
+        cmd.append("--")
     if len(prompt.encode("utf-8", "surrogatepass")) <= PROMPT_ARGV_LIMIT:
         cmd.append(prompt)
         return None
