@@ -568,11 +568,12 @@ def _prompt_arg(cmd: list[str], prompt: str) -> str | None:
 
 
 def _run(cmd: list[str], timeout: int,
-         stdin_text: str | None = None) -> subprocess.CompletedProcess:
+         stdin_text: str | None = None, *,
+         quota_cooldown: bool = True) -> subprocess.CompletedProcess:
     """Run `codex exec` with bounded output and a process-group kill on timeout."""
     if not is_available():
         raise CodexCLIError("codex CLI not available — install from https://github.com/openai/codex and run `codex auth`")
-    if temporarily_disabled():
+    if quota_cooldown and temporarily_disabled():
         raise CodexCLIError(f"codex CLI temporarily disabled (quota): {_DISABLED_REASON}")
     proc = _spawn(cmd, timeout, stdin_text)
     if proc.returncode != 0 and "--json" in cmd and _rejects_json_flag(proc):
@@ -676,10 +677,12 @@ def _spawn(cmd: list[str], timeout: int,
     return subprocess.CompletedProcess(cmd, proc.returncode, out.get(), err.get())
 
 
-def _finish(proc: subprocess.CompletedProcess, output_path: str | None, schema: dict | None) -> Any:
+def _finish(proc: subprocess.CompletedProcess, output_path: str | None, schema: dict | None,
+            *, quota_cooldown: bool = True) -> Any:
     if proc.returncode != 0:
         full = (proc.stderr or "") or (proc.stdout or "")
-        mark_unavailable_from_error(full)
+        if quota_cooldown:
+            mark_unavailable_from_error(full)
         err = full.strip()
         # codex exec opens stderr with its banner (and a harmless "Reading
         # additional input from stdin..." whenever stdin isn't a TTY); the fatal
@@ -727,7 +730,8 @@ def _is_transient(err: CodexCLIError) -> bool:
 
 def _exec(cmd: list[str], timeout: int, output_path: str | None,
           schema: dict | None, ctx: _LogContext | None = None,
-          stdin_text: str | None = None) -> Any:
+          stdin_text: str | None = None, *, retries: int | None = None,
+          quota_cooldown: bool = True) -> Any:
     """Run + parse with automatic retry on transient failures (a flaky `codex exec`
     non-zero exit or garbled output). Quota errors and timeouts do NOT retry: quota
     needs its cooldown, and a timeout retry would double the stage's worst case.
@@ -735,16 +739,22 @@ def _exec(cmd: list[str], timeout: int, output_path: str | None,
     Every attempt gets its own ledger row — a retried call spent its first
     attempt's tokens too.
     """
-    for attempt in range(RETRIES + 1):
+    retry_count = RETRIES if retries is None else retries
+    if retry_count < 0:
+        raise ValueError("retries must be non-negative")
+    for attempt in range(retry_count + 1):
         started = time.monotonic()
         try:
-            proc = _run(cmd, timeout, stdin_text)
-            result = _finish(proc, output_path, schema)
+            if quota_cooldown:
+                proc = _run(cmd, timeout, stdin_text)
+            else:
+                proc = _run(cmd, timeout, stdin_text, quota_cooldown=False)
+            result = _finish(proc, output_path, schema, quota_cooldown=quota_cooldown)
         except CodexCLIError as e:
             _log_usage(ctx, parse_usage(getattr(e, "stdout", "")),
                        duration_ms=int((time.monotonic() - started) * 1000),
                        error=str(e))
-            if attempt >= RETRIES or not _is_transient(e):
+            if attempt >= retry_count or not _is_transient(e):
                 raise
             time.sleep(5 * (attempt + 1))
             continue
@@ -758,6 +768,7 @@ def codex_json(
     *,
     schema: dict | None = None,
     system: str = "",
+    images: list[str] | None = None,
     model: str | None = None,
     reasoning: str | None = None,
     timeout: int = 120,
@@ -767,13 +778,23 @@ def codex_json(
     packet_id: str | None = None,
     cost_log: bool = True,
     meta_out: dict | None = None,
+    retries: int | None = None,
+    quota_cooldown: bool = True,
 ) -> Any:
     """Locked-down, single-shot structured generation. Returns parsed JSON (if
     ``schema`` given) or text. No web, no file writes — just classify/transform.
 
     ``meta_out``, when given, receives ``input_tokens``, ``output_tokens``,
     ``cached_tokens`` and the ledger row's ``call_id`` (None when not logged),
-    which is what the ``codex`` transport of ``calls.cached_call`` needs.
+    on success or failure. These describe the latest attempt, which is what the
+    ``codex`` transport of ``calls.cached_call`` needs.
+
+    ``images`` attaches local image files with ``codex exec -i``. Callers own
+    the files and their lifetime; a path in the prompt alone does not send pixels.
+
+    ``retries=None`` keeps the process default; ``retries=0`` delegates retry
+    ownership to the caller. ``quota_cooldown=False`` skips both the process-local
+    quota latch and its update, for callers managing their own backoff policy.
 
     ``project``/``purpose``/``packet_id`` attribute the usage row this writes;
     ``project`` falls back to ``$LIMBIC_CODEX_PROJECT`` and then the enclosing
@@ -800,15 +821,20 @@ def codex_json(
                 json.dump(strict_response_schema(schema), sf, ensure_ascii=False)
                 schema_path = sf.name
             cmd += ["--output-schema", schema_path]
+        for image in (images or []):
+            path = Path(image)
+            if not path.is_file():
+                raise CodexCLIError(f"codex image attachment is not a file: {image}")
+            cmd += ["-i", str(path)]
         stdin_text = _prompt_arg(cmd, f"{system}\n\n{prompt}" if system else prompt)
         ctx.metadata["prompt_transport"] = "stdin" if stdin_text is not None else "argv"
-        result = _exec(cmd, timeout, output_path, schema, ctx, stdin_text)
+        return _exec(cmd, timeout, output_path, schema, ctx, stdin_text,
+                     retries=retries, quota_cooldown=quota_cooldown)
+    finally:
         if meta_out is not None:
             usage = ctx.usage or CodexUsage()
             meta_out.update(input_tokens=usage.input_tokens, output_tokens=usage.output_tokens,
                             cached_tokens=usage.cached_input_tokens, call_id=ctx.call_id)
-        return result
-    finally:
         for p in (schema_path, output_path):
             if p:
                 try:

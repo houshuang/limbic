@@ -82,6 +82,43 @@ class TestIsolationFlags:
         assert cmd[-1] == "mission"
 
 
+class TestJsonImages:
+    def test_each_image_is_attached_before_the_prompt(self, captured_cmd, tmp_path):
+        images = [tmp_path / "page one.png", tmp_path / "page-two.png"]
+        for image in images:
+            image.write_bytes(b"test pixels")
+        cc.codex_json("read the pages", images=[str(image) for image in images])
+        cmd = captured_cmd[0]
+        image_args = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "-i"]
+        assert image_args == [str(image) for image in images]
+        assert cmd[-5:] == ["-i", str(images[0]), "-i", str(images[1]), "read the pages"]
+
+    @pytest.mark.parametrize("images", [None, []])
+    def test_no_images_preserves_the_command(self, captured_cmd, images):
+        cc.codex_json("prompt", cost_log=False)
+        cc.codex_json("prompt", cost_log=False, images=images)
+        commands = []
+        for cmd in captured_cmd:
+            cmd[cmd.index("--output-last-message") + 1] = "OUTPUT_PATH"
+            commands.append(cmd)
+        assert commands[0] == commands[1]
+        assert "-i" not in commands[1]
+
+    def test_missing_image_fails_before_dispatch(self, captured_cmd, tmp_path):
+        image = tmp_path / "missing.png"
+        with pytest.raises(cc.CodexCLIError, match="image attachment is not a file"):
+            cc.codex_json("read the page", images=[str(image)])
+        assert captured_cmd == []
+
+    def test_images_survive_a_large_prompt_using_stdin(self, captured_cmd, tmp_path):
+        image = tmp_path / "page.png"
+        image.write_bytes(b"test pixels")
+        prompt = "p" * (cc.PROMPT_ARGV_LIMIT + 1)
+        cc.codex_json(prompt, images=[str(image)])
+        assert captured_cmd[0][-3:] == ["-i", str(image), "-"]
+        assert captured_cmd.stdin[0] == prompt
+
+
 # ---------------------------------------------------------------------------
 # Prompt transport
 # ---------------------------------------------------------------------------
@@ -682,3 +719,68 @@ def test_codex_json_reports_usage_and_its_ledger_row_through_meta_out(monkeypatc
     assert cc.codex_json("q", project="p", purpose="t", meta_out=meta) == "ok"
     assert meta["input_tokens"] == 14169 and meta["output_tokens"] == 5
     assert meta["call_id"] and fresh._connect().execute("SELECT id FROM llm_costs").fetchone()[0] == meta["call_id"]
+
+
+class TestCallerRetryOwnership:
+    def test_zero_retries_dispatches_once_and_reports_failed_attempt(self, monkeypatch, ledger):
+        seen = []
+
+        def _run(cmd, timeout, stdin_text=None):
+            seen.append(cmd)
+            return subprocess.CompletedProcess(cmd, 1, REAL_EVENTS, "stream disconnected")
+
+        monkeypatch.setattr(cc, "_run", _run)
+        meta = {}
+        with pytest.raises(cc.CodexCLIError, match="disconnected"):
+            cc.codex_json("q", retries=0, project="demo", meta_out=meta)
+        assert len(seen) == 1
+        rows = ledger.query()
+        assert len(rows) == 1
+        assert rows[0]["outcome"] == "error"
+        assert meta == {"input_tokens": 14169, "output_tokens": 5,
+                        "cached_tokens": 4480, "call_id": rows[0]["id"]}
+
+    def test_explicit_retry_count_is_independent_of_process_default(self, monkeypatch):
+        seen = []
+
+        def _run(cmd, timeout, stdin_text=None):
+            seen.append(cmd)
+            if len(seen) <= 3:
+                return subprocess.CompletedProcess(cmd, 1, "", "stream disconnected")
+            return subprocess.CompletedProcess(cmd, 0, "ok", "")
+
+        monkeypatch.setattr(cc, "_run", _run)
+        monkeypatch.setattr(cc, "RETRIES", 0)
+        monkeypatch.setattr(cc.time, "sleep", lambda seconds: None)
+        assert cc.codex_json("q", retries=3, cost_log=False) == "ok"
+        assert len(seen) == 4
+
+    def test_caller_cooldown_does_not_set_the_process_latch(self, monkeypatch, ledger):
+        monkeypatch.setattr(cc, "_DISABLED_UNTIL", 0.0)
+        monkeypatch.setattr(cc, "is_available", lambda: True)
+        seen = []
+
+        def _spawn(cmd, timeout, stdin_text=None):
+            seen.append(cmd)
+            return subprocess.CompletedProcess(cmd, 1, "", "too many requests")
+
+        monkeypatch.setattr(cc, "_spawn", _spawn)
+        for _ in range(2):
+            with pytest.raises(cc.CodexCLIError, match="too many requests"):
+                cc.codex_json("q", retries=0, quota_cooldown=False, project="demo")
+        assert len(seen) == 2
+        assert len(ledger.query()) == 2
+        assert not cc.temporarily_disabled()
+
+    def test_caller_cooldown_bypasses_an_existing_process_latch(self, monkeypatch):
+        monkeypatch.setattr(cc, "_DISABLED_UNTIL", time.time() + 3600)
+        monkeypatch.setattr(cc, "is_available", lambda: True)
+        monkeypatch.setattr(cc, "_spawn", lambda cmd, timeout, stdin_text=None:
+                            subprocess.CompletedProcess(cmd, 0, "ok", ""))
+        assert cc.codex_json("q", retries=0, quota_cooldown=False, cost_log=False) == "ok"
+        assert cc.temporarily_disabled()
+
+    def test_negative_retry_count_fails_before_dispatch(self, captured_cmd):
+        with pytest.raises(ValueError, match="non-negative"):
+            cc.codex_json("q", retries=-1, cost_log=False)
+        assert captured_cmd == []
