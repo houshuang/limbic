@@ -78,6 +78,21 @@ PROMPT_ARGV_LIMIT = int(os.environ.get("LIMBIC_CODEX_PROMPT_ARGV_LIMIT", str(64 
 # `codex exec`'s positional prompt, spelled so it reads stdin instead.
 STDIN_PROMPT_ARG = "-"
 
+# Verified against codex-cli 0.159.2's `features list`. Structured calls must
+# not expand their context through tools or inherit project instructions.
+_STATELESS_DISABLED_FEATURES = (
+    "shell_tool", "unified_exec", "apps", "multi_agent", "multi_agent_v2",
+    "code_mode", "code_mode_host", "code_mode_only", "js_repl",
+    "browser_use", "computer_use", "sleep_tool", "image_generation",
+    "plugins", "remote_plugin", "skill_search", "goals",
+)
+_TOOL_ITEM_TYPES = frozenset({
+    "command_execution", "mcp_tool_call", "web_search", "file_change",
+    "collab_agent_tool_call", "image_generation", "custom_tool_call",
+    "function_call", "tool_call", "computer_call", "browser_call",
+    "todo_list", "plan", "code_mode", "js_repl",
+})
+
 # Keys never passed through to the child. CLAUDECODE is stripped so a nested call
 # from a Claude Code session doesn't inherit in-session state. (We deliberately
 # leave OpenAI auth env alone so Codex uses whatever its own `codex auth`
@@ -201,6 +216,36 @@ def _iter_events(stdout: str):
             yield event
 
 
+def _event_diagnostics(stdout: str, stderr: str = "") -> dict:
+    """Bounded observability and known-tool detection for a structured call.
+
+    Count item IDs once across started/updated/completed events. Unknown legacy
+    event shapes remain compatible; absence of known events is not proof of an
+    older CLI's behavior.
+    """
+    started = completed = 0
+    tools: set[tuple[str, str]] = set()
+    for index, event in enumerate(_iter_events(stdout)):
+        kind = event.get("type")
+        started += kind == "turn.started"
+        completed += kind == "turn.completed"
+        item = event.get("item")
+        if (isinstance(item, dict) and isinstance(item.get("type"), str)
+                and item["type"] in _TOOL_ITEM_TYPES):
+            tools.add((item["type"], str(item.get("id", index))))
+        msg = event.get("msg")
+        if isinstance(msg, dict):
+            typ = msg.get("type", "")
+            if isinstance(typ, str) and typ in {"exec_command_begin", "exec_command_end", "mcp_tool_call_begin",
+                       "mcp_tool_call_end", "web_search_begin", "web_search_end"}:
+                tools.add((typ.removesuffix("_begin").removesuffix("_end"),
+                           str(msg.get("call_id", index))))
+    return {"turns": max(started, completed, parse_usage(stdout).turns),
+            "tool_item_count": len(tools),
+            "tool_item_types": sorted({kind for kind, _ in tools}),
+            "stdout_tail": stdout[-4000:], "stderr_tail": stderr[-4000:]}
+
+
 def parse_usage(stdout: str) -> CodexUsage:
     """Token usage from the JSONL that `codex exec --json` writes to stdout.
 
@@ -290,6 +335,7 @@ class _LogContext:
     # Filled by `_log_usage` for the latest attempt, so a caller can surface them.
     usage: "CodexUsage | None" = None
     call_id: str | None = None
+    diagnostics: dict = field(default_factory=dict)
 
 
 _PROJECT_CACHE: dict[str, str] = {}
@@ -343,11 +389,13 @@ def _log_usage(ctx: _LogContext | None, usage: CodexUsage, *,
             notional = None
 
         metadata = dict(ctx.metadata)
+        metadata.update({key: value for key, value in ctx.diagnostics.items()
+                         if key not in {"stdout_tail", "stderr_tail"}})
         metadata.update({
             "transport": "codex_cli",
             "billing": "chatgpt_subscription",
             "duration_ms": duration_ms,
-            "turns": usage.turns,
+            "turns": max(usage.turns, ctx.diagnostics.get("turns", 0)),
         })
         if usage.thread_id:
             metadata["thread_id"] = usage.thread_id
@@ -382,7 +430,7 @@ def _log_usage(ctx: _LogContext | None, usage: CodexUsage, *,
         log.warning("codex usage ledger write failed (%s): %s", ctx.purpose, failure)
 
 
-def _codex_env() -> dict:
+def _codex_env(*, subscription_only: bool = False) -> dict:
     """The child's environment, read live rather than snapshotted at import.
 
     A snapshot made this wrapper ignore any env change a caller made afterwards —
@@ -391,7 +439,10 @@ def _codex_env() -> dict:
     os.environ juggling (or `limbic.cerebellum.sandbox.sanitized_environment`)
     and have it actually reach the subprocess.
     """
-    return {k: v for k, v in os.environ.items() if k not in _STRIPPED_ENV_KEYS}
+    stripped = _STRIPPED_ENV_KEYS
+    if subscription_only:
+        stripped = stripped | {"OPENAI_API_KEY", "CODEX_API_KEY"}
+    return {k: v for k, v in os.environ.items() if k not in stripped}
 
 
 def _allow_null(node: Any) -> Any:
@@ -569,29 +620,32 @@ def _prompt_arg(cmd: list[str], prompt: str) -> str | None:
 
 def _run(cmd: list[str], timeout: int,
          stdin_text: str | None = None, *,
-         quota_cooldown: bool = True) -> subprocess.CompletedProcess:
+         quota_cooldown: bool = True,
+         subscription_only: bool = False) -> subprocess.CompletedProcess:
     """Run `codex exec` with bounded output and a process-group kill on timeout."""
     if not is_available():
         raise CodexCLIError("codex CLI not available — install from https://github.com/openai/codex and run `codex auth`")
     if quota_cooldown and temporarily_disabled():
         raise CodexCLIError(f"codex CLI temporarily disabled (quota): {_DISABLED_REASON}")
-    proc = _spawn(cmd, timeout, stdin_text)
+    spawn_options = {"subscription_only": True} if subscription_only else {}
+    proc = _spawn(cmd, timeout, stdin_text, **spawn_options)
     if proc.returncode != 0 and "--json" in cmd and _rejects_json_flag(proc):
         global _JSON_EVENTS_SUPPORTED
         _JSON_EVENTS_SUPPORTED = False
         log.warning("codex CLI does not support --json; retrying without it. "
                     "Token usage will not be logged for this process.")
-        proc = _spawn([a for a in cmd if a != "--json"], timeout, stdin_text)
+        proc = _spawn([a for a in cmd if a != "--json"], timeout, stdin_text, **spawn_options)
     return proc
 
 
 def _spawn(cmd: list[str], timeout: int,
-           stdin_text: str | None = None) -> subprocess.CompletedProcess:
+           stdin_text: str | None = None, *,
+           subscription_only: bool = False) -> subprocess.CompletedProcess:
     try:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             errors="replace",  # one undecodable byte must not kill a drain thread
-            env=_codex_env(),
+            env=_codex_env(subscription_only=subscription_only),
             # DEVNULL unless we're feeding the prompt in: `codex exec` blocks
             # waiting on stdin otherwise.
             stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
@@ -731,7 +785,8 @@ def _is_transient(err: CodexCLIError) -> bool:
 def _exec(cmd: list[str], timeout: int, output_path: str | None,
           schema: dict | None, ctx: _LogContext | None = None,
           stdin_text: str | None = None, *, retries: int | None = None,
-          quota_cooldown: bool = True) -> Any:
+          quota_cooldown: bool = True, stateless: bool = False,
+          subscription_only: bool = False) -> Any:
     """Run + parse with automatic retry on transient failures (a flaky `codex exec`
     non-zero exit or garbled output). Quota errors and timeouts do NOT retry: quota
     needs its cooldown, and a timeout retry would double the stage's worst case.
@@ -745,12 +800,25 @@ def _exec(cmd: list[str], timeout: int, output_path: str | None,
     for attempt in range(retry_count + 1):
         started = time.monotonic()
         try:
-            if quota_cooldown:
-                proc = _run(cmd, timeout, stdin_text)
-            else:
-                proc = _run(cmd, timeout, stdin_text, quota_cooldown=False)
+            run_options = {}
+            if not quota_cooldown:
+                run_options["quota_cooldown"] = False
+            if subscription_only:
+                run_options["subscription_only"] = True
+            proc = _run(cmd, timeout, stdin_text, **run_options)
+            diagnostics = _event_diagnostics(proc.stdout or "", proc.stderr or "")
+            if ctx is not None:
+                ctx.diagnostics = diagnostics
+            if stateless and (diagnostics["tool_item_count"] or diagnostics["turns"] > 1):
+                raise CodexCLIError(
+                    f"codex stateless call violated: {diagnostics['turns']} turns, "
+                    f"{diagnostics['tool_item_count']} tool items "
+                    f"({', '.join(diagnostics['tool_item_types'])})",
+                    stdout=proc.stdout or "", stderr=proc.stderr or "")
             result = _finish(proc, output_path, schema, quota_cooldown=quota_cooldown)
         except CodexCLIError as e:
+            if ctx is not None:
+                ctx.diagnostics = _event_diagnostics(e.stdout, e.stderr)
             _log_usage(ctx, parse_usage(getattr(e, "stdout", "")),
                        duration_ms=int((time.monotonic() - started) * 1000),
                        error=str(e))
@@ -780,14 +848,19 @@ def codex_json(
     meta_out: dict | None = None,
     retries: int | None = None,
     quota_cooldown: bool = True,
+    subscription_only: bool = False,
 ) -> Any:
     """Locked-down, single-shot structured generation. Returns parsed JSON (if
-    ``schema`` given) or text. No web, no file writes — just classify/transform.
+    ``schema`` given) or text. Runs in a fresh empty directory, with tools and
+    project instructions disabled. Known tool-use or extra-turn events fail
+    closed with the raw event stream on ``CodexCLIError.stdout``/``stderr``.
 
     ``meta_out``, when given, receives ``input_tokens``, ``output_tokens``,
     ``cached_tokens`` and the ledger row's ``call_id`` (None when not logged),
     on success or failure. These describe the latest attempt, which is what the
     ``codex`` transport of ``calls.cached_call`` needs.
+    It also receives ``turns``, ``tool_item_count``, ``tool_item_types`` and
+    bounded ``stdout_tail``/``stderr_tail`` diagnostics for that attempt.
 
     ``images`` attaches local image files with ``codex exec -i``. Callers own
     the files and their lifetime; a path in the prompt alone does not send pixels.
@@ -795,6 +868,10 @@ def codex_json(
     ``retries=None`` keeps the process default; ``retries=0`` delegates retry
     ownership to the caller. ``quota_cooldown=False`` skips both the process-local
     quota latch and its update, for callers managing their own backoff policy.
+
+    ``subscription_only=True`` strips ``OPENAI_API_KEY`` and ``CODEX_API_KEY``
+    from this child's environment. The parent environment remains unchanged;
+    the default preserves existing CLI authentication behavior.
 
     ``project``/``purpose``/``packet_id`` attribute the usage row this writes;
     ``project`` falls back to ``$LIMBIC_CODEX_PROJECT`` and then the enclosing
@@ -806,14 +883,20 @@ def codex_json(
                       project=project, purpose=purpose, packet_id=packet_id,
                       enabled=cost_log)
     schema_path = output_path = None
+    workspace = tempfile.TemporaryDirectory(prefix="limbic-codex-json-")
     try:
         with tempfile.NamedTemporaryFile("w", suffix=".out", delete=False) as of:
             output_path = of.name
         cmd = ["codex", "exec", "--model", resolved_model,
                "--sandbox", sandbox, "--skip-git-repo-check", "--ephemeral",
                "--ignore-user-config", "--color", "never",
+               "-C", workspace.name,
                "--output-last-message", output_path,
                "-c", f'model_reasoning_effort="{reasoning or DEFAULT_REASONING}"']
+        for feature in _STATELESS_DISABLED_FEATURES:
+            cmd += ["-c", f"features.{feature}=false"]
+        cmd += ["-c", 'web_search="disabled"', "-c", "tools.view_image=false",
+                "-c", "project_doc_max_bytes=0", "-c", "features.skip_host_skill_discovery=true"]
         if cost_log and cost_log_enabled() and _JSON_EVENTS_SUPPORTED:
             cmd.append("--json")
         if schema is not None:
@@ -822,25 +905,28 @@ def codex_json(
                 schema_path = sf.name
             cmd += ["--output-schema", schema_path]
         for image in (images or []):
-            path = Path(image)
+            path = Path(image).resolve()
             if not path.is_file():
                 raise CodexCLIError(f"codex image attachment is not a file: {image}")
             cmd += ["-i", str(path)]
         stdin_text = _prompt_arg(cmd, f"{system}\n\n{prompt}" if system else prompt)
         ctx.metadata["prompt_transport"] = "stdin" if stdin_text is not None else "argv"
         return _exec(cmd, timeout, output_path, schema, ctx, stdin_text,
-                     retries=retries, quota_cooldown=quota_cooldown)
+                     retries=retries, quota_cooldown=quota_cooldown, stateless=True,
+                     subscription_only=subscription_only)
     finally:
         if meta_out is not None:
             usage = ctx.usage or CodexUsage()
             meta_out.update(input_tokens=usage.input_tokens, output_tokens=usage.output_tokens,
                             cached_tokens=usage.cached_input_tokens, call_id=ctx.call_id)
+            meta_out.update(ctx.diagnostics or _event_diagnostics(""))
         for p in (schema_path, output_path):
             if p:
                 try:
                     os.unlink(p)
                 except OSError:
                     pass
+        workspace.cleanup()
 
 
 def codex_research(

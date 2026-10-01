@@ -100,6 +100,7 @@ class TestJsonImages:
         commands = []
         for cmd in captured_cmd:
             cmd[cmd.index("--output-last-message") + 1] = "OUTPUT_PATH"
+            cmd[cmd.index("-C") + 1] = "EMPTY_WORKSPACE"
             commands.append(cmd)
         assert commands[0] == commands[1]
         assert "-i" not in commands[1]
@@ -117,6 +118,130 @@ class TestJsonImages:
         cc.codex_json(prompt, images=[str(image)])
         assert captured_cmd[0][-3:] == ["-i", str(image), "-"]
         assert captured_cmd.stdin[0] == prompt
+
+
+class TestStatelessJson:
+    def test_disables_tools_and_project_instructions(self, captured_cmd):
+        cc.codex_json("q")
+        cmd = captured_cmd[0]
+        configs = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "-c"]
+        for feature in ("shell_tool", "unified_exec", "apps", "multi_agent",
+                        "code_mode", "code_mode_host", "js_repl"):
+            assert f"features.{feature}=false" in configs
+        assert 'web_search="disabled"' in configs
+        assert "tools.view_image=false" in configs
+        assert "project_doc_max_bytes=0" in configs
+        assert "features.skip_host_skill_discovery=true" in configs
+
+    def test_empty_workspace_is_private_fresh_and_cleaned(self, monkeypatch):
+        seen = []
+
+        def _run(cmd, timeout, stdin_text=None):
+            workspace = Path(cmd[cmd.index("-C") + 1])
+            assert workspace.is_dir()
+            assert list(workspace.iterdir()) == []
+            assert workspace != Path.cwd()
+            seen.append(workspace)
+            return subprocess.CompletedProcess(cmd, 0, REAL_EVENTS, "")
+
+        monkeypatch.setattr(cc, "_run", _run)
+        assert cc.codex_json("q", cost_log=False) == REAL_EVENTS
+        cc.codex_json("q", cost_log=False)
+        assert seen[0] != seen[1]
+        assert all(not workspace.exists() for workspace in seen)
+
+    def test_relative_image_is_absolute_in_real_child_argv(self, fake_codex, tmp_path, monkeypatch):
+        image = tmp_path / "page.png"
+        image.write_bytes(b"test pixels")
+        monkeypatch.chdir(tmp_path)
+        fake_codex(f"""
+            import pathlib, sys
+            args = sys.argv
+            image = pathlib.Path(args[args.index('-i') + 1])
+            root = pathlib.Path(args[args.index('-C') + 1])
+            assert image.is_absolute() and image.is_file()
+            assert list(root.iterdir()) == []
+            pathlib.Path(args[args.index('--output-last-message') + 1]).write_text('ok')
+            print({REAL_EVENTS!r})
+            print('diagnostic stderr', file=sys.stderr)
+        """)
+        meta = {}
+        assert cc.codex_json("read page", images=["page.png"], meta_out=meta) == "ok"
+        assert meta["turns"] == 1 and meta["tool_item_count"] == 0
+        assert meta["tool_item_types"] == []
+        assert "turn.completed" in meta["stdout_tail"]
+        assert "diagnostic stderr" in meta["stderr_tail"]
+
+    @pytest.mark.parametrize("violation", ["tool", "turn"])
+    def test_known_stateless_violations_fail_without_retry(self, monkeypatch, ledger, violation):
+        events = REAL_EVENTS
+        if violation == "tool":
+            item = {"id": "tool_1", "type": "command_execution", "command": "ls"}
+            events += "\n" + json.dumps({"type": "item.started", "item": item})
+            events += "\n" + json.dumps({"type": "item.completed", "item": item})
+        else:
+            events += '\n{"type":"turn.started"}'
+        seen = []
+
+        def _run(cmd, timeout, stdin_text=None):
+            seen.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, events, "debug stderr")
+
+        monkeypatch.setattr(cc, "_run", _run)
+        meta = {}
+        with pytest.raises(cc.CodexCLIError, match="stateless call violated") as caught:
+            cc.codex_json("q", retries=3, meta_out=meta, project="demo")
+        assert len(seen) == 1
+        assert caught.value.stdout == events and caught.value.stderr == "debug stderr"
+        assert meta["turns"] == (2 if violation == "turn" else 1)
+        assert meta["tool_item_count"] == (1 if violation == "tool" else 0)
+        assert meta["input_tokens"] == 14169
+        assert ledger.query()[0]["outcome"] == "error"
+        assert not Path(seen[0][seen[0].index("-C") + 1]).exists()
+
+    def test_research_keeps_agentic_tool_events(self, monkeypatch):
+        events = REAL_EVENTS + '\n{"type":"item.completed","item":{"id":"c1","type":"command_execution"}}'
+        _stub_run(monkeypatch, events)
+        assert cc.codex_research("mission") == "ok"
+
+    def test_diagnostics_are_bounded_and_legacy_exec_events_count_once(self):
+        events = '\n'.join(json.dumps({"msg": {"type": kind, "call_id": "c1"}})
+                           for kind in ("exec_command_begin", "exec_command_end"))
+        diagnostics = cc._event_diagnostics("x" * 5000 + "\n" + events, "y" * 5000)
+        assert diagnostics["tool_item_count"] == 1
+        assert len(diagnostics["stdout_tail"]) == len(diagnostics["stderr_tail"]) == 4000
+
+
+class TestSubscriptionOnlyChild:
+    @pytest.mark.parametrize("subscription_only", [False, True])
+    def test_real_child_auth_environment_is_scoped(self, fake_codex, monkeypatch, subscription_only):
+        monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
+        monkeypatch.setenv("CODEX_API_KEY", "test-codex-key")
+        fake_codex(f"""
+            import os, pathlib, sys
+            expected_present = {not subscription_only!r}
+            assert ('OPENAI_API_KEY' in os.environ) == expected_present
+            assert ('CODEX_API_KEY' in os.environ) == expected_present
+            pathlib.Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text('ok')
+            print({REAL_EVENTS!r})
+        """)
+        assert cc.codex_json("q", subscription_only=subscription_only) == "ok"
+        assert os.environ["OPENAI_API_KEY"] == "test-openai-key"
+        assert os.environ["CODEX_API_KEY"] == "test-codex-key"
+
+    def test_parser_compatibility_retry_keeps_child_auth_policy(self, monkeypatch):
+        seen = []
+
+        def _spawn(cmd, timeout, stdin_text=None, *, subscription_only=False):
+            seen.append(subscription_only)
+            if "--json" in cmd:
+                return subprocess.CompletedProcess(cmd, 2, "", "error: unexpected argument '--json' found")
+            return subprocess.CompletedProcess(cmd, 0, "ok", "")
+
+        monkeypatch.setattr(cc, "is_available", lambda: True)
+        monkeypatch.setattr(cc, "_spawn", _spawn)
+        assert cc.codex_json("q", subscription_only=True) == "ok"
+        assert seen == [True, True]
 
 
 # ---------------------------------------------------------------------------
@@ -737,8 +862,8 @@ class TestCallerRetryOwnership:
         rows = ledger.query()
         assert len(rows) == 1
         assert rows[0]["outcome"] == "error"
-        assert meta == {"input_tokens": 14169, "output_tokens": 5,
-                        "cached_tokens": 4480, "call_id": rows[0]["id"]}
+        assert {key: meta[key] for key in ("input_tokens", "output_tokens", "cached_tokens", "call_id")} == {
+            "input_tokens": 14169, "output_tokens": 5, "cached_tokens": 4480, "call_id": rows[0]["id"]}
 
     def test_explicit_retry_count_is_independent_of_process_default(self, monkeypatch):
         seen = []
