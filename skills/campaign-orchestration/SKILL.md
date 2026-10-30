@@ -223,8 +223,7 @@ twice. Every report pasted into the coordinator stays in its context for the res
   file it refers to. A worker waits on a file or a lock, never on a message ("pause until told" stalls).
 - **Every chat's lanes are visible to lane-audit**, so a peer chat registers its lane folders in the
   project's `.coordinator.json` campaigns list (or its own campaign dir) instead of keeping them private.
-- **heavy.sh is one slot for heavy jobs only.** Small tests and network-bound drivers run outside it; a
-  research driver wrapped in heavy.sh would have held the slot for hours (skard 29 Oct, ten jobs queued).
+- **heavy.sh is exclusive only for the release export and cycle** (skard 30 Oct: one slot for everything queued OCR calls an hour behind gates on a 14-core Mac). Other jobs share slots and wait only on the export, memory or disk.
 
 ## Holds, idle notices and handovers (review of 23–29 Oct, skard-state/orchestration-review-20261029)
 
