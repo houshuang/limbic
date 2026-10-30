@@ -148,7 +148,21 @@ watcher processes were running the next morning.
   starts `claude -p` in the repo on the newest handover, at most one at a time, 10 minutes apart, 16 a day; if two
   successive runs leave the same events pending it stops and writes COORDINATOR-STUCK.md.
 - An interactive coordinator arms `lane-keeper.py watch` under a Monitor (re-arm on expiry) instead of lane-audit --loop.
-  A retiring coordinator writes `<state>/<id>-HANDOVER-<YYYYMMDD-HHMM>.md` and leaves the keeper armed.
+- **Handing over: write the handover, then `lane-keeper.py retire [--config F] [--session ID]`.** A retiring coordinator
+  writes `<state>/<id>-HANDOVER-<YYYYMMDD-HHMM>.md` and runs retire (ID defaults to `$CLAUDE_CODE_SESSION_ID`). Without it
+  the successor waited ~20 minutes, because the retiring transcript kept it «live». Retire writes `keeper/retired` and
+  removes `~/.agents/coordinators/<ID>.json`; from then on a watch heartbeat, coordinator.pid or registry entry counts
+  only if newer than the marker (a transcript gets 60 s for the session's last words), running watches exit, and the next
+  tick starts the successor without waiting out `min_gap_minutes`. A coordinator started after the retire counts as usual.
+- **Headless coordinator: log and takeover.** The keeper runs `claude -p … --session-id <uuid> --output-format stream-json
+  --verbose`, so `keeper/coordinator-<stamp>.log` fills while it works (`tail -f`). The session id is in
+  `keeper/coordinator.session` and in keeper.log (`COORDINATOR-SESSION <id> … claude --resume <id>`). Its prompt says to
+  integrate in a worktree, run `git status` before touching the main checkout, never reset/checkout --/restore/stash/clean
+  a checkout it did not create (one ran `git reset --hard` in skard's main checkout on 30 Oct), and to end with retire.
+  To take over interactively: `kill -9 $(cat keeper/coordinator.pid)` (SIGKILL to the claude process only, so the
+  detached jobs it started survive), then `cd <repo> && claude --resume <id>`, write
+  `~/.agents/coordinators/<new-session-id>.json` with `{"repo": …, "transcript": <that session's .jsonl>}`, and run
+  `lane-keeper.py watch` under a Monitor.
 - `codex exec resume <unknown id>` silently starts a new session with no brief (found testing the keeper): resume only
   ids whose session file exists under ~/.codex/sessions.
 - **alif (Linux) runs its own keeper**: systemd `skard-lane-keeper.timer` (every 2 min, root, `CODEX_HOME=/opt/alif/.codex`)

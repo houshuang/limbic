@@ -17,10 +17,14 @@ events in <state>/keeper/EVENTS. A lane's events are cleared by `ack <lane-dir> 
 
 When events are pending and no coordinator is live, the keeper starts one: `claude -p` in the repo on the newest
 handover. Live means: a `lane-keeper.py watch` heartbeat (an interactive coordinator's Monitor), a keeper-started
-coordinator still running, or a registered coordinator transcript written in the last 20 minutes.
+coordinator still running, or a registered coordinator transcript written in the last 20 minutes. `retire` (run by a
+coordinator after it writes its handover) writes keeper/retired: everything older than it stops counting as live, so the
+next tick starts a successor, without waiting out min_gap_minutes. The headless run's log is
+keeper/coordinator-<stamp>.log (stream-json); its session id is in keeper/coordinator.session and keeper.log.
 
     lane-keeper.py tick   [--config F] [--dry-run]
     lane-keeper.py watch  [--config F]          # Monitor command for an interactive coordinator
+    lane-keeper.py retire [--config F] [--session ID]   # ID defaults to $CLAUDE_CODE_SESSION_ID
     lane-keeper.py ack    <lane-dir | host:lane-dir> [note…]
     lane-keeper.py status [--config F]
 
@@ -34,7 +38,7 @@ Optional config keys:
       prefix for every command the keeper starts, so lanes leave a systemd timer's cgroup instead of dying with it
 Linux: systemd timer instead of launchd; CODEX_HOME is honoured; caffeinate is used only where it exists.
 """
-import fcntl, json, os, re, shlex, shutil, signal, subprocess, sys, time
+import fcntl, json, os, re, shlex, shutil, signal, subprocess, sys, time, uuid
 from pathlib import Path
 
 DEFAULT_CONFIG = Path.home() / 'src/skard/.coordinator.json'
@@ -44,6 +48,7 @@ CLOSING = re.compile(r'^(DONE\.md|READY-[0-9][0-9a-z]*\.md|DRIVER-FINISHED\.json
 TRANSIENT = re.compile(r'at capacity|429 Too Many|retry limit')
 FRESH_LIMIT, CONTINUE_LIMIT, QUIET = 25, 2, 3600
 COORD_LIVE = 1200
+RETIRE_GRACE = 60   # a retiring session still writes its last message after `retire`
 _FNM = Path.home() / 'Library/Application Support/fnm/node-versions/v24.11.1/installation/bin'
 PATH = ':'.join(dict.fromkeys([*([str(_FNM)] if _FNM.is_dir() else []), str(Path.home() / '.local/bin'), '/opt/homebrew/bin',
                                *os.environ.get('PATH', '').split(':'), '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin']))
@@ -117,6 +122,7 @@ def newest_in(d):
 
 class Keeper:
     def __init__(self, cfg_path, dry=False):
+        self.cfg_path = Path(cfg_path).resolve()
         self.cfg = json.loads(Path(cfg_path).read_text())
         self.repo = Path(self.cfg['repo'])
         self.state_dir = Path(self.cfg.get('state', self.repo.parent / f'{self.repo.name}-state'))
@@ -406,18 +412,39 @@ class Keeper:
 
     # coordinator
     def coordinator_live(self):
-        if now() - mtime(self.k / 'watch.heartbeat') < 180:
+        """Signals from before the last `retire` belong to the coordinator that retired and do not count. A watch exits on
+        retire, so its heartbeat stops; a retiring session's transcript gets RETIRE_GRACE for its last words."""
+        retired = mtime(self.k / 'retired')
+        beat = mtime(self.k / 'watch.heartbeat')
+        if now() - beat < 180 and beat > retired:
             return 'watch heartbeat'
-        if alive(self.k / 'coordinator.pid'):
+        if alive(self.k / 'coordinator.pid') and mtime(self.k / 'coordinator.pid') > retired:
             return 'keeper-started coordinator'
         for f in REG.glob('*.json') if REG.exists() else []:
             try:
                 r = json.loads(f.read_text())
             except ValueError:
                 continue
-            if r.get('repo') == str(self.repo) and r.get('transcript') and now() - mtime(r['transcript']) < COORD_LIVE:
+            if r.get('repo') != str(self.repo) or not r.get('transcript'):
+                continue
+            t = mtime(r['transcript'])
+            if now() - t < COORD_LIVE and (mtime(f) > retired or t > retired + RETIRE_GRACE):
                 return f'session {f.stem[:8]} active'
         return None
+
+    def retire(self, sid=None):
+        """The calling coordinator hands over: the next tick treats it as gone and may start a successor at once."""
+        sid = sid or os.environ.get('CLAUDE_CODE_SESSION_ID') or os.environ.get('CLAUDE_SESSION_ID')
+        removed = ''
+        if sid and re.fullmatch(r'[0-9A-Za-z-]+', sid):
+            f = REG / f'{sid}.json'
+            try:
+                if json.loads(f.read_text()).get('repo') == str(self.repo):
+                    f.unlink(); removed = f'; removed {f}'
+            except (OSError, ValueError):
+                pass
+        (self.k / 'retired').write_text(f'{stamp()} {sid or "-"}\n')
+        self.log(f'RETIRE coordinator {sid or "(no session id)"}{removed}')
 
     def handover(self):
         files = [p for p in self.state_dir.glob(self.cfg.get('handover_glob', '*HANDOVER*.md')) if p.is_file()]
@@ -435,7 +462,8 @@ class Keeper:
         today = time.strftime('%F')
         if S.get('day') != today:
             S['day'], S['starts'] = today, 0
-        if now() - S.get('last', 0) < c.get('min_gap_minutes', 10) * 60:
+        after_retire = mtime(self.k / 'retired') > S.get('last', 0)   # once: the start below moves 'last' past it
+        if not after_retire and now() - S.get('last', 0) < c.get('min_gap_minutes', 10) * 60:
             return
         keys = sorted(pending)
         if keys == S.get('last_keys') and S.get('same', 0) >= 2:
@@ -453,6 +481,8 @@ class Keeper:
         events = '\n'.join(f'- {e["kind"]} {e["lane"]}: {e["detail"]}' for e in pending.values())
         script = SCRIPTS / 'lane-keeper.py'
         out = self.k / f'coordinator-{time.strftime("%Y%m%d-%H%M")}.log'
+        sid = str(uuid.uuid4())
+        retire = f'python3 {script} retire --config {self.cfg_path} --session {sid}'
         prompt = f"""You are the integrator and coordinator for {self.repo}, started headless by lane-keeper at {stamp()} because \
 events are pending and no coordinator was live. Read the newest handover first: {handover}. Then the repository rules.
 
@@ -462,19 +492,30 @@ Pending events (also in {self.k / 'EVENTS'}):
 Handle each event: integrate READY checkpoints by the repository's integration rules, review DONE files (a DONE before \
 the queue is exhausted is a failure: resume or relaunch the lane), fix or relaunch failed drivers. After handling a \
 lane run `python3 {script} ack <lane-dir> "<one line: what you did>"`, or write RETIRED there with the reason.
+Git safety: integrate in a worktree you create for it. If you must use the main checkout, run `git status` there \
+first, and never run `git reset --hard`, `git checkout -- <path>`, `git restore`, `git stash` or `git clean` in a checkout \
+you did not create: other sessions keep uncommitted work in them.
 Do not watch long jobs from this session and do not arm monitors. Start long jobs detached under \
 `{SCRIPTS / 'drive-loop.sh'}` in a folder under one of the campaign dirs (use --once for a job that must not rerun on \
 failure, such as a release cycle); the keeper reports how they end and starts a coordinator then.
 Before you end, write {self.state_dir}/keeper-HANDOVER-<YYYYMMDD-HHMM>.md (under 400 words): what you did, what runs, \
-what each remaining item waits on. The next coordinator starts from it."""
+what each remaining item waits on. The next coordinator starts from it. Then run `{retire}` and end."""
         self.log(f'COORDINATOR-START ({len(pending)} events; handover {handover and handover.name}) → {out.name}')
+        self.log(f'COORDINATOR-SESSION {sid}: log {out}; take over with kill -9 <coordinator.pid>, then '
+                 f'cd {self.repo} && claude --resume {sid}')
         if self.dry:
             return
         (self.k / 'coordinator-prompt.txt').write_text(prompt)
-        p = subprocess.Popen([*CAFFEINATE, 'claude', '-p', prompt, '--permission-mode', 'bypassPermissions'],
+        (self.k / 'coordinator.session').write_text(sid + '\n')
+        p = subprocess.Popen(self.coordinator_cmd(prompt, sid),
                              cwd=self.repo, stdin=subprocess.DEVNULL, stdout=open(out, 'a'), stderr=subprocess.STDOUT,
                              start_new_session=True, env={**os.environ, 'PATH': PATH})
         (self.k / 'coordinator.pid').write_text(str(p.pid))
+
+    @staticmethod
+    def coordinator_cmd(prompt, sid):
+        return [*CAFFEINATE, 'claude', '-p', prompt, '--permission-mode', 'bypassPermissions', '--session-id', sid,
+                '--output-format', 'stream-json', '--verbose']
 
     def tick(self):
         lock = open(self.k / 'tick.lock', 'w')
@@ -522,14 +563,23 @@ def main():
         ev = K.k / 'EVENTS'
         ev.touch()
         pos = ev.stat().st_size
+        started = now()
         while True:
+            if mtime(K.k / 'retired') > started:
+                print('retired: this watch stops so the keeper can start a successor'); return
             (K.k / 'watch.heartbeat').touch()
             if ev.stat().st_size > pos:
                 with open(ev) as fh:
                     fh.seek(pos); sys.stdout.write(fh.read()); sys.stdout.flush(); pos = fh.tell()
             time.sleep(30)
+    elif mode == 'retire':
+        sid = args[args.index('--session') + 1] if '--session' in args else None
+        K.retire(sid)
     elif mode == 'status':
         print(f'keeper heartbeat {now() - mtime(K.k / "heartbeat"):.0f}s ago; coordinator live: {K.coordinator_live()}')
+        for name in ('retired', 'coordinator.session'):
+            if (K.k / name).exists():
+                print(f'{name}: {(K.k / name).read_text().strip()}')
         for e in K.st['events'].values():
             print(f'  {e["kind"]:14} {e.get("name") or Path(e["lane"]).name}: {e["detail"]}')
 
