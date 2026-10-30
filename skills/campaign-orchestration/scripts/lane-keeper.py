@@ -167,6 +167,8 @@ class Keeper:
         fh = open(out, 'a') if out else subprocess.DEVNULL
         subprocess.Popen([*self.cfg.get('detach', []), *argv], cwd=cwd, stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT,
                          start_new_session=True, env={**os.environ, 'PATH': PATH, 'REPO': str(self.repo)})
+        if self.cfg.get('detach'):
+            time.sleep(1)   # systemd-run must leave the tick's cgroup before the tick ends
 
     # lanes
     def session_id(self, d):
