@@ -6,7 +6,7 @@
 #   DRIVER-QUIET   driver running but driver.log/PROGRESS.md untouched for 20 min
 #   SESSION-ENDED  worker session gone, no driver, no DONE.md
 #   ORPHAN-BRANCH  worktree branch has commits not on main, last commit > 6 h ago, no READY/DONE
-#   UNWATCHED      live lane that no running watch.sh names
+#   UNWATCHED      live lane that no running watch.sh names, while no lane-keeper heartbeat is fresh
 # A lane is closed (skipped) only by an exact DONE.md, READY-<n>.md, DRIVER-FINISHED.json or RETIRED (one line: why),
 # and only while nothing in it runs. DONE.partial*.md and similar never close a lane.
 setopt null_glob
@@ -22,6 +22,7 @@ alive() {
 age() { local n=$(stat -f %m "$@" 2>/dev/null | sort -n | tail -1); echo $(( $(date +%s) - ${n:-0} )); }
 audit() {
   local watched=$(ps -axo command | grep '[w]atch.sh')
+  local kept=0; for k in $repo/../${repo:t}-state/keeper/heartbeat(N); do (( $(age $k) < 300 )) && kept=1; done
   for C in $dirs; do
     for d in $C/*(/); do
       local l=${d:t}
@@ -38,7 +39,7 @@ audit() {
       elif [[ -f $d/pid ]] && ! alive $d/pid; then
         if tail -20 $d/codex.log 2>/dev/null | grep -qE "429|at capacity|retry limit"; then echo "SESSION-ENDED-RESUMABLE $l (429/capacity in log tail: resume it)"; else echo "SESSION-ENDED $l"; fi; continue
       fi
-      { alive $d/pid || alive $d/driver.pid; } && [[ $watched != *" $l"* && $watched != *"$l "* ]] && echo "UNWATCHED $l"
+      (( ! kept )) && { alive $d/pid || alive $d/driver.pid; } && [[ $watched != *" $l"* && $watched != *"$l "* ]] && echo "UNWATCHED $l"
     done
   done
   git -C $repo worktree list --porcelain | awk '/^worktree /{print $2}' | while read w; do

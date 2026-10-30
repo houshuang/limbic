@@ -125,6 +125,33 @@ Read this before launching worker lanes, and add to it after every incident
   release gate. After each data merge run the data-sensitive test modules on the merged tree, and make data lanes pass
   the full test stage before DONE.
 
+## The keeper: nothing waits for a session to notice (30 Oct 2026)
+
+Measured (skard, night of 29–30 Oct): the coordinator hit its context limit at 01:47, wrote a handover «for a successor
+session», and nothing ran from 03:40 to 07:40, because nothing starts a successor. Watchers had the same flaw one level
+down: `watch-forever.sh` dropped a lane after its first event and waited for a coordinator to re-add it. Six stale
+watcher processes were running the next morning.
+
+`scripts/lane-keeper.py` replaces watch.sh / watch-forever.sh. launchd runs `tick` every two minutes
+(`~/Library/LaunchAgents/com.stian.lane-keeper.plist`); it spends no tokens and reads the repo's `.coordinator.json`
+(`state`, `handover_glob`, `coordinator` caps).
+- **Lanes continue by themselves.** A session that ends with HANDOFF.md and no live driver gets a fresh session; one that
+  ended on 429/capacity is resumed after a backoff, with no cap; one that ended with no DONE/READY/HANDOFF is resumed twice
+  with «continue or write the right file»; DRIVER-FAILED.md resumes the worker once to fix it; costguard runs every tick.
+- **Drivers survive reboots.** drive-loop.sh records `driver.cmd` and writes `DRIVER-EXIT` when it ends; a drive-loop
+  that vanished without one is restarted, unless its sleepsafe child still runs. Stop one with STOP, never kill alone.
+  `--once` is for jobs that must not rerun on failure (release cycles); a driver-only folder's exit becomes an event.
+- **Outcomes that need judgement are events** (READY-*, DONE.md, job exit, caps, an hour's silence) in
+  `<state>/keeper/EVENTS`. `lane-keeper.py ack <lane-dir> "<what you did>"` (HANDLED) or RETIRED clears them.
+- **A coordinator is started when none is live.** Live = a `lane-keeper.py watch` Monitor heartbeat, a keeper-started
+  coordinator still running, or a registered coordinator transcript written in the last 20 minutes. Otherwise the keeper
+  starts `claude -p` in the repo on the newest handover, at most one at a time, 10 minutes apart, 16 a day; if two
+  successive runs leave the same events pending it stops and writes COORDINATOR-STUCK.md.
+- An interactive coordinator arms `lane-keeper.py watch` under a Monitor (re-arm on expiry) instead of lane-audit --loop.
+  A retiring coordinator writes `<state>/<id>-HANDOVER-<YYYYMMDD-HHMM>.md` and leaves the keeper armed.
+- `codex exec resume <unknown id>` silently starts a new session with no brief (found testing the keeper): resume only
+  ids whose session file exists under ~/.codex/sessions.
+
 ## Lane lifecycle: nothing may go quiet
 
 Measured (skard, night of 28–29 Oct 2026): five lanes stopped overnight and the coordinator noticed none
