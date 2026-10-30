@@ -151,6 +151,14 @@ watcher processes were running the next morning.
   A retiring coordinator writes `<state>/<id>-HANDOVER-<YYYYMMDD-HHMM>.md` and leaves the keeper armed.
 - `codex exec resume <unknown id>` silently starts a new session with no brief (found testing the keeper): resume only
   ids whose session file exists under ~/.codex/sessions.
+- **alif (Linux) runs its own keeper**: systemd `skard-lane-keeper.timer` (every 2 min, root, `CODEX_HOME=/opt/alif/.codex`)
+  ticks `/srv/agents/skard/limbic/…/lane-keeper.py` with `/srv/agents/skard/keeper.json`: campaign
+  `/srv/agents/skard/campaign-research` (launch.sh is a symlink to scripts/launch.sh), code snapshot `/srv/agents/skard/code`,
+  `max_starts_per_day: 0` (the Mac is the only coordinator), `detach: systemd-run --scope` with `KillMode=process` (else lanes die with the tick), batched `notify` mail ≤1/30 min.
+  Linux has no file birth time, so launch.sh/resume.sh write `session-at`; drive-loop.sh is bash, sleepsafe from `$SLEEPSAFE`.
+- The Mac keeper mirrors it through `remote_events` in `.coordinator.json` (`ssh alif-ts`, byte offset in state.json):
+  events show as `alif:<lane>`; `lane-keeper.py ack alif-ts:/srv/agents/skard/campaign-research/<lane> "<note>"` writes
+  HANDLED there, and the mirrored event clears once the alif keeper has cleared it. Update alif with `git -C /srv/agents/skard/limbic pull`.
 
 ## Lane lifecycle: nothing may go quiet
 
