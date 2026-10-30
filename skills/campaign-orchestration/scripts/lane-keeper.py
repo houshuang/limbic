@@ -232,8 +232,8 @@ class Keeper:
                            key=f'{d}|QUIET|{bucket}')
             return
         close = self.closing(d)
-        if close and close.startswith('READY-') and self.handoff(d):
-            close = None   # checkpoint already reported above; the handoff says the queue goes on
+        if close and close.startswith('READY-') and self.handoff(d) and mtime(d / 'HANDOFF.md') > mtime(d / close):
+            close = None   # checkpoint already reported above; a handoff written after it says the queue goes on
         if close:
             if mtime(d / close) > self.acked(d):
                 self.event(d, close.split('.')[0].split('-')[0], f'{close} written {stamp(mtime(d / close))}',
