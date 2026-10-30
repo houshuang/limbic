@@ -33,3 +33,4 @@ project uses:
 ```bash
 pip install git+https://github.com/houshuang/limbic.git
 ```
+- `campaign-orchestration` — multi-lane data campaigns with long-running worker sessions: event-driven watcher, resume, stop rules, rate limits, incident log.

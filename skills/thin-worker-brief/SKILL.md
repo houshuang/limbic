@@ -89,3 +89,6 @@ Require this shape, and say so in the brief:
 Reject a handoff that reports a conclusion with no command behind it. A worker
 that says "verified" without evidence has told you nothing, and the cost of
 asking again is another entrance fee.
+
+For long-running worker *sessions* over a queue (launch, watch, resume, stop rules, rate limits), see the
+`campaign-orchestration` skill.

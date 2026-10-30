@@ -221,6 +221,10 @@ class Keeper:
         L = self.lane(d)
         s_alive, d_alive = alive(d / 'pid'), alive(d / 'driver.pid')
         quiet = now() - newest_in(d)
+        # A READY-<n> is a checkpoint for the integrator, not the end of the lane: report it even while work goes on.
+        for f in os.listdir(d):
+            if f.startswith('READY-') and CLOSING.match(f) and mtime(d / f) > self.acked(d):
+                self.event(d, 'READY', f'{f} written {stamp(mtime(d / f))}', key=f'{d}|{f}|{int(mtime(d / f))}')
         if s_alive or d_alive:
             if quiet > QUIET:
                 bucket = int(newest_in(d))
@@ -228,6 +232,8 @@ class Keeper:
                            key=f'{d}|QUIET|{bucket}')
             return
         close = self.closing(d)
+        if close and close.startswith('READY-') and self.handoff(d):
+            close = None   # checkpoint already reported above; the handoff says the queue goes on
         if close:
             if mtime(d / close) > self.acked(d):
                 self.event(d, close.split('.')[0].split('-')[0], f'{close} written {stamp(mtime(d / close))}',

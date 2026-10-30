@@ -96,3 +96,48 @@ truer, and every worker pays to read it.
 State what was verified and with which command, what was skipped, and what is
 not known. If a number changed, print it before and after. A residual report —
 what was held and why — is part of the result, not an optional extra.
+## Finishing a long project
+
+Long autonomous projects do not end by themselves; the coordinator keeps finding
+work. These rules make stopping a decision rather than an accident.
+
+- **A metric must prove it tracks the outcome, or it is dropped.** Before a number
+  becomes a gate, show that moving it changes what a user gets. Internal purity
+  counts (strict completion, receipts, pins) are diagnostics, never release gates.
+  The release gate is what the user sees: the deployed site, the acceptance pass.
+- **Stop after two rounds with nothing new.** A lane that makes no measurable
+  progress in two rounds stops and reports the cause by category. Resistant
+  failures usually mean the task or the grader is wrong, not the worker.
+- **Name what was not covered.** "Unverified" is a label, not a failure. A partial
+  plane ships labelled partial; a skipped check is listed as skipped.
+- **Consult the strongest model at three moments only:** before committing to a
+  plan, on a repeated failure, before declaring done. Write this into the project
+  guide; left to discretion it fires too late.
+- **Refuses beats describes.** A rule written in three documents is either a guard
+  that refuses a bad state, or noise every worker pays to read. Do not add a
+  receipt, hash pin or protocol unless a check actually uses it to refuse.
+- **Handoffs under 400 words.** What is done, what is in flight, pinned revision,
+  next action. The coordinator sends longer ones back.
+- **Ship, then iterate.** A verified artifact that is not deployed is a liability:
+  it goes stale and the next change has to re-verify everything. Deploy at every
+  verified checkpoint when the owner has authorised deployment.
+- **Process state vs done state.** Decide early which artefacts exist only to
+  support the process (caches, session evidence, lane worktrees, intermediate
+  campaign outputs) and which the finished project keeps (sources, the graph,
+  code, the activated export). Delete the former at the release that no longer
+  needs them. A finished project should fit on the disk indefinitely.
+- **Workers' excuses, and coordinators' ceremonies.** Keep a short table of the
+  phrases that precede skipped or invented work in this project ("out of scope",
+  "follow-up", "needs a receipt first", "the ruling requires") with the
+  rebuttal and the evidence that would actually settle it.
+- **The check is the whole thing.** Every loop step needs a check that can fail
+  programmatically; "the model is confident" is not a check. If a step can be
+  described without judge, decide or assess, it is code, not a model call.
+- **Return the unit, not the batch.** A correction goes back as one item with
+  verdict, reason, evidence and scope. Cap at three attempts; after that the plan
+  is at fault, not the worker.
+- **Forbid the early stops.** Unattended workers end turns by announcing the next
+  step, offering to continue, listing non-blocking decisions or reporting a
+  milestone. Name these in the brief as not-done.
+- **Pin rules, not facts, across compaction.** A short rules file re-read after
+  every reset; the spec is never agent-edited.

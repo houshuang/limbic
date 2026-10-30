@@ -47,6 +47,11 @@ read `docs/packet.md` and `docs/resolve.md` before writing a runner, and
   9.7% *more*), derivable body fields (46% of one packet was an identical
   `evidence_fields` list) and packets past ~25 items, where models start
   dropping items silently.
+- **A second read must be a different request.** Behind a request-hash cache an
+  identical repeat returns the first answer, so "two-read agreement" silently
+  becomes one read. Perturb read 2 (order, rendering) and assert the two request
+  hashes differ for every item: a contents tagger whose read 2 only reordered
+  books sent identical requests for every one-book batch (skard, 26 Oct 2026).
 - **Freeze the prefix with the packet.** `input_sha256` covers the prefix hash;
   editing a shared mutable prefix file later silently invalidated a batch that
   had already been paid for.
