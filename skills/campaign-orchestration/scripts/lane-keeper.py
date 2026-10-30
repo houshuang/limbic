@@ -30,6 +30,8 @@ Optional config keys:
       kept as host:<lane-dir>; they clear when the remote keeper clears them (ack host:<lane-dir> writes HANDLED there)
   "notify": {"cmd": "/srv/agents/bin/notify", "min_gap_minutes": 30}
       new events are mailed in one batch at most once per gap
+  "detach": ["systemd-run", "--scope", "--quiet", "--collect"]
+      prefix for every command the keeper starts, so lanes leave a systemd timer's cgroup instead of dying with it
 Linux: systemd timer instead of launchd; CODEX_HOME is honoured; caffeinate is used only where it exists.
 """
 import fcntl, json, os, re, shlex, shutil, signal, subprocess, sys, time
@@ -163,7 +165,7 @@ class Keeper:
         if self.dry:
             return
         fh = open(out, 'a') if out else subprocess.DEVNULL
-        subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT,
+        subprocess.Popen([*self.cfg.get('detach', []), *argv], cwd=cwd, stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT,
                          start_new_session=True, env={**os.environ, 'PATH': PATH, 'REPO': str(self.repo)})
 
     # lanes
