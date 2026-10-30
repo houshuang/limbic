@@ -21,10 +21,18 @@ coordinator still running, or a registered coordinator transcript written in the
 
     lane-keeper.py tick   [--config F] [--dry-run]
     lane-keeper.py watch  [--config F]          # Monitor command for an interactive coordinator
-    lane-keeper.py ack    <lane-dir> [note…]
+    lane-keeper.py ack    <lane-dir | host:lane-dir> [note…]
     lane-keeper.py status [--config F]
+
+Optional config keys:
+  "remote_events": [{"ssh": "alif-ts", "path": "/srv/agents/skard/keeper/EVENTS", "prefix": "alif"}]
+      each tick reads that keeper's new EVENTS lines over ssh and records them here, lane named <prefix>:<lane> and
+      kept as host:<lane-dir>; they clear when the remote keeper clears them (ack host:<lane-dir> writes HANDLED there)
+  "notify": {"cmd": "/srv/agents/bin/notify", "min_gap_minutes": 30}
+      new events are mailed in one batch at most once per gap
+Linux: systemd timer instead of launchd; CODEX_HOME is honoured; caffeinate is used only where it exists.
 """
-import fcntl, json, os, re, shlex, signal, subprocess, sys, time
+import fcntl, json, os, re, shlex, shutil, signal, subprocess, sys, time
 from pathlib import Path
 
 DEFAULT_CONFIG = Path.home() / 'src/skard/.coordinator.json'
@@ -34,8 +42,12 @@ CLOSING = re.compile(r'^(DONE\.md|READY-[0-9][0-9a-z]*\.md|DRIVER-FINISHED\.json
 TRANSIENT = re.compile(r'at capacity|429 Too Many|retry limit')
 FRESH_LIMIT, CONTINUE_LIMIT, QUIET = 25, 2, 3600
 COORD_LIVE = 1200
-PATH = ':'.join([str(Path.home() / 'Library/Application Support/fnm/node-versions/v24.11.1/installation/bin'),
-                 str(Path.home() / '.local/bin'), '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin'])
+_FNM = Path.home() / 'Library/Application Support/fnm/node-versions/v24.11.1/installation/bin'
+PATH = ':'.join(dict.fromkeys([*([str(_FNM)] if _FNM.is_dir() else []), str(Path.home() / '.local/bin'), '/opt/homebrew/bin',
+                               *os.environ.get('PATH', '').split(':'), '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin']))
+CODEX_SESSIONS = Path(os.environ.get('CODEX_HOME', Path.home() / '.codex')) / 'sessions'
+CAFFEINATE = ['caffeinate', '-i'] if shutil.which('caffeinate') else []
+SSH = ['ssh', '-o', 'ConnectTimeout=10', '-o', 'BatchMode=yes']
 
 MSG_CONTINUE = """Lane keeper (automatic): your session ended without DONE.md, READY-<n>.md or HANDOFF.md in the lane
 folder. If the queue still has work, continue it now from where you were. If a long driver should carry it, start it
@@ -64,9 +76,18 @@ def mtime(p):
 
 
 def birth(p):
+    """When the file was created. Linux has no st_birthtime: for codex.log, launch.sh and resume.sh write the session
+    start beside it (session-at); without either the short-session and later-handoff checks stay off."""
+    p = Path(p)
     try:
-        return Path(p).stat().st_birthtime
-    except (OSError, AttributeError):
+        return p.stat().st_birthtime
+    except AttributeError:
+        pass
+    except OSError:
+        return 0
+    try:
+        return float((p.parent / 'session-at').read_text().split()[0]) if p.name == 'codex.log' and p.exists() else 0
+    except (OSError, ValueError, IndexError):
         return 0
 
 
@@ -102,7 +123,7 @@ class Keeper:
         self.dry = dry
         self.sf = self.k / 'state.json'
         self.st = json.loads(self.sf.read_text()) if self.sf.exists() else {}
-        for key in ('events', 'lanes', 'coordinator'):
+        for key in ('events', 'lanes', 'coordinator', 'remote', 'notify'):
             self.st.setdefault(key, {})
 
     # bookkeeping
@@ -113,15 +134,19 @@ class Keeper:
             with open(self.k / 'keeper.log', 'a') as fh:
                 fh.write(line + '\n')
 
-    def event(self, d, kind, detail, key=None):
+    def event(self, d, kind, detail, key=None, name=None):
         key = key or f'{d}|{kind}'
         if key in self.st['events']:
             return
-        self.st['events'][key] = {'lane': str(d), 'kind': kind, 'detail': detail, 't': now()}
-        self.log(f'EVENT {kind} {Path(d).name}: {detail}')
+        name = name or Path(d).name
+        self.st['events'][key] = {'lane': str(d), 'name': name, 'kind': kind, 'detail': detail, 't': now()}
+        self.log(f'EVENT {kind} {name}: {detail}')
+        line = f'{stamp()} {kind} {name} {detail} ({d})'
+        if self.cfg.get('notify'):
+            self.st['notify'].setdefault('queue', []).append(line)
         if not self.dry:
             with open(self.k / 'EVENTS', 'a') as fh:
-                fh.write(f'{stamp()} {kind} {Path(d).name} {detail} ({d})\n')
+                fh.write(line + '\n')
 
     def lane(self, d):
         return self.st['lanes'].setdefault(str(d), {})
@@ -148,7 +173,7 @@ class Keeper:
             m = re.search(r'session id: (\S+)', (d / 'codex.log').read_text(errors='ignore')[:6000])
         except OSError:
             return None
-        if m and list((Path.home() / '.codex/sessions').glob(f'*/*/*/*{m.group(1)}.jsonl')):
+        if m and list(CODEX_SESSIONS.glob(f'*/*/*/*{m.group(1)}.jsonl')):
             return m.group(1)
         return None
 
@@ -253,7 +278,7 @@ class Keeper:
                 return self.event(d, 'DRIVER-DYING', 'drive-loop killed three times in six hours', key=f'{d}|DYING|{int(L["restarts"][0])}')
             L['restarts'].append(now())
             self.log(f'DRIVER-RESTART {d.name}: drive-loop was killed ({exit_note or "no exit recorded"})')
-            return self.run(['zsh', str(SCRIPTS / 'drive-loop.sh'), *spec['args']], spec['cwd'], d / 'driver.log')
+            return self.run(['bash', str(SCRIPTS / 'drive-loop.sh'), *spec['args']], spec['cwd'], d / 'driver.log')
         failed = d / 'DRIVER-FAILED.md'
         if failed.exists() and mtime(failed) > self.acked(d):
             if (d / 'pid').exists() and L.get('driver_failed') != int(mtime(failed)):
@@ -293,11 +318,87 @@ class Keeper:
                 continue
             yield C, [d for d in sorted(C.iterdir()) if d.is_dir() and ((d / 'pid').exists() or (d / 'driver.pid').exists())]
 
-    def clear_events(self):
+    def clear_events(self, remote_pending):
         for key, e in list(self.st['events'].items()):
+            if key.startswith('remote|'):
+                host = e['lane'].split(':', 1)[0]
+                if host in remote_pending and (e['lane'], e['kind']) not in remote_pending[host]:
+                    del self.st['events'][key]
+                continue
             d = Path(e['lane'])
             if not d.exists() or self.acked(d) > e['t']:
                 del self.st['events'][key]
+
+    # another machine's keeper
+    def pull_remote(self):
+        """New lines of each remote keeper's EVENTS become events here. Returns {host: {(host:lane, kind)}} of what the
+        remote keeper still has pending, for hosts that answered; an unreachable host keeps its events as they are."""
+        pending = {}
+        for r in self.cfg.get('remote_events', []):
+            host, path = r['ssh'], r['path']
+            prefix = r.get('prefix', host.split('-')[0])
+            R = self.st['remote'].setdefault(f'{host}:{path}', {'offset': 0})
+            q = shlex.quote(path)
+            state = shlex.quote(str(Path(path).parent / 'state.json'))
+            beat = shlex.quote(str(Path(path).parent / 'heartbeat'))
+            cmd = (f'f={q}; s=$(wc -c < "$f" 2>/dev/null || echo 0); echo "$s $(( $(date +%s) - $(stat -c %Y {beat} 2>/dev/null || echo 0) ))"; '
+                   f'o={R["offset"]}; [ "$s" -lt "$o" ] && o=0; echo "$o"; tail -c +$((o + 1)) "$f" 2>/dev/null | head -c $((s - o)); '
+                   f'echo; echo "--state--"; cat {state} 2>/dev/null')
+            try:
+                out = subprocess.run([*SSH, host, cmd], capture_output=True, text=True, timeout=40)
+                if out.returncode != 0:
+                    raise OSError(f'ssh exit {out.returncode}: {out.stderr.strip()[:200]}')
+                head, rest = out.stdout.split('\n', 1)
+                _, age = (int(x) for x in head.split())
+                start, rest = rest.split('\n', 1)
+                start_off = int(start)
+                body, _, state_txt = rest.rpartition('\n--state--\n')
+            except (OSError, ValueError, subprocess.TimeoutExpired) as e:
+                if not R.get('failing'):
+                    R['failing'] = True
+                    self.log(f'REMOTE {host}: cannot read {path} ({e}); keeping its events, will retry each tick')
+                continue
+            if R.pop('failing', None):
+                self.log(f'REMOTE {host}: reachable again')
+            complete = body[:body.rfind('\n') + 1]   # a line still being written waits for the next tick
+            for line in complete.splitlines():
+                m = re.match(r'^(\S+ \S+) (\S+) (\S+) (.*?)(?: \((/[^)]*)\))?$', line)
+                if not m:
+                    continue
+                t, kind, name, detail, lane = m.groups()
+                self.event(f'{host}:{lane or name}', kind, f'{detail} [{t} on {host}]', key=f'remote|{host}|{line}',
+                           name=f'{prefix}:{name}')
+            R['offset'] = start_off + len(complete.encode())
+            if age > 900:
+                self.event(f'{host}:{Path(path).parent}', 'REMOTE-STALE', f'keeper heartbeat on {host} is {age // 60} min old',
+                           key=f'remote|{host}|stale|{int(now() // 21600)}', name=f'{prefix}:keeper')
+            try:
+                rs = json.loads(state_txt) if state_txt.strip() else {}
+            except ValueError:
+                continue
+            pending[host] = {(f'{host}:{e["lane"]}', e['kind']) for e in rs.get('events', {}).values()}
+            if age > 900:
+                pending[host].add((f'{host}:{Path(path).parent}', 'REMOTE-STALE'))
+        return pending
+
+    def notify(self):
+        """At most one mail per gap, carrying every event since the last one. A failed send keeps the queue."""
+        c, N = self.cfg.get('notify'), self.st['notify']
+        if not c or not N.get('queue') or self.dry or not os.access(c['cmd'], os.X_OK):
+            return
+        if now() - N.get('last', 0) < c.get('min_gap_minutes', 30) * 60:
+            return
+        q = N['queue']
+        subject = f'{self.cfg.get("name", self.repo.name)}/keeper: {len(q)} event{"s" if len(q) != 1 else ""}'
+        body = 'Lane keeper events since the last mail:\n\n' + '\n'.join(q[-60:]) + f'\n\nAll events: {self.k / "EVENTS"}\n'
+        try:
+            ok = subprocess.run([c['cmd'], subject, body], capture_output=True, timeout=90).returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            ok = False
+        N['last'] = now()
+        if ok:
+            N['queue'] = []
+        self.log(f'NOTIFY {"sent" if ok else "failed"}: {len(q)} events')
 
     # coordinator
     def coordinator_live(self):
@@ -366,7 +467,7 @@ what each remaining item waits on. The next coordinator starts from it."""
         if self.dry:
             return
         (self.k / 'coordinator-prompt.txt').write_text(prompt)
-        p = subprocess.Popen(['caffeinate', '-i', 'claude', '-p', prompt, '--permission-mode', 'bypassPermissions'],
+        p = subprocess.Popen([*CAFFEINATE, 'claude', '-p', prompt, '--permission-mode', 'bypassPermissions'],
                              cwd=self.repo, stdin=subprocess.DEVNULL, stdout=open(out, 'a'), stderr=subprocess.STDOUT,
                              start_new_session=True, env={**os.environ, 'PATH': PATH})
         (self.k / 'coordinator.pid').write_text(str(p.pid))
@@ -386,8 +487,9 @@ what each remaining item waits on. The next coordinator starts from it."""
                     self.tend(C, d)
                 except Exception as e:  # one lane's odd files must not stop the others
                     self.log(f'ERROR {d.name}: {e!r}')
-        self.clear_events()
+        self.clear_events(self.pull_remote())
         self.maybe_start_coordinator()
+        self.notify()
         self.save()
 
 
@@ -399,6 +501,12 @@ def main():
         i = args.index('--config'); cfg = Path(args[i + 1]); del args[i:i + 2]
     dry = '--dry-run' in args
     if mode == 'ack':
+        host, sep, rpath = args[0].partition(':')
+        if sep and rpath.startswith('/') and '/' not in host:
+            note = shlex.quote(f'{stamp()} {" ".join(args[1:])}')
+            r = subprocess.run([*SSH, host, f'd={shlex.quote(rpath)}; [ -d "$d" ] && printf "%s\\n" {note} > "$d/HANDLED"'])
+            print(f'acked {host}:{Path(rpath).name}' if r.returncode == 0 else f'ack failed on {host} (exit {r.returncode})')
+            sys.exit(r.returncode)
         d = Path(args[0]).resolve()
         (d / 'HANDLED').write_text(f'{stamp()} {" ".join(args[1:])}\n')
         print(f'acked {d.name}')
@@ -419,7 +527,7 @@ def main():
     elif mode == 'status':
         print(f'keeper heartbeat {now() - mtime(K.k / "heartbeat"):.0f}s ago; coordinator live: {K.coordinator_live()}')
         for e in K.st['events'].values():
-            print(f'  {e["kind"]:14} {Path(e["lane"]).name}: {e["detail"]}')
+            print(f'  {e["kind"]:14} {e.get("name") or Path(e["lane"]).name}: {e["detail"]}')
 
 
 if __name__ == '__main__':

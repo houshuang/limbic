@@ -8,5 +8,7 @@ n=$( (ls "$C/$lane"/DONE*.md 2>/dev/null || true) | wc -l | tr -d ' ')
 if [ -f "$C/$lane/DONE.md" ]; then mv "$C/$lane/DONE.md" "$C/$lane/DONE.partial-$n.md"; fi
 mv "$C/$lane/codex.log" "$C/$lane/codex.$(date +%H%M%S).log"
 cd "${REPO:-$PWD}"
-nohup caffeinate -i env -u OPENAI_API_KEY codex exec resume --dangerously-bypass-approvals-and-sandbox "$sid" "$(cat "$msg")" < /dev/null > "$C/$lane/codex.log" 2>&1 &
+caf=(); command -v caffeinate >/dev/null && caf=(caffeinate -i)
+date +%s > "$C/$lane/session-at"   # Linux has no file birth time: the keeper reads the session start here
+nohup ${caf[@]+"${caf[@]}"} env -u OPENAI_API_KEY codex exec resume --dangerously-bypass-approvals-and-sandbox "$sid" "$(cat "$msg")" < /dev/null > "$C/$lane/codex.log" 2>&1 &
 echo $! > "$C/$lane/pid"; echo "resumed $lane session $sid"
