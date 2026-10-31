@@ -629,7 +629,10 @@ class Keeper:
         for key, e in list(self.st['events'].items()):
             if key.startswith('remote|'):
                 host = e['lane'].split(':', 1)[0]
-                if host in remote_pending and (e['lane'], e['kind']) not in remote_pending[host]:
+                # A host dropped from remote_events (e.g. a renamed ssh alias) is never polled again,
+                # so its events would stay pending forever and keep starting coordinators.
+                configured = {r['ssh'] for r in self.cfg.get('remote_events', [])}
+                if host not in configured or (host in remote_pending and (e['lane'], e['kind']) not in remote_pending[host]):
                     del self.st['events'][key]
                 continue
             d = Path(e['lane'])
