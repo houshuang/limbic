@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Serialize launch/resume admission before either script changes lane files."""
 import fcntl
+import json
 import os
 import re
 from pathlib import Path
@@ -17,25 +18,58 @@ def tail_text(path, limit=4000):
     except OSError: return ''
 
 
+SID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', re.I)
+HEADER = re.compile(rb'session id: ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\r?', re.I)
+
+
 def last_session_id(path):
-    """Search append-only logs backwards with bounded memory, including legacy logs."""
+    """Latest complete CLI header or thread.started event, never echoed prose.
+
+    Read backwards with bounded memory. Do not fall back to an older identity
+    when the latest real header names a missing session; the caller refuses it.
+    """
     try:
         with Path(path).open('rb') as stream:
-            stream.seek(0,2); offset=stream.tell(); overlap=b''
+            stream.seek(0, 2); offset = stream.tell(); suffix = b''
             while offset:
-                size=min(offset,65536);offset-=size;stream.seek(offset)
-                block=stream.read(size)+overlap
-                ids=re.findall(rb'session id: (\S+)',block,re.I)
-                if ids: return ids[-1].decode()
-                overlap=block[:256]
+                size = min(offset, 65536); offset -= size; stream.seek(offset)
+                lines = (stream.read(size)+suffix).split(b'\n')
+                if offset:
+                    suffix = lines.pop(0)
+                    if len(suffix) > 256: suffix = b'\x00'  # oversized prose cannot be an identity line
+                for line in reversed(lines):
+                    match = HEADER.fullmatch(line)
+                    if match: return match[1].decode().lower()
+                    if line.startswith(b'{'):
+                        try: row = json.loads(line)
+                        except (ValueError, UnicodeError): continue
+                        if isinstance(row, dict) and row.get('type') == 'thread.started':
+                            sid = row.get('thread_id')
+                            if isinstance(sid, str) and SID.fullmatch(sid): return sid.lower()
     except OSError: pass
     return None
 
 
+def local_codex_session(sid, sessions=None):
+    """Resume only a persisted local session whose metadata confirms the ID."""
+    if not isinstance(sid, str) or not SID.fullmatch(sid): return None
+    sessions = Path(sessions) if sessions is not None else Path(os.environ.get('CODEX_HOME', Path.home()/'.codex'))/'sessions'
+    for path in sessions.glob('*/*/*/*'+sid+'.jsonl'):
+        try:
+            with path.open('rb') as stream:
+                row = json.loads(stream.readline(1024*1024))
+            if row.get('type') == 'session_meta' and (row.get('payload') or {}).get('id') == sid:
+                return path
+        except (OSError, ValueError, AttributeError): pass
+    return None
+
+
 def main():
-    if sys.argv[1]=='--session-id':
+    if sys.argv[1] in ('--session-id', '--codex-session-id'):
         sid=last_session_id(sys.argv[2])
-        if sid: print(sid); return 0
+        if sid and (sys.argv[1] != '--codex-session-id' or local_codex_session(sid)):
+            print(sid); return 0
+        print('refused: no valid persisted session identity for '+sys.argv[2], file=sys.stderr)
         return 2
     lane=Path(sys.argv[1]).resolve(); lane.mkdir(parents=True,exist_ok=True)
     command=sys.argv[3:]

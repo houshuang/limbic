@@ -12,7 +12,9 @@ if [[ ${LANE_SESSION_GUARDED:-} != "$C/$lane" ]]; then
 fi
 model=(); [ -f "$C/$lane/model" ] && read -r -a model < "$C/$lane/model"
 claude_lane=; [[ ${model[0]:-} =~ ^(opus|sonnet|haiku|fable|claude-) ]] && claude_lane=1
-sid=$(python3 "$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve().with_name("session_guard.py"))' "${BASH_SOURCE[0]}")" --session-id "$C/$lane/codex.log")
+identity_mode=--codex-session-id
+[[ -z $claude_lane ]] || identity_mode=--session-id
+sid=$(python3 "$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve().with_name("session_guard.py"))' "${BASH_SOURCE[0]}")" "$identity_mode" "$C/$lane/codex.log")
 [[ -n $sid ]] || { echo "refused: no session id in $C/$lane/codex.log"; exit 2; }
 if [[ -n $claude_lane ]] && ! compgen -G "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects/*/$sid.jsonl" > /dev/null; then
   echo "engine switch: $lane is a Claude lane and $sid is not a Claude session; starting a fresh session"

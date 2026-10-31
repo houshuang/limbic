@@ -364,11 +364,22 @@ class FrictionTest(unittest.TestCase):
 
     def test_cost_cap_without_next_keeps_handoff_resume(self):
         C,d=self.lane()
+        self.K.session_id=mock.Mock(return_value='11111111-1111-1111-1111-111111111111')
         with mock.patch.object(lk.subprocess,'run',side_effect=lambda argv, **kwargs: subprocess.CompletedProcess(argv,0,stdout='lane' if 'costguard.py' in str(argv) else '')), \
              mock.patch.object(lk.os,'kill',side_effect=ProcessLookupError), mock.patch.object(lk.time,'sleep'), \
              mock.patch.object(self.K,'run') as spawn:
             self.K.costguard(C,['lane'])
         self.assertIn('resume.sh',' '.join(spawn.call_args.args[0]))
+
+    def test_cost_cap_without_verified_session_refuses_handoff_resume(self):
+        C,d=self.lane()
+        (d/'codex.log').write_text('documentation says `session id: <uuid>`\n')
+        with mock.patch.object(lk.subprocess,'run',side_effect=lambda argv, **kwargs: subprocess.CompletedProcess(argv,0,stdout='lane' if 'costguard.py' in str(argv) else '')), \
+             mock.patch.object(lk.os,'kill',side_effect=ProcessLookupError), mock.patch.object(lk.time,'sleep'), \
+             mock.patch.object(self.K,'run') as spawn:
+            self.K.costguard(C,['lane'])
+        spawn.assert_not_called()
+        self.assertIn('ENDED',[e['kind'] for e in self.K.st['events'].values()])
 
     def test_next_command_rejects_shell_and_other_lane_and_is_not_restarted_twice(self):
         C,d=self.lane()
@@ -456,12 +467,16 @@ class SessionGuardTest(unittest.TestCase):
         temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup)
         self.root=Path(temp.name);self.C=self.root/'campaign';self.d=self.C/'lane';self.d.mkdir(parents=True)
         (self.C/'briefs').mkdir();(self.C/'briefs/lane.md').write_text('fixture')
-        (self.d/'codex.log').write_text('session id: old-fixture\n')
+        (self.d/'codex.log').write_text('session id: 11111111-1111-1111-1111-111111111111\n')
+        self.codex_home=self.root/'codex-home'
+        session=self.codex_home/'sessions/2026/10/31/rollout-11111111-1111-1111-1111-111111111111.jsonl'
+        session.parent.mkdir(parents=True)
+        session.write_text(json.dumps({'type':'session_meta','payload':{'id':'11111111-1111-1111-1111-111111111111'}})+'\n')
         self.msg=self.root/'message';self.msg.write_text('continue')
         self.bin=self.root/'bin';self.bin.mkdir()
-        codex=self.bin/'codex';codex.write_text('#!/bin/sh\necho "session id: new-fixture"\n');codex.chmod(0o755)
+        codex=self.bin/'codex';codex.write_text('#!/bin/sh\necho "session id: 22222222-2222-2222-2222-222222222222"\n');codex.chmod(0o755)
         self.env={**os.environ,'PATH':str(self.bin)+':'+os.environ['PATH'],'REPO':str(self.root),
-                  'CAMPAIGN_DIR':str(self.C),'ALLOW_UNWATCHED':'1'}
+                  'CAMPAIGN_DIR':str(self.C),'ALLOW_UNWATCHED':'1','CODEX_HOME':str(self.codex_home)}
 
     def call(self,script):
         args=[str(self.C),'lane',str(self.msg)] if script=='resume.sh' else ['lane']
@@ -482,7 +497,7 @@ class SessionGuardTest(unittest.TestCase):
         procs=[subprocess.Popen(argv,env=self.env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True) for _ in range(2)]
         results=[p.communicate(timeout=5) for p in procs]
         self.assertEqual(sorted(p.returncode for p in procs),[0,3],results)
-        self.assertIn('session id: old-fixture',(self.d/'codex.log').read_text())
+        self.assertIn('session id: 11111111-1111-1111-1111-111111111111',(self.d/'codex.log').read_text())
 
     def test_concurrent_launch_and_resume_have_one_winner(self):
         commands=[['bash',str(lk.SCRIPTS/'launch.sh'),'lane'],
@@ -490,7 +505,45 @@ class SessionGuardTest(unittest.TestCase):
         procs=[subprocess.Popen(argv,env=self.env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True) for argv in commands]
         results=[p.communicate(timeout=5) for p in procs]
         self.assertEqual(sorted(p.returncode for p in procs),[0,3],results)
-        self.assertIn('session id: old-fixture',(self.d/'codex.log').read_text())
+        self.assertIn('session id: 11111111-1111-1111-1111-111111111111',(self.d/'codex.log').read_text())
+
+    def test_echoed_placeholder_does_not_replace_actual_header(self):
+        log=self.d/'codex.log'
+        log.write_text(log.read_text()+'launch.sh writes `session id: <uuid>` in logs\nsession id: <uuid>\n')
+        self.assertEqual(lk.last_session_id(log),'11111111-1111-1111-1111-111111111111')
+        with mock.patch.object(lk,'CODEX_SESSIONS',self.codex_home/'sessions'):
+            self.assertEqual(lk.Keeper.session_id(None,self.d),'11111111-1111-1111-1111-111111111111')
+
+    def test_latest_unknown_uuid_never_falls_back_to_previous_session(self):
+        log=self.d/'codex.log'
+        log.write_text(log.read_text()+'session id: 99999999-9999-9999-9999-999999999999\n')
+        self.assertEqual(lk.last_session_id(log),'99999999-9999-9999-9999-999999999999')
+        with mock.patch.object(lk,'CODEX_SESSIONS',self.codex_home/'sessions'):
+            self.assertIsNone(lk.Keeper.session_id(None,self.d))
+        result=self.call('resume.sh')
+        self.assertEqual(result.returncode,2,result.stdout+result.stderr)
+        self.assertNotIn('resumed lane',result.stdout)
+        self.assertFalse((self.d/'pid').exists())
+
+    def test_placeholder_only_log_never_starts_a_session(self):
+        (self.d/'codex.log').write_text('session id: <uuid>\n')
+        result=self.call('resume.sh')
+        self.assertEqual(result.returncode,2,result.stdout+result.stderr)
+        self.assertFalse((self.d/'pid').exists())
+
+    def test_mismatched_local_metadata_refuses_resume(self):
+        session=next((self.codex_home/'sessions').glob('*/*/*/*.jsonl'))
+        session.write_text(json.dumps({'type':'session_meta','payload':{'id':'other-session'}})+'\n')
+        self.assertEqual(self.call('resume.sh').returncode,2)
+
+    def test_append_only_headers_and_json_thread_started_choose_latest(self):
+        log=self.d/'codex.log'
+        # Exercise a header crossing a backwards-read block boundary.
+        log.write_text('session id: 11111111-1111-1111-1111-111111111111\n'+'x'*65510+'\n'+'session id: 22222222-2222-2222-2222-222222222222\n'+'y'*65510)
+        self.assertEqual(lk.last_session_id(log),'22222222-2222-2222-2222-222222222222')
+        with log.open('a') as stream:
+            stream.write('\n'+json.dumps({'type':'thread.started','thread_id':'33333333-3333-3333-3333-333333333333'})+'\n')
+        self.assertEqual(lk.last_session_id(log),'33333333-3333-3333-3333-333333333333')
 
 
 class ClaudeEngineTest(unittest.TestCase):
@@ -556,7 +609,7 @@ class ClaudeEngineTest(unittest.TestCase):
         self.assertIsNone(calls[0]['key'])
 
     def test_switch_from_codex_to_claude_starts_fresh_claude_session_with_handoff(self):
-        (self.d/'codex.log').write_text('session id: codex-old-session\n')
+        (self.d/'codex.log').write_text('session id: 33333333-3333-3333-3333-333333333333\n')
         (self.d/'model').write_text('sonnet medium\n')   # rewritten by the coordinator from a Codex model
         (self.d/'HANDOFF.md').write_text('HANDOFF-FIXTURE')
         calls=self.run_script('resume.sh',str(self.C),'lane',str(self.msg))
@@ -570,15 +623,15 @@ class ClaudeEngineTest(unittest.TestCase):
         self.assertEqual(lk.last_session_id(self.d/'codex.log'),sid)
 
     def test_keeper_session_id_accepts_claude_session_file_for_claude_lane(self):
-        (self.d/'codex.log').write_text('session id: aaaa-claude\n'); (self.d/'model').write_text('sonnet medium\n')
+        (self.d/'codex.log').write_text('session id: 44444444-4444-4444-4444-444444444444\n'); (self.d/'model').write_text('sonnet medium\n')
         with mock.patch.object(lk,'CLAUDE_PROJECTS',self.home/'projects'):
             self.assertIsNone(lk.Keeper.session_id(None,self.d))
-            self.claude_session('aaaa-claude')
-            self.assertEqual(lk.Keeper.session_id(None,self.d),'aaaa-claude')
+            self.claude_session('44444444-4444-4444-4444-444444444444')
+            self.assertEqual(lk.Keeper.session_id(None,self.d),'44444444-4444-4444-4444-444444444444')
 
     def test_keeper_resume_of_switched_lane_launches_fresh(self):
         K=mock.Mock(); K.dry=False
-        (self.d/'codex.log').write_text('session id: codex-old-session\n'); (self.d/'model').write_text('opus high\n')
+        (self.d/'codex.log').write_text('session id: 33333333-3333-3333-3333-333333333333\n'); (self.d/'model').write_text('opus high\n')
         with mock.patch.object(lk,'CLAUDE_PROJECTS',self.home/'projects'):
             K.session_id=lambda d: lk.Keeper.session_id(K,d)
             lk.Keeper.resume(K,self.C,self.d,self.msg,'continue #1')

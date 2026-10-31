@@ -56,7 +56,7 @@ Linux: systemd timer instead of launchd; CODEX_HOME is honoured; caffeinate is u
 import datetime as dt
 import fcntl, hashlib, json, os, re, shlex, shutil, signal, subprocess, sys, time, uuid
 from pathlib import Path
-from session_guard import last_session_id, tail_text
+from session_guard import last_session_id, local_codex_session, tail_text
 
 DEFAULT_CONFIG = Path.home() / 'src/skard/.coordinator.json'
 SCRIPTS = Path(__file__).resolve().parent
@@ -387,7 +387,7 @@ class Keeper:
             return None
         if Keeper.claude_lane(d):
             return sid if list(CLAUDE_PROJECTS.glob(f'*/{sid}.jsonl')) else None
-        return sid if list(CODEX_SESSIONS.glob(f'*/*/*/*{sid}.jsonl')) else None
+        return sid if local_codex_session(sid, CODEX_SESSIONS) else None
 
     def acked(self, d):
         return max(mtime(d / 'HANDLED'), mtime(d / 'RETIRED'), mtime(d / 'MERGED.md'))
@@ -458,6 +458,10 @@ class Keeper:
                     pass
             time.sleep(3)
             if self.start_next_command(d):
+                (d / 'forced-handoff').write_text(pid)
+                continue
+            if not self.session_id(d):
+                self.event(d, 'ENDED', 'cost handoff refused: no valid local session to resume')
                 (d / 'forced-handoff').write_text(pid)
                 continue
             self.run(['bash', str(SCRIPTS / 'resume.sh'), str(C), name, str(C / 'msg-handoff.md')], self.repo, C / 'autoresume.log')
