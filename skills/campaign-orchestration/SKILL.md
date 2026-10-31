@@ -75,6 +75,11 @@ Read this before launching worker lanes, and add to it after every incident
   next launch uses it, and a resume of a lane whose last session is not a Claude session
   (`~/.claude/projects/*/<sid>.jsonl`) starts a fresh Claude session with brief + HANDOFF instead. A live session
   keeps its engine until it ends. Switching back to Codex has no such bridge: the keeper reports ENDED; relaunch.
+- The keeper also watches for runaways each tick: ORPHAN (pid-1 processes under a lane root older than 30 min),
+  STOPPED-BUT-RUNNING (a STOPped lane's driver alive 10 min later), STALE-PREVIEW (local.mjs and similar older than
+  6 h with no live session ancestor) and RESOURCE-FLOOR (disk < 30 GB free or swap > 20 GB, hourly, with top processes
+  and the largest `disk_watch` dirs). Reporting only, until `"reap_orphans": true` in .coordinator.json; config keys are
+  in lane-keeper.py's docstring. Sessions, coordinator.pid and tracked lane pid / driver.pid trees are never reaped.
 - costguard.py reads Codex token_count records only. Claude lanes are listed as skipped in COST.md and never
   capped. The keeper runs the campaign's own copy of costguard.py, so refresh that copy to get the skip row.
 - A cost-capped lane can write `NEXT-COMMAND`: one command line, `bash <installed scripts>/drive-loop.sh [--once] <lane-state-dir> <job> <limit> -- <driver argv>`. This is an already authorised continuation. The keeper starts it detached instead of a handoff session and consumes the file after launch; use `--once` for release cycles. A handoff may prepare this command even when told to stop new work.

@@ -575,5 +575,133 @@ class ClaudeEngineTest(unittest.TestCase):
         self.assertIn('claude',(self.C/'COST.md').read_text())
 
 
+class RunawayTest(unittest.TestCase):
+    """ORPHAN / STOPPED-BUT-RUNNING / STALE-PREVIEW / RESOURCE-FLOOR checks in the keeper tick."""
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)
+        self.tmp = Path(temp.name).resolve()
+        self.repo = self.tmp / 'repo'; self.wt = self.repo / '.claude/worktrees/lane-a'; self.wt.mkdir(parents=True)
+        self.C = self.tmp / 'campaign'; self.d = self.C / 'lane'; self.d.mkdir(parents=True)
+        self.cfg_extra = {}
+        self.disk, self.swap = 100.0, 1.0
+        self.killed = []
+        self.table = {}
+        self.cwd = {}
+
+    def keeper(self, **extra):
+        cfg = self.tmp / 'coordinator.json'
+        cfg.write_text(json.dumps({'repo': str(self.repo), 'campaigns': [str(self.C)], 'state': str(self.tmp / 'state'),
+                                   'disk_watch': [str(self.repo)], **extra}))
+        return lk.Keeper(cfg)
+
+    def proc(self, pid, cmd, ppid=1, age=3600, rss=6_000_000, pgid=None):
+        self.table[pid] = {'pid': pid, 'ppid': ppid, 'pgid': pgid or pid, 'age': age, 'rss': rss, 'cmd': cmd}
+
+    def scan(self, K):
+        with mock.patch.object(lk, 'ps_table', return_value=self.table), \
+             mock.patch.object(lk, 'proc_cwds', side_effect=lambda pids: {p: self.cwd[p] for p in pids if p in self.cwd}), \
+             mock.patch.object(lk, 'disk_free_gb', side_effect=lambda p: self.disk), \
+             mock.patch.object(lk, 'swap_used_gb', side_effect=lambda: self.swap), \
+             mock.patch.object(lk, 'top_processes', return_value='1 7366M python3 run_unit.py'), \
+             mock.patch.object(lk, 'largest_dirs', return_value='13.0G /repo/data'), \
+             mock.patch.object(lk.Keeper, 'kill_pids', side_effect=lambda pids, why: self.killed.append(sorted(pids))):
+            K.runaways()
+
+    def kinds(self, K):
+        return [e['kind'] for e in K.st['events'].values()]
+
+    def test_orphan_under_worktree_is_reported_not_reaped_by_default(self):
+        self.proc(500, f'python3 tests/run_parallel.py'); self.cwd[500] = str(self.wt)
+        self.proc(501, 'python3 tests/run_unit.py test_ui301', ppid=500, pgid=500)
+        K = self.keeper(); self.scan(K)
+        self.assertEqual(self.kinds(K), ['ORPHAN'])
+        self.assertIn('500', next(iter(K.st['events'].values()))['detail'])
+        self.assertEqual(self.killed, [])
+
+    def test_orphan_reaped_with_its_tree_when_enabled(self):
+        self.proc(500, f'python3 {self.wt}/tests/run_parallel.py')
+        self.proc(501, 'python3 tests/run_unit.py', ppid=500, pgid=500)
+        K = self.keeper(reap_orphans=True); self.scan(K)
+        self.assertEqual(self.killed, [[500, 501]])
+
+    def test_not_orphans_young_outside_lanes_tracked_or_sessions(self):
+        self.proc(600, f'python3 {self.wt}/x.py', age=60)                       # younger than 30 min
+        self.proc(601, 'python3 /elsewhere/daemon.py')                          # not under a lane root
+        self.proc(602, f'bash drive-loop.sh {self.C}/lane job 3000')            # the lane's tracked driver
+        (self.d / 'driver.pid').write_text('602')
+        self.proc(603, f'/Users/x/.local/bin/claude -p "work in {self.wt}"')    # a session
+        self.proc(604, f'node {self.wt}/thing.js', ppid=603)                    # inside a session's tree, not ppid 1
+        self.proc(605, f'python3 {self.wt}/coordinator-child.py')
+        (self.tmp / 'state/keeper').mkdir(parents=True); (self.tmp / 'state/keeper/coordinator.pid').write_text('605')
+        K = self.keeper(reap_orphans=True); self.scan(K)
+        self.assertEqual(self.kinds(K), []); self.assertEqual(self.killed, [])
+
+    def test_keeper_never_reaps_its_own_tree(self):
+        self.proc(os.getpid(), f'python3 {self.wt}/lane-keeper.py tick')
+        K = self.keeper(reap_orphans=True); self.scan(K)
+        self.assertEqual(self.killed, [])
+
+    def test_orphan_reported_once_even_after_ack(self):
+        self.proc(500, f'python3 {self.wt}/run_parallel.py')
+        K = self.keeper(); self.scan(K)
+        (K.k / 'HANDLED').write_text('acked'); K.clear_events({})
+        self.scan(K)
+        self.assertEqual(self.kinds(K), [])
+
+    def test_stopped_lane_driver_alive_after_ten_minutes(self):
+        self.proc(700, f'bash drive-loop.sh {self.d} job 172800')
+        self.proc(701, 'python3 sleepsafe.py --name job --limit 172800 -- python3 driver.py', ppid=700, pgid=700)
+        (self.d / 'driver.pid').write_text('700')
+        stop = self.d / 'STOP'; stop.write_text('stop'); touch(stop, time.time() - 300)
+        with mock.patch.object(lk, 'alive', side_effect=lambda f, pid=None: f.name == 'driver.pid'):
+            K = self.keeper(reap_orphans=True); self.scan(K)
+            self.assertEqual((self.kinds(K), self.killed), ([], []))
+            touch(stop, time.time() - 700); self.scan(K)
+        self.assertEqual(self.kinds(K), ['STOPPED-BUT-RUNNING'])
+        self.assertEqual(self.killed, [[700, 701]])
+
+    def test_stale_preview_from_ended_session(self):
+        self.proc(800, f'node {self.repo}/web/delivery/local.mjs --export x', age=7 * 3600)
+        self.proc(801, f'node {self.wt}/web/delivery/local.mjs', age=7 * 3600, ppid=803)
+        self.proc(803, '/Users/x/.local/bin/claude --dangerously-skip-permissions', ppid=5)   # live session
+        self.proc(802, f'node {self.wt}/web/delivery/local.mjs', age=2 * 3600)
+        K = self.keeper(reap_orphans=True); self.scan(K)
+        self.assertEqual(self.kinds(K), ['STALE-PREVIEW'])
+        self.assertEqual(self.killed, [[800]])
+
+    def test_resource_floor_once_per_hour_with_top_and_dirs(self):
+        K = self.keeper(); self.scan(K)
+        self.assertEqual(self.kinds(K), [])
+        self.disk, self.swap = 18.0, 45.0
+        self.scan(K); self.scan(K)
+        self.assertEqual(self.kinds(K), ['RESOURCE-FLOOR'])
+        detail = next(iter(K.st['events'].values()))['detail']
+        for part in ('18.0 GB', '45.0 GB', 'run_unit.py', '/repo/data'): self.assertIn(part, detail)
+
+    def test_resource_floor_config(self):
+        self.disk = 18.0
+        K = self.keeper(disk_floor_gb=10, swap_ceiling_gb=50); self.scan(K)
+        self.assertEqual(self.kinds(K), [])
+
+    def test_real_orphan_is_killed(self):
+        """A real double-forked sleep under a temp worktree: reparented to pid 1, then reaped."""
+        marker = f'reaper-fixture-{os.getpid()}'
+        subprocess.run(['sh', '-c', f'cd {self.wt} && (python3 -c "import time; time.sleep(300)" {marker} '
+                        '</dev/null >/dev/null 2>&1 &)'], check=True, timeout=10)
+        time.sleep(0.5)
+        table = lk.ps_table()
+        pids = [p for p, r in table.items() if marker in r['cmd'] and r['ppid'] == 1]
+        if not pids: self.skipTest('orphans are not reparented to pid 1 here')
+        K = self.keeper(reap_orphans=True, orphan_age_minutes=0, reap_grace_seconds=2)
+        with mock.patch.object(lk, 'disk_free_gb', return_value=100.0), mock.patch.object(lk, 'swap_used_gb', return_value=0.0):
+            K.runaways()
+        time.sleep(0.3)
+        self.assertFalse([p for p, r in lk.ps_table().items() if marker in r['cmd']])
+        self.assertIn('ORPHAN', self.kinds(K))
+
+    def test_etime_parsing(self):
+        self.assertEqual([lk.etime_seconds(s) for s in ('05', '01:02', '03:00:01', '02-01:00:00')], [5, 62, 10801, 176400])
+
+
 if __name__ == '__main__':
     unittest.main()

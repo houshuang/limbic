@@ -36,6 +36,17 @@ Optional config keys:
       new events are mailed in one batch at most once per gap
   "detach": ["systemd-run", "--scope", "--quiet", "--collect"]
       prefix for every command the keeper starts, so lanes leave a systemd timer's cgroup instead of dying with it
+Runaway checks (each tick; events are reported once per process, under the keeper dir — ack it to clear them):
+  ORPHAN               a process reparented to pid 1, older than orphan_age_minutes (30), whose cwd or argv is under a
+                       lane root: <repo>/.claude/worktrees, <repo>/.codex/worktrees, the campaign dirs, "worktree_roots"
+  STOPPED-BUT-RUNNING  a lane with STOP whose driver.pid (or its sleepsafe) still runs 10 min after STOP
+  STALE-PREVIEW        a preview server ("preview_patterns", default local.mjs / wrangler dev / http.server) in the repo,
+                       older than preview_age_hours (6), with no live claude/codex/tmux/sshd/login ancestor
+  RESOURCE-FLOOR       free disk < disk_floor_gb (30) or swap used > swap_ceiling_gb (20); at most once an hour, with the
+                       top 5 processes by memory and the largest dirs one level under each "disk_watch" path
+  "reap_orphans": true reaps the first three (SIGTERM, SIGKILL after reap_grace_seconds, 10) and logs each pid, its
+                       footprint and argv. Never reaped: the keeper's own tree, claude/codex sessions and their trees,
+                       coordinator.pid, and every lane's pid / driver.pid tree (except a STOPped lane's driver).
 Linux: systemd timer instead of launchd; CODEX_HOME is honoured; caffeinate is used only where it exists.
 """
 import datetime as dt
@@ -176,6 +187,125 @@ def newest_in(d):
         return max((e.stat().st_mtime for e in os.scandir(d) if e.is_file()), default=0)
     except OSError:
         return 0
+
+
+SESSION_NAMES = {'claude', 'codex'}
+INTERACTIVE_NAMES = SESSION_NAMES | {'tmux', 'sshd', 'login', 'screen'}
+PREVIEW_PATTERNS = [r'local\.mjs', r'wrangler\S*\s+(pages\s+)?dev', r'http\.server']
+
+
+def etime_seconds(s):
+    days, _, rest = s.strip().rpartition('-')
+    parts = [int(p) for p in rest.split(':')]
+    while len(parts) < 3:
+        parts.insert(0, 0)
+    return int(days or 0) * 86400 + parts[0] * 3600 + parts[1] * 60 + parts[2]
+
+
+def ps_table():
+    out = subprocess.run(['ps', '-axo', 'pid=,ppid=,pgid=,etime=,rss=,command='], capture_output=True, text=True,
+                         timeout=30).stdout
+    rows = {}
+    for line in out.splitlines():
+        parts = line.split(None, 5)
+        if len(parts) == 6:
+            pid, ppid, pgid, et, rss, cmd = parts
+            rows[int(pid)] = {'pid': int(pid), 'ppid': int(ppid), 'pgid': int(pgid), 'age': etime_seconds(et),
+                              'rss': int(rss), 'cmd': cmd}
+    return rows
+
+
+def proc_cwds(pids):
+    if not pids:
+        return {}
+    if Path('/proc/self/cwd').exists():
+        out = {}
+        for p in pids:
+            try: out[p] = os.readlink(f'/proc/{p}/cwd')
+            except OSError: pass
+        return out
+    try:
+        r = subprocess.run(['lsof', '-a', '-d', 'cwd', '-Fn', '-p', ','.join(map(str, pids))],
+                           capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    out, cur = {}, None
+    for line in r.stdout.splitlines():
+        if line.startswith('p'): cur = int(line[1:])
+        elif line.startswith('n') and cur: out[cur] = line[1:]
+    return out
+
+
+def disk_free_gb(path):
+    return shutil.disk_usage(path).free / 2**30
+
+
+def swap_used_gb():
+    try:
+        if sys.platform == 'darwin':
+            m = re.search(r'used = ([\d.]+)M', subprocess.run(['sysctl', '-n', 'vm.swapusage'], capture_output=True,
+                                                               text=True, timeout=10).stdout)
+            return float(m[1]) / 1024 if m else None
+        info = dict(l.split(':', 1) for l in Path('/proc/meminfo').read_text().splitlines() if ':' in l)
+        return (int(info['SwapTotal'].split()[0]) - int(info['SwapFree'].split()[0])) / 2**20
+    except (OSError, KeyError, ValueError, subprocess.TimeoutExpired):
+        return None
+
+
+def top_processes(table, n=5):
+    """By footprint (top's MEM on macOS, RSS elsewhere), each with its full argv from ps."""
+    rows = []
+    if sys.platform == 'darwin' and shutil.which('top'):
+        try:
+            out = subprocess.run(['top', '-l', '1', '-o', 'mem', '-n', str(n), '-stats', 'pid,mem'],
+                                 capture_output=True, text=True, timeout=30).stdout.splitlines()
+            start = next(i for i, l in enumerate(out) if l.split()[:1] == ['PID']) + 1
+            rows = [(int(l.split()[0]), l.split()[1]) for l in out[start:start + n] if l.split()]
+        except (OSError, StopIteration, ValueError, IndexError, subprocess.TimeoutExpired):
+            rows = []
+    if not rows:
+        rows = [(p, f'{r["rss"] // 1024}M') for p, r in sorted(table.items(), key=lambda x: -x[1]['rss'])[:n]]
+    return ', '.join(f'{p} {mem} {table.get(p, {}).get("cmd", "?")[:120]}' for p, mem in rows)
+
+
+def largest_dirs(paths, n=5, timeout=60):
+    sizes = []
+    for path in paths:
+        try:
+            out = subprocess.run(['du', '-sk', '-d', '1', str(path)], capture_output=True, text=True, timeout=timeout).stdout
+        except subprocess.TimeoutExpired:
+            sizes.append((-1, f'{path} (du timed out)')); continue
+        except OSError:
+            continue
+        for line in out.splitlines():
+            kb, _, d = line.partition('\t')
+            if kb.isdigit() and Path(d) != Path(path):
+                sizes.append((int(kb), d))
+    top = sorted(sizes, reverse=True)[:n]
+    return ', '.join(f'{kb / 2**20:.1f}G {d}' if kb >= 0 else d for kb, d in top) or 'none'
+
+
+def descendants(table, roots):
+    children = {}
+    for p, r in table.items():
+        children.setdefault(r['ppid'], []).append(p)
+    seen, todo = set(), [r for r in roots if r in table]
+    while todo:
+        p = todo.pop()
+        if p in seen: continue
+        seen.add(p); todo.extend(children.get(p, []))
+    return seen
+
+
+def ancestors(table, pid):
+    out = []
+    while pid in table and table[pid]['ppid'] not in (0, pid) and len(out) < 64:
+        pid = table[pid]['ppid']; out.append(pid)
+    return out
+
+
+def session_proc(cmd, names=SESSION_NAMES):
+    return any(Path(t).name in names for t in cmd.split()[:2])
 
 
 class Keeper:
@@ -692,6 +822,125 @@ what each remaining item waits on. The next coordinator starts from it. Then run
         return [*CAFFEINATE, 'claude', '-p', prompt, '--permission-mode', 'bypassPermissions', '--session-id', sid,
                 '--output-format', 'stream-json', '--verbose']
 
+    # runaways
+    def kill_pids(self, pids, why):
+        if self.dry:
+            return
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            for p in pids:
+                try: os.kill(p, sig)
+                except (ProcessLookupError, PermissionError): pass
+            if sig == signal.SIGKILL:
+                return
+            deadline = now() + self.cfg.get('reap_grace_seconds', 10)
+            while now() < deadline:
+                left = []
+                for p in pids:
+                    try: os.kill(p, 0); left.append(p)
+                    except (ProcessLookupError, PermissionError): pass
+                # a killed child stays a zombie until its (dead) parent's reaper collects it
+                left = [p for p in left if 'Z' not in subprocess.run(['ps', '-o', 'stat=', '-p', str(p)],
+                                                                     capture_output=True, text=True).stdout]
+                if not left: return
+                time.sleep(0.5)
+            pids = left
+            self.log(f'REAP {why}: SIGKILL {pids}')
+
+    def reap(self, table, pid, protected, kind):
+        targets = {pid} | descendants(table, [pid])
+        if table[pid]['pgid'] == pid:
+            targets |= {p for p, r in table.items() if r['pgid'] == pid}
+        targets -= protected
+        for p in sorted(targets):
+            r = table[p]
+            self.log(f'REAP {kind} {p} rss={r["rss"] // 1024}M age={r["age"] // 60}m {r["cmd"][:300]}')
+        self.kill_pids(sorted(targets), kind)
+
+    def runaway_event(self, seen, kind, pid, r, detail, reaping):
+        key = f'{kind}|{pid}|{hashlib.sha1(r["cmd"].encode()).hexdigest()[:8]}'
+        if key in seen:
+            return False
+        seen[key] = now()
+        label = 'reaping ' if reaping else 'would reap ' if self.dry and self.cfg.get('reap_orphans') else ''
+        self.event(self.k, kind, f'{label}pid {pid} rss={r["rss"] // 1024}M '
+                   f'age={r["age"] // 60}m {detail} {r["cmd"][:200]}', key=f'runaway|{key}', name='machine')
+        return True
+
+    def runaways(self):
+        c = self.cfg
+        reap = bool(c.get('reap_orphans')) and not self.dry
+        table = ps_table()
+        seen = self.st.setdefault('runaways', {})
+        for key in list(seen):
+            kind, _, rest = key.partition('|')
+            pid = rest.split('|')[0]
+            if kind == 'resource' and now() - seen[key] > 86400 or kind != 'resource' and int(pid) not in table:
+                del seen[key]
+        sessions = [p for p, r in table.items() if session_proc(r['cmd'])]
+        tracked = [self.k / 'coordinator.pid']
+        lanes = [(C, d) for C, ds in self.lanes() for d in ds]
+        for _, d in lanes:
+            tracked += [d / 'pid', d / 'driver.pid']
+        tracked_pids = [int(t) for t in map(read_text, tracked) if t.isdigit()]
+        protected = {os.getpid(), *ancestors(table, os.getpid())} | descendants(table, [os.getpid(), *sessions, *tracked_pids])
+        roots = [str(self.repo / '.claude/worktrees'), str(self.repo / '.codex/worktrees'),
+                 *map(str, c.get('campaigns', [])), *map(str, c.get('worktree_roots', []))]
+        roots = [r.rstrip('/') + '/' for r in roots]
+        preview = re.compile('|'.join(c.get('preview_patterns', PREVIEW_PATTERNS)))
+        old = [p for p, r in table.items() if p not in protected and r['ppid'] == 1
+               and r['age'] >= c.get('orphan_age_minutes', 30) * 60]
+        cwd = proc_cwds([p for p in old if not any(root in table[p]['cmd'] for root in roots)])
+
+        def under(p, paths):
+            where = cwd.get(p, '') + '/'
+            return any(x in table[p]['cmd'] or where.startswith(x) for x in paths)
+
+        # STOPPED-BUT-RUNNING
+        for _, d in lanes:
+            stop = d / 'STOP'
+            if not stop.exists() or now() - mtime(stop) < 600 or not alive(d / 'driver.pid'):
+                continue
+            pid = int(read_text(d / 'driver.pid'))
+            if pid not in table:
+                continue
+            group = [pid]
+            spec = json.loads(read_text(d / 'driver.cmd') or '{}')
+            name = [a for a in spec.get('args', []) if a != '--once'][1:2]
+            if name:
+                group += [p for p, r in table.items() if f'sleepsafe.py --name {name[0]} ' in r['cmd'] + ' ']
+            tree = descendants(table, group)
+            keep = protected - tree
+            for p in group:
+                if self.runaway_event(seen, 'STOPPED-BUT-RUNNING', p, table[p], f'lane {d.name} STOP {stamp(mtime(stop))}', reap) and reap:
+                    self.reap(table, p, keep, 'STOPPED-BUT-RUNNING')
+        # STALE-PREVIEW
+        preview_roots = [str(self.repo).rstrip('/') + '/', *roots]
+        for p, r in table.items():
+            if p in protected or not preview.search(r['cmd']) or r['age'] < c.get('preview_age_hours', 6) * 3600:
+                continue
+            if not any(x in r['cmd'] for x in preview_roots):
+                continue
+            if any(session_proc(table[a]['cmd'], INTERACTIVE_NAMES) for a in ancestors(table, p) if a in table):
+                continue
+            if self.runaway_event(seen, 'STALE-PREVIEW', p, r, '', reap) and reap:
+                self.reap(table, p, protected, 'STALE-PREVIEW')
+        # ORPHAN
+        for p in old:
+            if preview.search(table[p]['cmd']) or not under(p, roots):
+                continue
+            if self.runaway_event(seen, 'ORPHAN', p, table[p], f'cwd={cwd.get(p, "?")}', reap) and reap:
+                self.reap(table, p, protected, 'ORPHAN')
+        # RESOURCE-FLOOR
+        free, swap = disk_free_gb(self.repo), swap_used_gb()
+        floor, ceiling = c.get('disk_floor_gb', 30), c.get('swap_ceiling_gb', 20)
+        reasons = ([f'free disk {free:.1f} GB < {floor} GB'] if free < floor else []) + \
+                  ([f'swap used {swap:.1f} GB > {ceiling} GB'] if swap is not None and swap > ceiling else [])
+        key = f'resource|{time.strftime("%Y%m%d%H")}'
+        if reasons and key not in seen:
+            seen[key] = now()
+            self.event(self.k, 'RESOURCE-FLOOR', '; '.join(reasons) + f'; top: {top_processes(table)}; largest: '
+                       f'{largest_dirs(c.get("disk_watch", []))}', key=f'runaway|{key}', name='machine')
+
     def tick(self):
         lock = open(self.k / 'tick.lock', 'w')
         try:
@@ -707,6 +956,10 @@ what each remaining item waits on. The next coordinator starts from it. Then run
                     self.tend(C, d)
                 except Exception as e:  # one lane's odd files must not stop the others
                     self.log(f'ERROR {d.name}: {e!r}')
+        try:
+            self.runaways()
+        except Exception as e:
+            self.log(f'ERROR runaways: {e!r}')
         self.check_release_scope()
         self.clear_events(self.pull_remote())
         self.maybe_start_coordinator()
