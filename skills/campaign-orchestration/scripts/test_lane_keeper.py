@@ -624,6 +624,37 @@ class RunawayTest(unittest.TestCase):
         K = self.keeper(reap_orphans=True); self.scan(K)
         self.assertEqual(self.killed, [[500, 501]])
 
+    def test_release_and_heavy_holders_protect_wrapper_and_descendants(self):
+        for heavy in (False, True):
+            with self.subTest(heavy=heavy):
+                self.killed.clear()
+                self.proc(500, f'bash {self.wt}/release-wrapper.sh')
+                self.proc(501, 'bash release_cycle.sh --full', ppid=500)
+                self.proc(502, 'node export-structured.mjs', ppid=501)
+                self.proc(600, f'python3 {self.wt}/unrelated.py')
+                K = self.keeper(reap_orphans=True)
+                K.state_dir.mkdir(parents=True, exist_ok=True)
+                hold = K.state_dir / 'RELEASE-CYCLE-RUNNING'
+                hold.unlink(missing_ok=True)
+                if heavy:
+                    lock = K.state_dir / '.heavy.exclusive'
+                    lock.mkdir(exist_ok=True); (lock/'pid').write_text('501')
+                else:
+                    hold.write_text('pid=501\nstage=export\n')
+                self.scan(K)
+                self.assertEqual(self.killed, [[600]])
+
+    def test_stopped_lane_cannot_override_active_release_protection(self):
+        self.proc(700, f'bash drive-loop.sh {self.d} release 172800')
+        self.proc(701, 'bash release_cycle.sh --full', ppid=700)
+        (self.d/'driver.pid').write_text('700')
+        stop=self.d/'STOP';stop.write_text('batch freeze');touch(stop,time.time()-700)
+        K=self.keeper(reap_orphans=True)
+        K.state_dir.mkdir(parents=True,exist_ok=True)
+        (K.state_dir/'RELEASE-CYCLE-RUNNING').write_text('pid=701\nstage=gate\n')
+        with mock.patch.object(lk,'alive',return_value=True): self.scan(K)
+        self.assertEqual(self.killed, [])
+
     def test_not_orphans_young_outside_lanes_tracked_or_sessions(self):
         self.proc(600, f'python3 {self.wt}/x.py', age=60)                       # younger than 30 min
         self.proc(601, 'python3 /elsewhere/daemon.py')                          # not under a lane root

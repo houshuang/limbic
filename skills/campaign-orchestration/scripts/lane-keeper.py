@@ -885,7 +885,23 @@ what each remaining item waits on. The next coordinator starts from it. Then run
         for _, d in lanes:
             tracked += [d / 'pid', d / 'driver.pid']
         tracked_pids = [int(t) for t in map(read_text, tracked) if t.isdigit()]
-        protected = {os.getpid(), *ancestors(table, os.getpid())} | descendants(table, [os.getpid(), *sessions, *tracked_pids])
+        # Detached release wrappers can legitimately have ppid 1. Protect the
+        # holder's ancestors and descendants, including the heavy-slot wrapper.
+        hold = read_text(self.state_dir / 'RELEASE-CYCLE-RUNNING')
+        release_pid = re.search(r'^pid=(\d+)$', hold, re.M)
+        holders = [int(release_pid[1])] if release_pid else []
+        heavy_pid = read_text(self.state_dir / '.heavy.exclusive/pid')
+        if heavy_pid.isdigit(): holders.append(int(heavy_pid))
+        release_chain = set()
+        for pid in holders:
+            if pid in table:
+                release_chain.update([pid, *ancestors(table, pid)])
+        # Do not traverse descendants of pid 1: that would protect all orphans.
+        roots_to_protect = release_chain - {1}
+        release_protected = roots_to_protect | descendants(table, roots_to_protect)
+        protected = ({os.getpid(), *ancestors(table, os.getpid())}
+                     | descendants(table, [os.getpid(), *sessions, *tracked_pids])
+                     | release_protected)
         roots = [str(self.repo / '.claude/worktrees'), str(self.repo / '.codex/worktrees'),
                  *map(str, c.get('campaigns', [])), *map(str, c.get('worktree_roots', []))]
         roots = [r.rstrip('/') + '/' for r in roots]
@@ -912,8 +928,9 @@ what each remaining item waits on. The next coordinator starts from it. Then run
             if name:
                 group += [p for p, r in table.items() if f'sleepsafe.py --name {name[0]} ' in r['cmd'] + ' ']
             tree = descendants(table, group)
-            keep = protected - tree
+            keep = (protected - tree) | release_protected
             for p in group:
+                if p in release_protected: continue
                 if self.runaway_event(seen, 'STOPPED-BUT-RUNNING', p, table[p], f'lane {d.name} STOP {stamp(mtime(stop))}', reap) and reap:
                     self.reap(table, p, keep, 'STOPPED-BUT-RUNNING')
         # STALE-PREVIEW
