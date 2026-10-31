@@ -296,9 +296,11 @@ class Keeper:
             self.log(f'COST-CAP {name}: stopping session {pid} for a handoff')
             if self.dry:
                 continue
-            for child in subprocess.run(['pgrep', '-P', pid], capture_output=True, text=True).stdout.split():
-                os.kill(int(child), signal.SIGTERM)
-            os.kill(int(pid), signal.SIGTERM)
+            for target in subprocess.run(['pgrep', '-P', pid], capture_output=True, text=True).stdout.split() + [pid]:
+                try:
+                    os.kill(int(target), signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
             time.sleep(3)
             self.run(['bash', str(SCRIPTS / 'resume.sh'), str(C), name, str(C / 'msg-handoff.md')], self.repo, C / 'autoresume.log')
             time.sleep(1)
