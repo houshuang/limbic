@@ -17,8 +17,8 @@ events in <state>/keeper/EVENTS. A lane's events are cleared by `ack <lane-dir> 
 
 When events are pending and no coordinator is live, the keeper starts one: `claude -p` in the repo on the newest
 handover. Live means: a `lane-keeper.py watch` heartbeat (an interactive coordinator's Monitor), a keeper-started
-coordinator still running, or a registered coordinator transcript written in the last 20 minutes. `retire` (run by a
-coordinator after it writes its handover) writes keeper/retired: everything older than it stops counting as live, so the
+coordinator still running, or a registered coordinator with an assistant/tool-result entry in the last 20 minutes. `retire` (run by a
+coordinator after it writes its handover) appends keeper/retired: named sessions never count again; older signals stop counting, so the
 next tick starts a successor, without waiting out min_gap_minutes. The headless run's log is
 keeper/coordinator-<stamp>.log (stream-json); its session id is in keeper/coordinator.session and keeper.log.
 
@@ -38,6 +38,7 @@ Optional config keys:
       prefix for every command the keeper starts, so lanes leave a systemd timer's cgroup instead of dying with it
 Linux: systemd timer instead of launchd; CODEX_HOME is honoured; caffeinate is used only where it exists.
 """
+import datetime as dt
 import fcntl, json, os, re, shlex, shutil, signal, subprocess, sys, time, uuid
 from pathlib import Path
 
@@ -47,6 +48,7 @@ REG = Path.home() / '.agents/coordinators'
 CLOSING = re.compile(r'^(DONE\.md|READY-[0-9][0-9a-z]*\.md|DRIVER-FINISHED\.json|RETIRED)$')
 TRANSIENT = re.compile(r'at capacity|429 Too Many|retry limit')
 FRESH_LIMIT, CONTINUE_LIMIT, QUIET = 25, 2, 3600
+TRANSCRIPT_TAIL = 1_000_000  # bounded I/O even for a multi-hundred-MB session
 COORD_LIVE = 1200
 RETIRE_GRACE = 60   # a retiring session still writes its last message after `retire`
 _FNM = Path.home() / 'Library/Application Support/fnm/node-versions/v24.11.1/installation/bin'
@@ -82,6 +84,54 @@ def mtime(p):
         return 0
 
 
+def read_text(p):
+    try:
+        return Path(p).read_text().strip()
+    except OSError:
+        return ''
+
+
+def retired_ids(p):
+    # Keep the existing marker format; append retirements so a later handover
+    # cannot revive an older session whose registry file reappeared.
+    return {line.split()[-1] for line in read_text(p).splitlines() if len(line.split()) == 3
+            and line.split()[-1] != '-'}
+
+
+def transcript_activity(p):
+    """Last assistant/tool completion timestamp, never filesystem metadata writes.
+
+    Read a bounded tail and discard any partial first/last JSON line. No valid
+    work entry in that tail means there is no evidence this session is live.
+    """
+    try:
+        with Path(p).open('rb') as fh:
+            fh.seek(0, 2)
+            start = max(0, fh.tell() - TRANSCRIPT_TAIL)
+            fh.seek(start)
+            if start:
+                fh.readline(TRANSCRIPT_TAIL)  # incomplete first line
+            lines = fh.read(TRANSCRIPT_TAIL).splitlines()
+    except OSError:
+        return 0
+    for line in reversed(lines):
+        try:
+            row = json.loads(line)
+            if not isinstance(row, dict):
+                continue
+            content = (row.get('message') or {}).get('content', [])
+            tool_result = row.get('type') == 'user' and isinstance(content, list) and any(
+                isinstance(c, dict) and c.get('type') == 'tool_result' for c in content)
+            if row.get('type') != 'assistant' and not tool_result:
+                continue
+            t = dt.datetime.fromisoformat(row['timestamp'].replace('Z', '+00:00'))
+            if t.tzinfo is not None:
+                return t.timestamp()
+        except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
+            continue
+    return 0
+
+
 def birth(p):
     """When the file was created. Linux has no st_birthtime: for codex.log, launch.sh and resume.sh write the session
     start beside it (session-at); without either the short-session and later-handoff checks stay off."""
@@ -98,10 +148,12 @@ def birth(p):
         return 0
 
 
-def alive(pidfile):
+def alive(pidfile, pid=None):
     """A pid file is written after its process starts; a process that started later holds a recycled pid."""
     try:
-        pid = int(Path(pidfile).read_text().split()[0])
+        pid = int(pid if pid is not None else Path(pidfile).read_text().split()[0])
+        if pid <= 0:
+            return False
         os.kill(pid, 0)
     except (OSError, ValueError, IndexError):
         return False
@@ -412,38 +464,46 @@ class Keeper:
 
     # coordinator
     def coordinator_live(self):
-        """Signals from before the last `retire` belong to the coordinator that retired and do not count. A watch exits on
-        retire, so its heartbeat stops; a retiring session's transcript gets RETIRE_GRACE for its last words."""
+        """Retired IDs never revive; other sessions need a watch, headless PID or recent work."""
         retired = mtime(self.k / 'retired')
+        ids = retired_ids(self.k / 'retired')
         beat = mtime(self.k / 'watch.heartbeat')
-        if now() - beat < 180 and beat > retired:
+        owner = read_text(self.k / 'watch.heartbeat').split()
+        watch_alive = not owner or (len(owner) == 2 and alive(self.k / 'watch.heartbeat', owner[1]))
+        if watch_alive and now() - beat < 180 and beat > retired and (not owner or owner[0] not in ids):
             return 'watch heartbeat'
-        if alive(self.k / 'coordinator.pid') and mtime(self.k / 'coordinator.pid') > retired:
+        sid = read_text(self.k / 'coordinator.session')
+        if sid not in ids and alive(self.k / 'coordinator.pid') and mtime(self.k / 'coordinator.pid') > retired:
             return 'keeper-started coordinator'
         for f in REG.glob('*.json') if REG.exists() else []:
+            if f.stem in ids:
+                continue
             try:
                 r = json.loads(f.read_text())
-            except ValueError:
+            except (OSError, ValueError):
                 continue
             if r.get('repo') != str(self.repo) or not r.get('transcript'):
                 continue
-            t = mtime(r['transcript'])
+            t = transcript_activity(r['transcript'])
             if now() - t < COORD_LIVE and (mtime(f) > retired or t > retired + RETIRE_GRACE):
                 return f'session {f.stem[:8]} active'
         return None
 
     def retire(self, sid=None):
-        """The calling coordinator hands over: the next tick treats it as gone and may start a successor at once."""
+        """Publish retirement before removing registration: the writer must not recreate it."""
         sid = sid or os.environ.get('CLAUDE_CODE_SESSION_ID') or os.environ.get('CLAUDE_SESSION_ID')
+        if sid and not re.fullmatch(r'[0-9A-Za-z-]+', sid):
+            raise ValueError('invalid session id')
+        with (self.k / 'retired').open('a') as fh:
+            fh.write(f'{stamp()} {sid or "-"}\n')
         removed = ''
-        if sid and re.fullmatch(r'[0-9A-Za-z-]+', sid):
+        if sid:
             f = REG / f'{sid}.json'
             try:
                 if json.loads(f.read_text()).get('repo') == str(self.repo):
                     f.unlink(); removed = f'; removed {f}'
             except (OSError, ValueError):
                 pass
-        (self.k / 'retired').write_text(f'{stamp()} {sid or "-"}\n')
         self.log(f'RETIRE coordinator {sid or "(no session id)"}{removed}')
 
     def handover(self):
@@ -564,14 +624,21 @@ def main():
         ev.touch()
         pos = ev.stat().st_size
         started = now()
-        while True:
-            if mtime(K.k / 'retired') > started:
-                print('retired: this watch stops so the keeper can start a successor'); return
-            (K.k / 'watch.heartbeat').touch()
-            if ev.stat().st_size > pos:
-                with open(ev) as fh:
-                    fh.seek(pos); sys.stdout.write(fh.read()); sys.stdout.flush(); pos = fh.tell()
-            time.sleep(30)
+        sid = os.environ.get('CLAUDE_CODE_SESSION_ID') or os.environ.get('CLAUDE_SESSION_ID') or '-'
+        beat = K.k / 'watch.heartbeat'
+        owner = f'{sid} {os.getpid()}\n'
+        try:
+            while True:
+                if sid in retired_ids(K.k / 'retired') or mtime(K.k / 'retired') > started:
+                    print('retired: this watch stops so the keeper can start a successor'); return
+                beat.write_text(owner)
+                if ev.stat().st_size > pos:
+                    with open(ev) as fh:
+                        fh.seek(pos); sys.stdout.write(fh.read()); sys.stdout.flush(); pos = fh.tell()
+                time.sleep(30)
+        finally:
+            if read_text(beat) == owner.strip():
+                beat.unlink(missing_ok=True)
     elif mode == 'retire':
         sid = args[args.index('--session') + 1] if '--session' in args else None
         K.retire(sid)

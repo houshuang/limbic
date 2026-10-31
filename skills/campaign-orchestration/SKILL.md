@@ -144,16 +144,24 @@ watcher processes were running the next morning.
 - **Outcomes that need judgement are events** (READY-*, DONE.md, job exit, caps, an hour's silence) in
   `<state>/keeper/EVENTS`. `lane-keeper.py ack <lane-dir> "<what you did>"` (HANDLED) or RETIRED clears them.
 - **A coordinator is started when none is live.** Live = a `lane-keeper.py watch` Monitor heartbeat, a keeper-started
-  coordinator still running, or a registered coordinator transcript written in the last 20 minutes. Otherwise the keeper
+  coordinator still running, or a registered coordinator with an assistant or user tool-result entry in the last
+  20 minutes (read from a bounded transcript tail; metadata writes do not count). Otherwise the keeper
   starts `claude -p` in the repo on the newest handover, at most one at a time, 10 minutes apart, 16 a day; if two
   successive runs leave the same events pending it stops and writes COORDINATOR-STUCK.md.
 - An interactive coordinator arms `lane-keeper.py watch` under a Monitor (re-arm on expiry) instead of lane-audit --loop.
 - **Handing over: write the handover, then `lane-keeper.py retire [--config F] [--session ID]`.** A retiring coordinator
   writes `<state>/<id>-HANDOVER-<YYYYMMDD-HHMM>.md` and runs retire (ID defaults to `$CLAUDE_CODE_SESSION_ID`). Without it
-  the successor waited ~20 minutes, because the retiring transcript kept it «live». Retire writes `keeper/retired` and
-  removes `~/.agents/coordinators/<ID>.json`; from then on a watch heartbeat, coordinator.pid or registry entry counts
-  only if newer than the marker (a transcript gets 60 s for the session's last words), running watches exit, and the next
+  the successor waited ~20 minutes, because the retiring transcript kept it «live». Retire appends the session ID to `keeper/retired` and
+  removes `~/.agents/coordinators/<ID>.json`; named retired IDs never count again, even if late transcript or registry
+  writes follow the marker. Older anonymous signals stop counting, running watches exit, and the next
   tick starts the successor without waiting out `min_gap_minutes`. A coordinator started after the retire counts as usual.
+- **Registration requires a real coordinator signal.** `scripts/coordinator-hook.py` is the versioned source for
+  `~/.agents/bin/coordinator-hook.py`; install it alongside keeper updates. It registers only the session owning a
+  fresh `watch.heartbeat` (session ID and PID, written by `watch`) or `coordinator.session` with a live headless PID.
+  `tick`, `retire --session <other>`, `status`, `ack`, `launch.sh`, and handover text mentioning `watch` do not
+  register the caller. All hooks refuse retired IDs, removing any late registration; `watch` removes its own
+  heartbeat on exit. A heartbeat with a dead watch PID stops counting immediately; a stale heartbeat expires after
+  three minutes. A quiet transcript then permits a successor. Blank legacy heartbeats retain the three-minute expiry.
 - **Headless coordinator: log and takeover.** The keeper runs `claude -p … --session-id <uuid> --output-format stream-json
   --verbose`, so `keeper/coordinator-<stamp>.log` fills while it works (`tail -f`). The session id is in
   `keeper/coordinator.session` and in keeper.log (`COORDINATOR-SESSION <id> … claude --resume <id>`). Its prompt says to
