@@ -16,7 +16,9 @@ if [[ ${LANE_SESSION_GUARDED:-} != "$(cd "$C" && pwd -P)/$lane" ]]; then
 fi
 mkdir -p "$C/$lane"
 brief="$C/briefs/$lane.md"
-prompt="You are the Codex worker for lane $lane. Your brief follows; it is complete and authorised. Begin now.
+claude_model() { [[ $1 =~ ^(opus|sonnet|haiku|fable|claude-) ]]; }
+engine=Codex; claude_model "$model" && engine=Claude
+prompt="You are the $engine worker for lane $lane. Your brief follows; it is complete and authorised. Begin now.
 
 $(cat "$brief")"
 if [ -f "$C/$lane/HANDOFF.md" ]; then
@@ -40,6 +42,13 @@ printf '%s' "$prompt" > "$C/$lane/PROMPT.txt"
 cd "$REPO"
 caf=(); command -v caffeinate >/dev/null && caf=(caffeinate -i)
 date +%s > "$C/$lane/session-at"   # Linux has no file birth time: the keeper reads the session start here
+if [[ $engine == Claude ]]; then
+  # Subscription, not API billing: the child must not see ANTHROPIC_API_KEY. Effort has no Claude CLI flag and is ignored.
+  sid=$(python3 -c 'import uuid; print(uuid.uuid4())')
+  echo "session id: $sid" >> "$C/$lane/codex.log"
+  nohup ${caf[@]+"${caf[@]}"} env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u LANE_SESSION_GUARDED claude -p "$(cat "$C/$lane/PROMPT.txt")" --model "$model" --permission-mode bypassPermissions --session-id "$sid" --output-format stream-json --verbose < /dev/null >> "$C/$lane/codex.log" 2>&1 &
+else
 nohup ${caf[@]+"${caf[@]}"} env -u OPENAI_API_KEY -u LANE_SESSION_GUARDED codex exec -m "$model" -c model_reasoning_effort="$effort" --dangerously-bypass-approvals-and-sandbox -C "$REPO" "$(cat "$C/$lane/PROMPT.txt")" < /dev/null >> "$C/$lane/codex.log" 2>&1 &
+fi
 echo $! > "$C/$lane/pid"; echo "$model $effort" > "$C/$lane/model"
 echo "launched $lane ($model/$effort)"
