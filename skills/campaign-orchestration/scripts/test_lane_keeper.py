@@ -182,6 +182,41 @@ class RetireTest(unittest.TestCase):
         self.assertIn('--verbose', cmd)
         self.assertIn('--session-id sid-1', joined)
 
+    def test_codex_successor_uses_adapter_and_run_specific_retirement(self):
+        self.K.cfg['coordinator']={'engine':'codex','model':'fixture-model','effort':'medium'}
+        self.K.st['events']={'k':{'lane':'/lane','kind':'READY','detail':'checkpoint'}}
+        with mock.patch.object(self.K,'coordinator_live',return_value=None), mock.patch.object(lk.subprocess,'Popen') as popen:
+            popen.return_value.pid=99999999
+            self.K.maybe_start_coordinator()
+        command=popen.call_args.args[0]
+        self.assertIn(str(lk.SCRIPTS/'codex-coordinator.py'),command)
+        self.assertIn('--reservation',command)
+        self.assertIn('fixture-model',command)
+        self.assertEqual(popen.call_args.kwargs['stdin'],subprocess.DEVNULL)
+        self.assertTrue(popen.call_args.kwargs['start_new_session'])
+        prompt=(self.K.k/'coordinator-prompt.txt').read_text()
+        self.assertIn('$(cat ',prompt)
+        self.assertIn('.session)',prompt)
+        self.assertTrue((self.K.k/'coordinator.session').read_text().startswith('pending-'))
+
+    def test_codex_engine_keeps_start_gap_daily_and_stuck_limits(self):
+        self.K.dry=True
+        self.K.cfg['coordinator']={'engine':'codex','max_starts_per_day':2,'min_gap_minutes':10}
+        self.K.st['events']={'k':{'lane':'/lane','kind':'READY','detail':'checkpoint'}}
+        self.K.st['coordinator']={'day':time.strftime('%F'),'starts':1,'last':self.t-60}
+        self.K.maybe_start_coordinator()
+        self.assertEqual(self.K.st['coordinator']['starts'],1)
+        self.K.st['coordinator']['last']=self.t-1000
+        self.K.maybe_start_coordinator()
+        self.assertEqual(self.K.st['coordinator']['starts'],2)
+        self.K.st['coordinator']['last']=self.t-1000
+        self.K.maybe_start_coordinator()
+        self.assertEqual(self.K.st['coordinator']['starts'],2)
+        self.K.st['coordinator'].update(starts=0,same=2,last_keys=['k'],last=self.t-1000)
+        self.K.maybe_start_coordinator()
+        self.assertEqual(self.K.st['coordinator']['starts'],0)
+        self.assertTrue((self.K.k/'COORDINATOR-STUCK.md').exists())
+
 
 class RegistrationTest(unittest.TestCase):
     register = RetireTest.register

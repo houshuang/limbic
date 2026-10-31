@@ -15,7 +15,7 @@ While a session runs: costguard over cap → stop it and resume with msg-handoff
 Lane outcomes that need judgement (READY-*, DONE.md, a driver-only job's exit, caps, an hour's silence) become
 events in <state>/keeper/EVENTS. A lane's events are cleared by `ack <lane-dir> <note>` (writes HANDLED) or RETIRED.
 
-When events are pending and no coordinator is live, the keeper starts one: `claude -p` in the repo on the newest
+When events are pending and no coordinator is live, the keeper starts one (Claude by default; optional Codex) on the newest
 handover. Live means: a `lane-keeper.py watch` heartbeat (an interactive coordinator's Monitor), a keeper-started
 coordinator still running, or a registered coordinator with an assistant/tool-result entry in the last 20 minutes. `retire` (run by a
 coordinator after it writes its handover) appends keeper/retired: named sessions never count again; older signals stop counting, so the
@@ -29,6 +29,10 @@ keeper/coordinator-<stamp>.log (stream-json); its session id is in keeper/coordi
     lane-keeper.py status [--config F]
 
 Optional config keys:
+  "coordinator": {"engine": "codex"} opts into a subscription Codex successor (default "claude").
+      Optional model/effort select Codex settings; existing daily/gap/stuck limits remain.
+      The stream adapter captures the real thread ID and registers timestamped work events;
+      per-run .session files make retire commands safe even after a successor starts.
   "remote_events": [{"ssh": "alif-ts", "path": "/srv/agents/skard/keeper/EVENTS", "prefix": "alif"}]
       each tick reads that keeper's new EVENTS lines over ssh and records them here, lane named <prefix>:<lane> and
       kept as host:<lane-dir>; they clear when the remote keeper clears them (ack host:<lane-dir> writes HANDLED there)
@@ -139,7 +143,8 @@ def transcript_activity(p):
             content = (row.get('message') or {}).get('content', [])
             tool_result = row.get('type') == 'user' and isinstance(content, list) and any(
                 isinstance(c, dict) and c.get('type') == 'tool_result' for c in content)
-            if row.get('type') != 'assistant' and not tool_result:
+            codex_work = row.get('type') == 'item.completed' and (row.get('item') or {}).get('type') in ('agent_message', 'command_execution', 'mcp_tool_call', 'file_change', 'web_search')
+            if row.get('type') != 'assistant' and not tool_result and not codex_work:
                 continue
             t = dt.datetime.fromisoformat(row['timestamp'].replace('Z', '+00:00'))
             if t.tzinfo is not None:
@@ -766,6 +771,9 @@ class Keeper:
         if live:
             return
         c = self.cfg.get('coordinator', {})
+        engine = c.get('engine', 'claude')
+        if engine not in ('claude', 'codex'):
+            raise ValueError('coordinator.engine must be claude or codex')
         S = self.st['coordinator']
         today = time.strftime('%F')
         if S.get('day') != today:
@@ -790,7 +798,12 @@ class Keeper:
         script = SCRIPTS / 'lane-keeper.py'
         out = self.k / f'coordinator-{time.strftime("%Y%m%d-%H%M")}.log'
         sid = str(uuid.uuid4())
-        retire = f'python3 {script} retire --config {self.cfg_path} --session {sid}'
+        session_file = out.with_name(out.stem+'-'+sid[:8]+'.session')
+        reservation = 'pending-'+sid if engine == 'codex' else sid
+        retire = f'python3 {shlex.quote(str(script))} retire --config {shlex.quote(str(self.cfg_path))} --session {sid}'
+        if engine == 'codex':
+            out = out.with_name(out.stem+'-'+sid[:8]+'.log')
+            retire = f'python3 {shlex.quote(str(script))} retire --config {shlex.quote(str(self.cfg_path))} --session "$(cat {shlex.quote(str(session_file))})"'
         prompt = f"""You are the integrator and coordinator for {self.repo}, started headless by lane-keeper at {stamp()} because \
 events are pending and no coordinator was live. Read the newest handover first: {handover}. Then the repository rules.
 
@@ -805,17 +818,30 @@ first, and never run `git reset --hard`, `git checkout -- <path>`, `git restore`
 you did not create: other sessions keep uncommitted work in them.
 Do not watch long jobs from this session and do not arm monitors. Start long jobs detached under \
 `{SCRIPTS / 'drive-loop.sh'}` in a folder under one of the campaign dirs (use --once for a job that must not rerun on \
-failure, such as a release cycle); the keeper reports how they end and starts a coordinator then.
+failure, such as a release cycle); use subprocess.Popen with stdin=DEVNULL and start_new_session=True, since nohup alone does not leave the tool process group. The keeper reports how they end and starts a coordinator then.
 Before you end, write {self.state_dir}/keeper-HANDOVER-<YYYYMMDD-HHMM>.md (under 400 words): what you did, what runs, \
 what each remaining item waits on. The next coordinator starts from it. Then run `{retire}` and end."""
         self.log(f'COORDINATOR-START ({len(pending)} events; handover {handover and handover.name}) → {out.name}')
-        self.log(f'COORDINATOR-SESSION {sid}: log {out}; take over with kill -9 <coordinator.pid>, then '
-                 f'cd {self.repo} && claude --resume {sid}')
+        if engine == 'claude':
+            self.log(f'COORDINATOR-SESSION {sid}: log {out}; take over with kill -9 <coordinator.pid>, then '
+                     f'cd {self.repo} && claude --resume {sid}')
+        else:
+            self.log(f'COORDINATOR-RESERVATION {reservation}: actual Codex session will be captured in {session_file}; log {out}')
         if self.dry:
             return
         (self.k / 'coordinator-prompt.txt').write_text(prompt)
-        (self.k / 'coordinator.session').write_text(sid + '\n')
-        p = subprocess.Popen(self.coordinator_cmd(prompt, sid),
+        (self.k / 'coordinator.session').write_text(reservation + '\n')
+        command = self.coordinator_cmd(prompt, sid)
+        if engine == 'codex':
+            prompt_file = out.with_suffix('.prompt.txt')
+            prompt_file.write_text(prompt)
+            command = [*CAFFEINATE, sys.executable, str(SCRIPTS/'codex-coordinator.py'),
+                       '--repo', str(self.repo), '--keeper', str(self.k), '--prompt', str(prompt_file),
+                       '--out', str(out), '--registry', str(REG), '--reservation', reservation,
+                       '--session-file', str(session_file)]
+            if c.get('model'): command += ['--model', c['model']]
+            if c.get('effort'): command += ['--effort', c['effort']]
+        p = subprocess.Popen(command,
                              cwd=self.repo, stdin=subprocess.DEVNULL, stdout=open(out, 'a'), stderr=subprocess.STDOUT,
                              start_new_session=True, env={**os.environ, 'PATH': PATH})
         (self.k / 'coordinator.pid').write_text(str(p.pid))
