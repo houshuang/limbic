@@ -47,7 +47,11 @@ DEFAULT_CONFIG = Path.home() / 'src/skard/.coordinator.json'
 SCRIPTS = Path(__file__).resolve().parent
 REG = Path.home() / '.agents/coordinators'
 CLOSING = re.compile(r'^(DONE\.md|READY-[0-9][0-9a-z]*\.md|DRIVER-FINISHED\.json|RETIRED)$')
-TRANSIENT = re.compile(r'at capacity|429 Too Many|retry limit')
+TRANSIENT = re.compile(r'at capacity|429 Too Many|retry limit'
+                       # Claude CLI: limit results and rejected rate_limit_events; "allowed" events are routine
+                       r'|usage limit|hit your (?:\w+ )?limit|rate_limit_error|overloaded_error|API Error: (?:429|529)'
+                       r'|"error":\s*"rate_limit"|"rate_limit_info":\s*\{"status":\s*"rejected"', re.I)
+CLAUDE_MODEL = re.compile(r'^(opus|sonnet|haiku|fable|claude-)')
 FRESH_LIMIT, CONTINUE_LIMIT, QUIET = 25, 2, 3600
 TRANSCRIPT_TAIL = 1_000_000  # bounded I/O even for a multi-hundred-MB session
 COORD_LIVE = 1200
@@ -56,6 +60,7 @@ _FNM = Path.home() / 'Library/Application Support/fnm/node-versions/v24.11.1/ins
 PATH = ':'.join(dict.fromkeys([*([str(_FNM)] if _FNM.is_dir() else []), str(Path.home() / '.local/bin'), '/opt/homebrew/bin',
                                *os.environ.get('PATH', '').split(':'), '/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin']))
 CODEX_SESSIONS = Path(os.environ.get('CODEX_HOME', Path.home() / '.codex')) / 'sessions'
+CLAUDE_PROJECTS = Path(os.environ.get('CLAUDE_CONFIG_DIR', Path.home() / '.claude')) / 'projects'
 CAFFEINATE = ['caffeinate', '-i'] if shutil.which('caffeinate') else []
 SSH = ['ssh', '-o', 'ConnectTimeout=10', '-o', 'BatchMode=yes']
 
@@ -234,12 +239,20 @@ class Keeper:
         return process
 
     # lanes
+    @staticmethod
+    def claude_lane(d):
+        model = read_text(d / 'model').split()
+        return bool(model and CLAUDE_MODEL.match(model[0]))
+
     def session_id(self, d):
-        """Only an id with a session file: `codex exec resume <unknown id>` silently starts a new, briefless session."""
+        """Only an id with a session file of the lane's engine: `codex exec resume <unknown id>` silently starts a new,
+        briefless session, and a Codex id cannot be resumed by claude after an engine switch."""
         sid = last_session_id(d / 'codex.log')
-        if sid and list(CODEX_SESSIONS.glob(f'*/*/*/*{sid}.jsonl')):
-            return sid
-        return None
+        if not sid:
+            return None
+        if Keeper.claude_lane(d):
+            return sid if list(CLAUDE_PROJECTS.glob(f'*/{sid}.jsonl')) else None
+        return sid if list(CODEX_SESSIONS.glob(f'*/*/*/*{sid}.jsonl')) else None
 
     def acked(self, d):
         return max(mtime(d / 'HANDLED'), mtime(d / 'RETIRED'), mtime(d / 'MERGED.md'))
@@ -278,6 +291,8 @@ class Keeper:
 
     def resume(self, C, d, msg_file, why):
         if not self.session_id(d):
+            if Keeper.claude_lane(d):   # engine switched to Claude (or its session never started): brief + HANDOFF
+                return self.launch(C, d, f'{why}; no Claude session to resume')
             return self.event(d, 'ENDED', f'{why}; no session id in codex.log to resume')
         self.log(f'RESUME {d.name} ({why})')
         self.run(['bash', str(SCRIPTS / 'resume.sh'), str(C), d.name, str(msg_file)], self.repo, C / 'autoresume.log')

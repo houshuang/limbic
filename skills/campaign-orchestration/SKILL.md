@@ -67,17 +67,28 @@ Read this before launching worker lanes, and add to it after every incident
 - `launch.sh <campaign-dir> <lane> [model] [effort]` starts `codex exec` with
   the brief `<campaign-dir>/briefs/<lane>.md` under `nohup caffeinate -i`, log
   in `<campaign-dir>/<lane>/codex.log`, pid in `pid`. (No tmux on the Mac.)
+- **The model name picks the engine.** A model matching `opus|sonnet|haiku|fable|claude-*` starts
+  `claude -p … --model <m> --permission-mode bypassPermissions --session-id <uuid> --output-format stream-json
+  --verbose` instead, with `ANTHROPIC_API_KEY` unset (subscription, not API billing); the effort argument is ignored.
+  launch.sh writes `session id: <uuid>` into codex.log first, so the same log, pid, `model` and `session-at` files
+  serve both engines. To switch a lane, write `sonnet medium` (or `opus high`) into `<lane>/model`: the keeper's
+  next launch uses it, and a resume of a lane whose last session is not a Claude session
+  (`~/.claude/projects/*/<sid>.jsonl`) starts a fresh Claude session with brief + HANDOFF instead. A live session
+  keeps its engine until it ends. Switching back to Codex has no such bridge: the keeper reports ENDED; relaunch.
+- costguard.py reads Codex token_count records only. Claude lanes are listed as skipped in COST.md and never
+  capped. The keeper runs the campaign's own copy of costguard.py, so refresh that copy to get the skip row.
 - A cost-capped lane can write `NEXT-COMMAND`: one command line, `bash <installed scripts>/drive-loop.sh [--once] <lane-state-dir> <job> <limit> -- <driver argv>`. This is an already authorised continuation. The keeper starts it detached instead of a handoff session and consumes the file after launch; use `--once` for release cycles. A handoff may prepare this command even when told to stop new work.
 - Optional `.coordinator.json` `release_scope` names a `RELEASE-SCOPE` file (relative to the repo, or absolute): one commit or path to a lane READY file per line, with `#` comments. READY files resolve relative to the scope file; labelled `HEAD` or `commit` IDs identify deliverables (bases and measurements are ignored). When all are on main and no release cycle is alive, the keeper emits `RELEASE-READY` once per scope hash.
 - `resume.sh <campaign-dir> <lane> <message-file>` resumes the lane's **own**
-  session (`codex exec resume <session-id> "<msg>"`), so the worker keeps its
+  session (`codex exec resume <session-id> "<msg>"` or `claude -p --resume <session-id> "<msg>"`), so the worker keeps its
   context. Use it to deliver rule changes too: a running session read the
   rules once at start and never sees later edits.
 - `watch.sh <campaign-dir> <lanes…>` is the watcher; it auto-resumes a lane that
   died on `at capacity` / `429 Too Many Requests` after 60 s (5 min after three
   repeats), with no cap on attempts, using `<campaign-dir>/msg-capacity.md`.
-- Session-level provider errors (`Selected model is at capacity`, HTTP 429)
-  kill `codex exec` outright; they are transient, so resume, do not relaunch.
+- Session-level provider errors (`Selected model is at capacity`, HTTP 429; for Claude lanes `usage limit`,
+  `hit your … limit`, `rate_limit_error`, `overloaded_error`, `API Error: 429/529`, a rejected `rate_limit_event`)
+  kill the session outright; they are transient, so resume, do not relaunch.
   Stian (26 Oct 2026): Codex often times out with 429 but a plain retry works.
   Treat a single 429 as routine, not as an account limit: retry the call (or
   resume the session) after a short wait before reducing workers or stopping

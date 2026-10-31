@@ -4,9 +4,12 @@
 For each lane session: current context per turn, tokens since launch, tokens/hour.
 Writes COST.md. Exit status 3 names lanes over a hard cap so the watcher can force a handoff.
 Caps: context > 150k tokens per turn, or > 120 turns in one session, or > 15M gross tokens/hour sustained over 30+ min.
+The caps read Codex token_count records. Lanes whose model file names a Claude model (subscription, no per-token
+bill) are listed as skipped and never capped.
 """
 import json, glob, os, sys, time, re
-C = '/Users/stian/src/skard-state/campaign-20261023'
+C = os.environ.get('CAMPAIGN_DIR', '/Users/stian/src/skard-state/campaign-20261023')
+CLAUDE = re.compile(r'^(opus|sonnet|haiku|fable|claude-)')
 CTX, TURNS, RATE = 150_000, 120, 15_000_000
 def session_file(lane):
     logs = sorted(glob.glob(f'{C}/{lane}/codex*.log'), key=os.path.getmtime)
@@ -17,7 +20,13 @@ def session_file(lane):
             if f: return f[0], os.path.getmtime(log)
     return None, None
 rows, over = [], []
+def claude_lane(lane):
+    try: model = open(f'{C}/{lane}/model').read().split()
+    except OSError: return False
+    return bool(model and CLAUDE.match(model[0]))
 for lane in sys.argv[1:]:
+    if claude_lane(lane):
+        rows.append(f'| {lane} | | | | | skipped (claude) |'); continue
     f, started = session_file(lane)
     if not f: continue
     turns = 0; first = last = None; ctx = 0

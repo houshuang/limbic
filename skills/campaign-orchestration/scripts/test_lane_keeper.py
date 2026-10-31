@@ -458,5 +458,122 @@ class SessionGuardTest(unittest.TestCase):
         self.assertIn('session id: old-fixture',(self.d/'codex.log').read_text())
 
 
+class ClaudeEngineTest(unittest.TestCase):
+    """Lanes whose model file names a Claude model run `claude -p` instead of `codex exec`."""
+    def setUp(self):
+        temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup)
+        self.root=Path(temp.name);self.C=self.root/'campaign';self.d=self.C/'lane';self.d.mkdir(parents=True)
+        (self.C/'briefs').mkdir();(self.C/'briefs/lane.md').write_text('BRIEF-FIXTURE')
+        self.msg=self.root/'message';self.msg.write_text('MESSAGE-FIXTURE')
+        self.bin=self.root/'bin';self.bin.mkdir()
+        self.calls=self.root/'calls'
+        for name in ('claude','codex'):
+            f=self.bin/name
+            f.write_text('#!/usr/bin/env python3\nimport json,os,sys\n'
+                         f'open({str(self.calls)!r},"a").write(json.dumps({{"bin":{name!r},"argv":sys.argv[1:],'
+                         '"key":os.environ.get("ANTHROPIC_API_KEY")})+"\\n")\n')
+            f.chmod(0o755)
+        self.home=self.root/'claude-home'
+        self.env={**os.environ,'PATH':str(self.bin)+':'+os.environ['PATH'],'REPO':str(self.root),'CAMPAIGN_DIR':str(self.C),
+                  'ALLOW_UNWATCHED':'1','ANTHROPIC_API_KEY':'sk-fixture','CLAUDE_CONFIG_DIR':str(self.home)}
+
+    def run_script(self,script,*args):
+        r=subprocess.run(['bash',str(lk.SCRIPTS/script),*args],env=self.env,capture_output=True,text=True,timeout=10)
+        self.assertEqual(r.returncode,0,r.stdout+r.stderr)
+        for _ in range(50):   # the worker is started with nohup in the background
+            if self.calls.exists() and self.calls.read_text().strip(): break
+            time.sleep(0.1)
+        return [json.loads(l) for l in self.calls.read_text().splitlines()]
+
+    def claude_session(self,sid):
+        p=self.home/'projects'/'-fixture-repo'; p.mkdir(parents=True,exist_ok=True); (p/f'{sid}.jsonl').write_text('{}\n')
+
+    def test_launch_with_claude_model_starts_claude_with_session_id_in_log(self):
+        calls=self.run_script('launch.sh','lane','sonnet','high')
+        self.assertEqual([c['bin'] for c in calls],['claude'])
+        argv=calls[0]['argv']
+        for flag in ('-p','--verbose'): self.assertIn(flag,argv)
+        self.assertEqual(argv[argv.index('--model')+1],'sonnet')
+        self.assertEqual(argv[argv.index('--permission-mode')+1],'bypassPermissions')
+        self.assertEqual(argv[argv.index('--output-format')+1],'stream-json')
+        sid=argv[argv.index('--session-id')+1]
+        self.assertIn('BRIEF-FIXTURE',argv[argv.index('-p')+1])
+        self.assertIsNone(calls[0]['key'])
+        self.assertEqual(lk.last_session_id(self.d/'codex.log'),sid)
+        self.assertEqual((self.d/'model').read_text().split()[0],'sonnet')
+        self.assertTrue((self.d/'pid').exists() and (self.d/'session-at').exists())
+
+    def test_launch_with_codex_model_keeps_codex(self):
+        calls=self.run_script('launch.sh','lane','gpt-6.1-sol','medium')
+        self.assertEqual([c['bin'] for c in calls],['codex'])
+        self.assertEqual(calls[0]['argv'][:3],['exec','-m','gpt-6.1-sol'])
+
+    def test_resume_claude_lane_resumes_its_claude_session(self):
+        (self.d/'codex.log').write_text('session id: 11111111-2222-3333-4444-555555555555\n')
+        (self.d/'model').write_text('opus high\n')
+        self.claude_session('11111111-2222-3333-4444-555555555555')
+        calls=self.run_script('resume.sh',str(self.C),'lane',str(self.msg))
+        self.assertEqual([c['bin'] for c in calls],['claude'])
+        argv=calls[0]['argv']
+        self.assertEqual(argv[argv.index('--resume')+1],'11111111-2222-3333-4444-555555555555')
+        self.assertIn('MESSAGE-FIXTURE',argv); self.assertIn('-p',argv); self.assertNotIn('--session-id',argv)
+        self.assertEqual(argv[argv.index('--permission-mode')+1],'bypassPermissions')
+        self.assertIsNone(calls[0]['key'])
+
+    def test_switch_from_codex_to_claude_starts_fresh_claude_session_with_handoff(self):
+        (self.d/'codex.log').write_text('session id: codex-old-session\n')
+        (self.d/'model').write_text('sonnet medium\n')   # rewritten by the coordinator from a Codex model
+        (self.d/'HANDOFF.md').write_text('HANDOFF-FIXTURE')
+        calls=self.run_script('resume.sh',str(self.C),'lane',str(self.msg))
+        self.assertEqual([c['bin'] for c in calls],['claude'])
+        argv=calls[0]['argv']
+        self.assertNotIn('--resume',argv)
+        sid=argv[argv.index('--session-id')+1]
+        prompt=argv[argv.index('-p')+1]
+        self.assertIn('BRIEF-FIXTURE',prompt); self.assertIn('HANDOFF-FIXTURE',prompt)
+        self.assertEqual(argv[argv.index('--model')+1],'sonnet')
+        self.assertEqual(lk.last_session_id(self.d/'codex.log'),sid)
+
+    def test_keeper_session_id_accepts_claude_session_file_for_claude_lane(self):
+        (self.d/'codex.log').write_text('session id: aaaa-claude\n'); (self.d/'model').write_text('sonnet medium\n')
+        with mock.patch.object(lk,'CLAUDE_PROJECTS',self.home/'projects'):
+            self.assertIsNone(lk.Keeper.session_id(None,self.d))
+            self.claude_session('aaaa-claude')
+            self.assertEqual(lk.Keeper.session_id(None,self.d),'aaaa-claude')
+
+    def test_keeper_resume_of_switched_lane_launches_fresh(self):
+        K=mock.Mock(); K.dry=False
+        (self.d/'codex.log').write_text('session id: codex-old-session\n'); (self.d/'model').write_text('opus high\n')
+        with mock.patch.object(lk,'CLAUDE_PROJECTS',self.home/'projects'):
+            K.session_id=lambda d: lk.Keeper.session_id(K,d)
+            lk.Keeper.resume(K,self.C,self.d,self.msg,'continue #1')
+        K.launch.assert_called_once()
+        K.run.assert_not_called(); K.event.assert_not_called()
+
+    def test_codex_lane_without_session_still_ends(self):
+        K=mock.Mock()
+        (self.d/'codex.log').write_text('session id: gone\n'); (self.d/'model').write_text('gpt-6.1-sol medium\n')
+        K.session_id=lambda d: lk.Keeper.session_id(K,d)
+        lk.Keeper.resume(K,self.C,self.d,self.msg,'continue #1')
+        K.launch.assert_not_called(); K.event.assert_called_once()
+
+    def test_claude_limit_messages_count_as_capacity(self):
+        for line in ('{"type":"result","is_error":true,"result":"Claude AI usage limit reached|1793432400"}',
+                     '{"type":"result","is_error":true,"result":"API Error: 529 {\\"type\\":\\"error\\",\\"error\\":{\\"type\\":\\"overloaded_error\\"}}"}',
+                     '{"type":"result","is_error":true,"result":"API Error: 429 rate_limit_error"}',
+                     '{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1793432400}}',
+                     "You've hit your session limit \u00b7 resets 4am"):
+            with self.subTest(line=line): self.assertTrue(lk.TRANSIENT.search(line))
+        self.assertFalse(lk.TRANSIENT.search('{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1}}'))
+
+    def test_costguard_skips_claude_lanes_and_reads_stream_json_without_crashing(self):
+        (self.d/'model').write_text('sonnet medium\n')
+        (self.d/'codex.log').write_text('session id: abc\n{"type":"system","subtype":"init"}\n{"type":"result","usage":{"input_tokens":5}}\n')
+        r=subprocess.run([sys.executable,str(lk.SCRIPTS/'costguard.py'),'lane'],env={**self.env,'CAMPAIGN_DIR':str(self.C)},
+                         capture_output=True,text=True,timeout=10)
+        self.assertEqual((r.returncode,r.stdout.strip()),(0,''),r.stderr)
+        self.assertIn('claude',(self.C/'COST.md').read_text())
+
+
 if __name__ == '__main__':
     unittest.main()
