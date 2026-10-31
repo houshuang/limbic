@@ -39,8 +39,9 @@ Optional config keys:
 Linux: systemd timer instead of launchd; CODEX_HOME is honoured; caffeinate is used only where it exists.
 """
 import datetime as dt
-import fcntl, json, os, re, shlex, shutil, signal, subprocess, sys, time, uuid
+import fcntl, hashlib, json, os, re, shlex, shutil, signal, subprocess, sys, time, uuid
 from pathlib import Path
+from session_guard import last_session_id, tail_text
 
 DEFAULT_CONFIG = Path.home() / 'src/skard/.coordinator.json'
 SCRIPTS = Path(__file__).resolve().parent
@@ -223,20 +224,21 @@ class Keeper:
         if self.dry:
             return
         fh = open(out, 'a') if out else subprocess.DEVNULL
-        subprocess.Popen([*self.cfg.get('detach', []), *argv], cwd=cwd, stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT,
+        process = subprocess.Popen([*self.cfg.get('detach', []), *argv], cwd=cwd, stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT,
                          start_new_session=True, env={**os.environ, 'PATH': PATH, 'REPO': str(self.repo)})
+        if out:
+            fh.close()
         if self.cfg.get('detach'):
             time.sleep(1)   # systemd-run must leave the tick's cgroup before the tick ends
+
+        return process
 
     # lanes
     def session_id(self, d):
         """Only an id with a session file: `codex exec resume <unknown id>` silently starts a new, briefless session."""
-        try:
-            m = re.search(r'session id: (\S+)', (d / 'codex.log').read_text(errors='ignore')[:6000])
-        except OSError:
-            return None
-        if m and list(CODEX_SESSIONS.glob(f'*/*/*/*{m.group(1)}.jsonl')):
-            return m.group(1)
+        sid = last_session_id(d / 'codex.log')
+        if sid and list(CODEX_SESSIONS.glob(f'*/*/*/*{sid}.jsonl')):
+            return sid
         return None
 
     def acked(self, d):
@@ -249,7 +251,7 @@ class Keeper:
     def handoff(self, d):
         if (d / 'HANDOFF.md').exists():
             return True
-        started = birth(d / 'codex.log')
+        started = float(read_text(d / 'session-at') or birth(d / 'codex.log'))
         later = sorted((p for p in d.glob('HANDOFF.*.md') if mtime(p) >= started and started),
                        key=mtime, reverse=True)
         if later and not self.dry:
@@ -260,16 +262,19 @@ class Keeper:
         n = int((d / 'fresh').read_text()) if (d / 'fresh').exists() else 0
         if n >= FRESH_LIMIT:
             return self.event(d, 'FRESH-LIMIT', f'{n} fresh sessions')
-        lived = mtime(d / 'codex.log') - birth(d / 'codex.log')
-        made_driver = mtime(d / 'driver.pid') >= birth(d / 'codex.log')
+        started = float(read_text(d / 'session-at') or birth(d / 'codex.log'))
+        lived = mtime(d / 'codex.log') - started
+        made_driver = mtime(d / 'driver.pid') >= started
         fresh_at = float((d / 'fresh-at').read_text() or 0) if (d / 'fresh-at').exists() else 0
-        if (d / 'codex.log').exists() and lived < 300 and not made_driver and fresh_at and birth(d / 'codex.log') >= fresh_at:
+        if (d / 'codex.log').exists() and lived < 300 and not made_driver and fresh_at and started >= fresh_at:
             return self.event(d, 'SHORT-SESSION', f'last fresh session lived {lived:.0f}s and started no driver')
         model = (d / 'model').read_text().split() if (d / 'model').exists() else []
         if not self.dry:
             (d / 'fresh').write_text(str(n + 1)); (d / 'fresh-at').write_text(str(int(now())))
         self.log(f'FRESH {d.name} ({why})')
-        self.run(['bash', str(C / 'launch.sh'), d.name, *model], self.repo, C / 'autoresume.log')
+        # Campaigns may carry a copied pre-guard launcher. Use the versioned
+        # entrypoint so manual resumes and keeper launches share admission.
+        self.run(['env', f'CAMPAIGN_DIR={C}', 'bash', str(SCRIPTS / 'launch.sh'), d.name, *model], self.repo, C / 'autoresume.log')
 
     def resume(self, C, d, msg_file, why):
         if not self.session_id(d):
@@ -302,9 +307,97 @@ class Keeper:
                 except ProcessLookupError:
                     pass
             time.sleep(3)
+            if self.start_next_command(d):
+                (d / 'forced-handoff').write_text(pid)
+                continue
             self.run(['bash', str(SCRIPTS / 'resume.sh'), str(C), name, str(C / 'msg-handoff.md')], self.repo, C / 'autoresume.log')
             time.sleep(1)
             (d / 'forced-handoff').write_text((d / 'pid').read_text().strip())
+
+    def start_next_command(self, d):
+        """NEXT-COMMAND is one approved drive-loop argv, consumed after a detached start."""
+        path = d / 'NEXT-COMMAND'
+        if not path.exists(): return False
+        if alive(d / 'driver.pid'): return True
+        if (d / 'STOP').exists(): return False
+        try:
+            lines = path.read_text().strip().splitlines()
+            if len(lines) != 1: raise ValueError('expected one command line')
+            argv = shlex.split(lines[0])
+            if argv and argv[0] in ('bash', '/bin/bash'): argv = argv[1:]
+            if not argv or Path(argv[0]).resolve() != (SCRIPTS / 'drive-loop.sh').resolve():
+                raise ValueError('expected the installed drive-loop.sh')
+            args = argv[1:]
+            if args and args[0] == '--once': args = args[1:]
+            if len(args) < 5 or Path(args[0]).resolve() != d.resolve() or args[3] != '--' or int(args[2]) <= 0:
+                raise ValueError('expected this lane, name, positive limit, --, driver argv')
+        except (ValueError, OSError) as error:
+            self.log(f'NEXT-COMMAND {d.name}: refused ({error})')
+            return False
+        process = self.run(['bash', *argv], self.repo, d / 'driver.log')
+        if not self.dry:
+            if not alive(d / 'driver.pid'):
+                (d / 'driver.pid').write_text(str(process.pid) + '\n')
+            path.unlink()
+        return True
+
+    def check_release_scope(self):
+        """A scope contains commits or paths to READY files containing commit IDs."""
+        configured = self.cfg.get('release_scope')
+        if not configured: return
+        path = Path(configured)
+        if not path.is_absolute(): path = self.repo / path
+        try: raw = path.read_bytes()
+        except OSError as error:
+            self.log(f'RELEASE-SCOPE: {error}'); return
+        digest = hashlib.sha256(raw).hexdigest()
+        if digest in self.st.get('release_ready', []): return
+        hold = read_text(self.state_dir / 'RELEASE-CYCLE-RUNNING')
+        pid = re.search(r'^pid=(\d+)$', hold, re.M)
+        if pid and alive(self.state_dir / 'RELEASE-CYCLE-RUNNING', pid=int(pid[1])): return
+        items = []
+        for line in raw.decode().splitlines():
+            item = line.split('#', 1)[0].strip()
+            if not item: continue
+            if re.fullmatch(r'[0-9a-f]{7,40}', item):
+                items.append(item); continue
+            ready = path.parent / item
+            if not ready.suffix: ready = ready.with_suffix('.md')
+            text = read_text(ready)
+            # Bases, incident commits and numeric measurements are not heads.
+            commits = re.findall(r'\b(?:HEAD|commit)\s*[:=]?\s*`?([0-9a-f]{7,40})\b', text, re.I)
+            if not commits: return
+            items.extend(commits)
+        if not items: return
+        for commit in items:
+            result = subprocess.run(['git', '-C', str(self.repo), 'merge-base', '--is-ancestor', commit, 'main'],
+                                    capture_output=True)
+            if result.returncode: return
+        self.event(path, 'RELEASE-READY', f'all {len(items)} scope commits are on main; no release cycle running',
+                   key=f'release|{digest}')
+        self.st.setdefault('release_ready', []).append(digest)
+
+    def waiting_heavy(self, d):
+        for name in ('driver.log', 'codex.log'):
+            lines = tail_text(d / name).splitlines()
+            if lines and re.search(r'heavy\.sh:.*(?:waiting|lock|slots?)', lines[-1]): return True
+        # Slot-count waits can be silent. A heavy wrapper sleeping under this
+        # lane is queued; a wrapper with the actual job child is running work.
+        result = subprocess.run(['ps', '-axo', 'pid=,ppid=,command='], capture_output=True, text=True)
+        rows = []
+        for line in result.stdout.splitlines():
+            fields = line.split(None, 2)
+            if len(fields)==3 and fields[0].isdigit() and fields[1].isdigit():
+                rows.append((int(fields[0]), int(fields[1]), fields[2]))
+        descendants = {int(read_text(d / name)) for name in ('pid', 'driver.pid') if read_text(d / name).isdigit()}
+        while True:
+            found = {pid for pid, parent, _ in rows if parent in descendants}
+            if found <= descendants: break
+            descendants.update(found)
+        wrappers = {pid for pid, _, command in rows if pid in descendants and
+                    re.search(r'(?:^|\s)(?:\S*/)?heavy\.sh(?:\s|$)', command)}
+        return any(parent in wrappers and re.match(r'(?:\S*/)?sleep(?:\s|$)', command)
+                   for _, parent, command in rows)
 
     def tend(self, C, d):
         L = self.lane(d)
@@ -315,6 +408,10 @@ class Keeper:
             if f.startswith('READY-') and CLOSING.match(f) and mtime(d / f) > self.acked(d):
                 self.event(d, 'READY', f'{f} written {stamp(mtime(d / f))}', key=f'{d}|{f}|{int(mtime(d / f))}')
         if s_alive or d_alive:
+            if self.waiting_heavy(d):
+                self.event(d, 'HEAVY-WAIT', 'waiting on the heavy lock; lane remains running',
+                           key=f'{d}|HEAVY-WAIT|{int(mtime(d / "driver.pid"))}')
+                return
             if quiet > QUIET:
                 bucket = int(newest_in(d))
                 self.event(d, 'QUIET', f'{"session" if s_alive else "driver"} running, lane folder silent {quiet/60:.0f} min',
@@ -330,6 +427,7 @@ class Keeper:
             return
         if (d / 'STOP').exists():
             return
+        if self.start_next_command(d): return
         cmd = d / 'driver.cmd'
         exit_note = (d / 'DRIVER-EXIT').read_text().strip() if (d / 'DRIVER-EXIT').exists() else None
         if (d / 'driver.pid').exists() and cmd.exists() and exit_note in (None, 'term') and not (d / 'DRIVER-FAILED.md').exists():
@@ -357,7 +455,7 @@ class Keeper:
             return
         if self.handoff(d):
             return self.launch(C, d, 'handoff, no live driver')
-        tail = (d / 'codex.log').read_text(errors='ignore')[-4000:] if (d / 'codex.log').exists() else ''
+        tail = tail_text(d / 'codex.log')
         if TRANSIENT.search(tail):
             streak = L.get('transient', 0)
             wait = 60 if streak < 3 else 300
@@ -594,6 +692,7 @@ what each remaining item waits on. The next coordinator starts from it. Then run
                     self.tend(C, d)
                 except Exception as e:  # one lane's odd files must not stop the others
                     self.log(f'ERROR {d.name}: {e!r}')
+        self.check_release_scope()
         self.clear_events(self.pull_remote())
         self.maybe_start_coordinator()
         self.notify()

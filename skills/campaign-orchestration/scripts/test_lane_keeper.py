@@ -1,4 +1,5 @@
 """Run: python3 skills/campaign-orchestration/scripts/test_lane_keeper.py"""
+import sys
 import datetime as dt
 import importlib.util, io, json, os, subprocess, tempfile, time, unittest
 from unittest import mock
@@ -255,6 +256,206 @@ class RegistrationTest(unittest.TestCase):
             with self.assertRaises(KeyboardInterrupt):
                 lk.main()
         self.assertFalse((self.K.k / 'watch.heartbeat').exists())
+
+
+class FrictionTest(unittest.TestCase):
+    setUp = RetireTest.setUp
+
+    def lane(self):
+        C=self.tmp/'campaign'; C.mkdir(exist_ok=True)
+        d=C/'lane'; d.mkdir(exist_ok=True)
+        (C/'costguard.py').write_text('fixture')
+        (d/'pid').write_text('99999999')
+        return C,d
+
+    def test_keeper_launch_uses_versioned_guarded_launcher_for_old_campaign_copies(self):
+        C,d=self.lane()
+        (C/'launch.sh').write_text('unguarded old campaign launcher')
+        with mock.patch.object(self.K,'run') as run:
+            self.K.launch(C,d,'fixture')
+        command=run.call_args.args[0]
+        self.assertIn(str(lk.SCRIPTS/'launch.sh'),command)
+        self.assertIn(f'CAMPAIGN_DIR={C}',command)
+
+    def test_append_only_log_uses_latest_session_start_for_short_session_detection(self):
+        C,d=self.lane()
+        (d/'codex.log').write_text('session id: old\nnew session exited\n')
+        (d/'fresh-at').write_text(str(self.t-15))
+        (d/'session-at').write_text(str(self.t-10))
+        with mock.patch.object(lk,'birth',return_value=self.t-5000), mock.patch.object(self.K,'run') as run:
+            self.K.launch(C,d,'fixture')
+        run.assert_not_called()
+        self.assertIn('SHORT-SESSION',[e['kind'] for e in self.K.st['events'].values()])
+
+    def test_append_only_log_does_not_revive_a_previous_sessions_archived_handoff(self):
+        C,d=self.lane()
+        (d/'codex.log').write_text('session id: old\nsession id: new\n')
+        (d/'session-at').write_text(str(self.t-10))
+        archived=d/'HANDOFF.0.md'; archived.write_text('previous queue')
+        os.utime(archived,(self.t-100,self.t-100))
+        with mock.patch.object(lk,'birth',return_value=self.t-5000):
+            self.assertFalse(self.K.handoff(d))
+        self.assertFalse((d/'HANDOFF.md').exists())
+
+    def test_ready_scope_uses_head_and_does_not_treat_base_or_measurements_as_heads(self):
+        repo=self.K.repo
+        subprocess.run(['git','init','-q','-b','main',str(repo)],check=True)
+        for key,val in [('user.email','t@example.invalid'),('user.name','Test')]:
+            subprocess.run(['git','-C',str(repo),'config',key,val],check=True)
+        subprocess.run(['git','-C',str(repo),'commit','--allow-empty','-qm','integrated'],check=True)
+        sha=subprocess.check_output(['git','-C',str(repo),'rev-parse','HEAD'],text=True).strip()
+        ready=self.tmp/'lane/READY-1.md';ready.parent.mkdir()
+        ready.write_text(f'HEAD `{sha}`, base `abcdef123456`.\nMeasurement: 1234567 records.\n')
+        scope=self.tmp/'RELEASE-SCOPE';scope.write_text('lane/READY-1\n')
+        self.K.cfg['release_scope']=str(scope)
+        self.K.check_release_scope()
+        self.assertEqual([e['kind'] for e in self.K.st['events'].values()],['RELEASE-READY'])
+
+    def test_cost_cap_starts_approved_next_driver_without_a_resume(self):
+        C,d=self.lane()
+        (d/'NEXT-COMMAND').write_text(f'bash {lk.SCRIPTS / "drive-loop.sh"} --once {d} job 30 -- true\n')
+        started=mock.Mock(pid=12345)
+        def run(argv, **kwargs):
+            return subprocess.CompletedProcess(argv,0,stdout='lane\n' if 'costguard.py' in str(argv) else '')
+        with mock.patch.object(lk.subprocess,'run',side_effect=run), \
+             mock.patch.object(lk.os,'kill'), mock.patch.object(lk.time,'sleep'), \
+             mock.patch.object(self.K,'run',return_value=started) as spawn:
+            self.K.costguard(C,['lane'])
+        self.assertEqual(spawn.call_count,1)
+        argv=spawn.call_args.args[0]
+        self.assertIn('drive-loop.sh',' '.join(argv)); self.assertNotIn('resume.sh',' '.join(argv))
+        self.assertEqual((d/'driver.pid').read_text().strip(),'12345')
+        self.assertFalse((d/'NEXT-COMMAND').exists())
+
+    def test_cost_cap_without_next_keeps_handoff_resume(self):
+        C,d=self.lane()
+        with mock.patch.object(lk.subprocess,'run',side_effect=lambda argv, **kwargs: subprocess.CompletedProcess(argv,0,stdout='lane' if 'costguard.py' in str(argv) else '')), \
+             mock.patch.object(lk.os,'kill',side_effect=ProcessLookupError), mock.patch.object(lk.time,'sleep'), \
+             mock.patch.object(self.K,'run') as spawn:
+            self.K.costguard(C,['lane'])
+        self.assertIn('resume.sh',' '.join(spawn.call_args.args[0]))
+
+    def test_next_command_rejects_shell_and_other_lane_and_is_not_restarted_twice(self):
+        C,d=self.lane()
+        for command in ('echo unsafe',f'bash {lk.SCRIPTS / "drive-loop.sh"} {C} job 30 -- true',
+                        f'bash {lk.SCRIPTS / "drive-loop.sh"} {d} job 30 -- true\necho unsafe'):
+            (d/'NEXT-COMMAND').write_text(command)
+            with mock.patch.object(self.K,'run') as run:
+                self.assertFalse(self.K.start_next_command(d)); run.assert_not_called()
+        (d/'driver.pid').write_text(str(os.getpid()))
+        (d/'NEXT-COMMAND').write_text(f'bash {lk.SCRIPTS / "drive-loop.sh"} {d} job 30 -- true')
+        with mock.patch.object(self.K,'run') as run:
+            self.assertTrue(self.K.start_next_command(d)); run.assert_not_called()
+
+    def test_integrated_scope_emits_once_per_hash_and_waits_for_cycle(self):
+        repo=self.K.repo
+        subprocess.run(['git','init','-q','-b','main',str(repo)],check=True)
+        for key,val in [('user.email','t@example.invalid'),('user.name','Test')]:
+            subprocess.run(['git','-C',str(repo),'config',key,val],check=True)
+        p=repo/'file';p.write_text('first')
+        subprocess.run(['git','-C',str(repo),'add','file'],check=True)
+        subprocess.run(['git','-C',str(repo),'commit','-qm','first'],check=True)
+        sha=subprocess.check_output(['git','-C',str(repo),'rev-parse','HEAD'],text=True).strip()
+        scope=self.tmp/'RELEASE-SCOPE';scope.write_text(sha+'\n')
+        self.K.cfg['release_scope']=str(scope)
+        hold=self.K.state_dir/'RELEASE-CYCLE-RUNNING';hold.write_text(f'pid={os.getpid()}\n')
+        self.K.check_release_scope();self.assertFalse(self.K.st['events'])
+        hold.unlink();self.K.check_release_scope()
+        self.assertEqual([e['kind'] for e in self.K.st['events'].values()],['RELEASE-READY'])
+        self.K.st['events'].clear();self.K.check_release_scope();self.assertFalse(self.K.st['events'])
+        scope.write_text(sha+'\n# revised scope\n');self.K.check_release_scope()
+        self.assertEqual(len(self.K.st['events']),1)
+
+    def test_next_command_really_runs_detached_in_a_temp_lane(self):
+        C,d=self.lane()
+        fake=self.tmp/'sleepsafe.py'
+        fake.write_text('#!/usr/bin/env python3\nimport subprocess,sys\nsys.exit(subprocess.run(sys.argv[sys.argv.index("--")+1:]).returncode)\n')
+        fake.chmod(0o755)
+        output=self.tmp/'ran'
+        import shlex
+        command=['bash',str(lk.SCRIPTS/'drive-loop.sh'),'--once',str(d),'fixture','10','--',
+                 sys.executable,'-c',f'from pathlib import Path; Path({str(output)!r}).write_text("yes")']
+        (d/'NEXT-COMMAND').write_text(shlex.join(command)+'\n')
+        processes=[]
+        original=self.K.run
+        def run(*args):
+            process=original(*args);processes.append(process);return process
+        with mock.patch.dict(os.environ,{'SLEEPSAFE':str(fake)}), mock.patch.object(self.K,'run',side_effect=run):
+            self.assertTrue(self.K.start_next_command(d))
+        try:
+            self.assertEqual(processes[0].wait(timeout=15),0,(d/'driver.log').read_text())
+        finally:
+            if processes[0].poll() is None:
+                os.killpg(processes[0].pid,15)
+                processes[0].wait(timeout=5)
+        self.assertEqual(output.read_text(),'yes')
+        self.assertFalse((d/'NEXT-COMMAND').exists())
+
+    def test_waiting_for_a_silent_heavy_slot_is_reported_from_process_tree(self):
+        C,d=self.lane();(d/'driver.pid').write_text(str(os.getpid()))
+        tree=f'{os.getpid()} 1 bash drive-loop.sh\n123456 {os.getpid()} bash scripts/heavy.sh python3 tests/run_parallel.py\n123457 123456 sleep 30\n'
+        with mock.patch.object(lk.subprocess,'run',return_value=subprocess.CompletedProcess([],0,stdout=tree)), \
+             mock.patch.object(lk,'newest_in',return_value=self.t-lk.QUIET-1):
+            self.K.tend(C,d)
+        self.assertIn('HEAVY-WAIT',[e['kind'] for e in self.K.st['events'].values()])
+        self.assertFalse((d/'STOP').exists())
+
+    def test_scope_missing_commit_never_ready(self):
+        scope=self.tmp/'RELEASE-SCOPE';scope.write_text('f'*40+'\n')
+        self.K.cfg['release_scope']=str(scope)
+        self.K.check_release_scope();self.assertFalse(self.K.st['events'])
+
+    def test_waiting_on_heavy_lock_is_reported_without_stop_or_quiet(self):
+        C,d=self.lane()
+        (d/'driver.pid').write_text(str(os.getpid()))
+        (d/'driver.log').write_text('heavy.sh: memory free 9%, waiting\n')
+        with mock.patch.object(lk,'newest_in',return_value=self.t-lk.QUIET-1):
+            self.K.tend(C,d)
+        self.assertIn('HEAVY-WAIT',[e['kind'] for e in self.K.st['events'].values()])
+        self.assertNotIn('QUIET',[e['kind'] for e in self.K.st['events'].values()])
+        self.assertFalse((d/'STOP').exists())
+
+
+class SessionGuardTest(unittest.TestCase):
+    def setUp(self):
+        temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup)
+        self.root=Path(temp.name);self.C=self.root/'campaign';self.d=self.C/'lane';self.d.mkdir(parents=True)
+        (self.C/'briefs').mkdir();(self.C/'briefs/lane.md').write_text('fixture')
+        (self.d/'codex.log').write_text('session id: old-fixture\n')
+        self.msg=self.root/'message';self.msg.write_text('continue')
+        self.bin=self.root/'bin';self.bin.mkdir()
+        codex=self.bin/'codex';codex.write_text('#!/bin/sh\necho "session id: new-fixture"\n');codex.chmod(0o755)
+        self.env={**os.environ,'PATH':str(self.bin)+':'+os.environ['PATH'],'REPO':str(self.root),
+                  'CAMPAIGN_DIR':str(self.C),'ALLOW_UNWATCHED':'1'}
+
+    def call(self,script):
+        args=[str(self.C),'lane',str(self.msg)] if script=='resume.sh' else ['lane']
+        return subprocess.run(['bash',str(lk.SCRIPTS/script),*args],env=self.env,capture_output=True,text=True,timeout=5)
+
+    def test_both_entrypoints_refuse_live_or_recent_launch_without_touching_log(self):
+        for script in ('launch.sh','resume.sh'):
+            for live in (True,False):
+                with self.subTest(script=script,live=live):
+                    (self.d/'pid').write_text(str(os.getpid()) if live else '99999999')
+                    if not live:(self.d/'session-at').write_text(str(int(time.time())))
+                    before=(self.d/'codex.log').read_bytes()
+                    self.assertNotEqual(self.call(script).returncode,0)
+                    self.assertEqual((self.d/'codex.log').read_bytes(),before)
+
+    def test_concurrent_resume_has_one_winner_and_preserves_session_id(self):
+        argv=['bash',str(lk.SCRIPTS/'resume.sh'),str(self.C),'lane',str(self.msg)]
+        procs=[subprocess.Popen(argv,env=self.env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True) for _ in range(2)]
+        results=[p.communicate(timeout=5) for p in procs]
+        self.assertEqual(sorted(p.returncode for p in procs),[0,3],results)
+        self.assertIn('session id: old-fixture',(self.d/'codex.log').read_text())
+
+    def test_concurrent_launch_and_resume_have_one_winner(self):
+        commands=[['bash',str(lk.SCRIPTS/'launch.sh'),'lane'],
+                  ['bash',str(lk.SCRIPTS/'resume.sh'),str(self.C),'lane',str(self.msg)]]
+        procs=[subprocess.Popen(argv,env=self.env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True) for argv in commands]
+        results=[p.communicate(timeout=5) for p in procs]
+        self.assertEqual(sorted(p.returncode for p in procs),[0,3],results)
+        self.assertIn('session id: old-fixture',(self.d/'codex.log').read_text())
 
 
 if __name__ == '__main__':

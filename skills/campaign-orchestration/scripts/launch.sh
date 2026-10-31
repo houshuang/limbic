@@ -9,7 +9,11 @@ hb="$C/.watcher-heartbeat"
 mt() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"; }
 { [ -f "$hb" ] && [ $(( $(date +%s) - $(mt "$hb") )) -lt 600 ]; } || [ "${ALLOW_UNWATCHED:-}" = 1 ] || { echo "refused: no keeper heartbeat in $C (the keeper enforces the cost cap)"; exit 2; }
 lane=$1; model=${2:-gpt-6.1-sol}; effort=${3:-medium}
-[ -f "$C/$lane/pid" ] && kill -0 "$(cat "$C/$lane/pid")" 2>/dev/null && { echo "refused: lane $lane already has a live session (pid $(cat "$C/$lane/pid"))"; exit 3; }
+# The shared admission lock covers keeper launches and manual resumes alike.
+if [[ ${LANE_SESSION_GUARDED:-} != "$(cd "$C" && pwd -P)/$lane" ]]; then
+  guard=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve().with_name("session_guard.py"))' "${BASH_SOURCE[0]}")
+  exec python3 "$guard" "$C/$lane" -- /bin/bash "$0" "$@"
+fi
 mkdir -p "$C/$lane"
 brief="$C/briefs/$lane.md"
 prompt="You are the Codex worker for lane $lane. Your brief follows; it is complete and authorised. Begin now.
@@ -23,7 +27,6 @@ if [ -f "$C/$lane/HANDOFF.md" ]; then
 
 $(cat "$C/$lane/HANDOFF.md")"
   mv "$C/$lane/HANDOFF.md" "$C/$lane/HANDOFF.$k.md"
-  [ -f "$C/$lane/codex.log" ] && mv "$C/$lane/codex.log" "$C/$lane/codex.$(date +%H%M%S).log"
 fi
 if [ -f "$C/$lane/ADDENDUM.md" ]; then prompt="$prompt
 
@@ -37,6 +40,6 @@ printf '%s' "$prompt" > "$C/$lane/PROMPT.txt"
 cd "$REPO"
 caf=(); command -v caffeinate >/dev/null && caf=(caffeinate -i)
 date +%s > "$C/$lane/session-at"   # Linux has no file birth time: the keeper reads the session start here
-nohup ${caf[@]+"${caf[@]}"} env -u OPENAI_API_KEY codex exec -m "$model" -c model_reasoning_effort="$effort" --dangerously-bypass-approvals-and-sandbox -C "$REPO" "$(cat "$C/$lane/PROMPT.txt")" < /dev/null > "$C/$lane/codex.log" 2>&1 &
+nohup ${caf[@]+"${caf[@]}"} env -u OPENAI_API_KEY -u LANE_SESSION_GUARDED codex exec -m "$model" -c model_reasoning_effort="$effort" --dangerously-bypass-approvals-and-sandbox -C "$REPO" "$(cat "$C/$lane/PROMPT.txt")" < /dev/null >> "$C/$lane/codex.log" 2>&1 &
 echo $! > "$C/$lane/pid"; echo "$model $effort" > "$C/$lane/model"
 echo "launched $lane ($model/$effort)"
