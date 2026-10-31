@@ -67,6 +67,8 @@ Read this before launching worker lanes, and add to it after every incident
 - `launch.sh <campaign-dir> <lane> [model] [effort]` starts `codex exec` with
   the brief `<campaign-dir>/briefs/<lane>.md` under `nohup caffeinate -i`, log
   in `<campaign-dir>/<lane>/codex.log`, pid in `pid`. (No tmux on the Mac.)
+- A cost-capped lane can write `NEXT-COMMAND`: one command line, `bash <installed scripts>/drive-loop.sh [--once] <lane-state-dir> <job> <limit> -- <driver argv>`. This is an already authorised continuation. The keeper starts it detached instead of a handoff session and consumes the file after launch; use `--once` for release cycles. A handoff may prepare this command even when told to stop new work.
+- Optional `.coordinator.json` `release_scope` names a `RELEASE-SCOPE` file (relative to the repo, or absolute): one commit or path to a lane READY file per line, with `#` comments. READY files resolve relative to the scope file; labelled `HEAD` or `commit` IDs identify deliverables (bases and measurements are ignored). When all are on main and no release cycle is alive, the keeper emits `RELEASE-READY` once per scope hash.
 - `resume.sh <campaign-dir> <lane> <message-file>` resumes the lane's **own**
   session (`codex exec resume <session-id> "<msg>"`), so the worker keeps its
   context. Use it to deliver rule changes too: a running session read the
@@ -116,9 +118,9 @@ Read this before launching worker lanes, and add to it after every incident
   Escalate only disagreeing cells, packed together, never whole batches. Measured failure (skard, 25 Oct 2026):
   topic-major at depth 1500 cost ~117 calls per topic, each passage read ~8 times, 611 whole batches sent to Sol;
   662 topics projected to 100k+ calls versus ~3.5k passage-major.
-- **A big export runs alone.** On a laptop, stop (not pause) every lane before a release export: paused processes keep
-  their RAM, which the export's memory peak pushes into swap on the same disk (skard 25 Oct: swap 14 → 22 GB, disk
-  33 → 4 GB free). Check free disk ≥ export size + 10 GB first; delete re-fetchable caches, never pointers or generations.
+- **A big export owns the heavy slots.** heavy.sh queues other heavy jobs while lanes continue non-heavy work;
+  do not STOP lanes to free slots. Check free disk ≥ export size + 10 GB first; delete re-fetchable caches,
+  never pointers or generations (skard 25 Oct: export and swap exhausted the disk).
 
 - **Check merges against data that contains them.** A fast post-merge check that renders against the *old* snapshot
   cannot see data regressions; skard 24–25 Oct met navigation and count failures from three data merges only at the
@@ -245,6 +247,7 @@ twice. Every report pasted into the coordinator stays in its context for the res
   file it refers to. A worker waits on a file or a lock, never on a message ("pause until told" stalls).
 - **Every chat's lanes are visible to lane-audit**, so a peer chat registers its lane folders in the
   project's `.coordinator.json` campaigns list (or its own campaign dir) instead of keeping them private.
+- **Do not STOP lanes to free heavy slots.** heavy.sh queues jobs for the available slots; lanes keep doing non-heavy work. The keeper reports `HEAVY-WAIT` instead of stopping a lane or treating a queued job as quiet.
 - **heavy.sh is exclusive only for the release export and cycle** (skard 30 Oct: one slot for everything queued OCR calls an hour behind gates on a 14-core Mac). Other jobs share slots and wait only on the export, memory or disk.
 
 ## Holds, idle notices and handovers (review of 23–29 Oct, skard-state/orchestration-review-20261029)
@@ -257,7 +260,7 @@ twice. Every report pasted into the coordinator stays in its context for the res
 - **A handover bullet that says «remaining», «left» or «next» names its owner:** «→ lane X», «→ waits on
   <file>», or RETIRED. A Claude thread coordinator is a lane too: handing off is not done, and waiting on a
   message instead of a file stalled lanes for half a day (27 Oct).
-- **One live session per lane:** launch.sh refuses while the lane's pid is alive (double sessions in two
+- **One live session per lane:** launch.sh and resume.sh share a lane lock and refuse a live pid or a launch within the last 120 seconds; logs append (double sessions in two
   lanes, 28 Oct 22:15).
 - **Workers read COMMON, not INCIDENTS:** INCIDENTS is the coordinator's log (126 KB × 323 handoffs).
 - Codex `gpt-6.1-terra` is the default for research reads (Stian 28 Oct: «astra is too expensive»).
