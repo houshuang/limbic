@@ -91,6 +91,7 @@ import fcntl, hashlib, json, os, re, shlex, shutil, signal, subprocess, sys, tim
 from pathlib import Path
 from session_guard import require_lane_workspace, last_session_id, local_codex_session, tail_text
 import budget
+from coordinator_card import make_card
 
 DEFAULT_CONFIG = Path.home() / 'src/skard/.coordinator.json'
 SCRIPTS = Path(__file__).resolve().parent
@@ -1141,8 +1142,12 @@ class Keeper:
         if engine == 'codex':
             out = out.with_name(out.stem+'-'+sid[:8]+'.log')
             retire = f'python3 {shlex.quote(str(script))} retire --config {shlex.quote(str(self.cfg_path))} --session "$(cat {shlex.quote(str(session_file))})"'
+        queue_path = Path(self.cfg.get("capacity", {}).get("queue", self.state_dir / "QUEUE.md"))
+        card = make_card(queue_path, self.state_dir / "INCIDENTS.md")
         prompt = f"""You are the integrator and coordinator for {self.repo}, started headless by lane-keeper at {stamp()} because \
-events are pending and no coordinator was live. Read the newest handover first: {handover}. Then the repository rules.
+events are pending and no coordinator was live. Read the newest handover first: {handover}.
+
+{card}
 
 Pending events (also in {self.k / 'EVENTS'}):
 {events}
