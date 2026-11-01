@@ -1029,7 +1029,9 @@ failure, such as a release cycle); use subprocess.Popen with stdin=DEVNULL and s
 Before you end, write {self.state_dir}/keeper-HANDOVER-<YYYYMMDD-HHMM>.md in normally spaced sentences, at most \
 {c.get('max_handover_chars', HANDOVER_CHARS)} characters: what you did, what runs, and for each remaining item the lane that \
 owns it or the file it waits on. The next coordinator starts from it. If anything failed or surprised you, append one dated \
-entry to {self.state_dir}/INCIDENTS.md (symptom, cause, what would have refused it). Then run `{retire}` and end; \
+entry to {self.state_dir}/INCIDENTS.md (symptom, cause, what would have refused it). If the same kind of failure is \
+already in INCIDENTS.md, do not patch this lane privately again: add or extend the open «Tooling fixes» item in the queue \
+naming the class and the incidents, so a tooling lane fixes it once in the shared scripts. Then run `{retire}` and end; \
 retire refuses an over-long or run-together handover, so fix it and retire again."""
         self.log(f'COORDINATOR-START ({len(pending)} events; handover {handover and handover.name}) → {out.name}')
         if engine == 'claude':
