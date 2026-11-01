@@ -152,6 +152,8 @@ def scan_lane(d, host):
             spec = {}
     if s_alive or d_alive:
         state = 'pausing' if stop else 'running'
+    elif (d / 'RETIRED').exists():
+        state, close = 'RETIRED', 'RETIRED'
     elif stop:
         state = 'paused' if paused else 'stopped'
     elif any(mtime(p / 'DRIVER-FAILED.md') > handled for p in drivers):
@@ -427,14 +429,114 @@ class Collector:
         return {'samples': [s for s in S if now() - s[0] < 24 * 3600], 'd1': at(1), 'd24': at(24)}
 
     def git_today(self):
+        """Today's integrations, one row per batch (merge + integrate + apply of one lane), each described from its diff."""
         repo = self.cfg['repo']
         try:
-            out = subprocess.run(['git', '-C', repo, 'log', 'main', '--since=midnight', '--format=%h\t%ad\t%s',
-                                  '--date=format:%H:%M'], capture_output=True, text=True, timeout=20).stdout
+            out = subprocess.run(['git', '-C', repo, 'log', 'main', '--first-parent', '--since=midnight',
+                                  '--format=%h\t%ad\t%s', '--date=format:%H:%M'],
+                                 capture_output=True, text=True, timeout=20).stdout
         except (OSError, subprocess.TimeoutExpired):
             return []
         rows = [l.split('\t', 2) for l in out.splitlines() if l.count('\t') >= 2]
-        return [r for r in rows if re.match(r'(Integrate|Release|Apply|Merge)', r[2])]
+        rows = [r for r in rows if re.match(r'(Integrate|Release|Apply|Merge)', r[2])]
+        groups = []
+        for h, t, subj in rows:
+            m = re.match(r'(?:Apply thin lane bundles|Integrate lane)\s+(\S+)', subj)
+            lane = m[1] if m else ''
+            if lane and groups and groups[-1]['lane'] == lane:
+                groups[-1]['hashes'].append(h); groups[-1]['first'] = t
+                continue
+            groups.append({'lane': lane, 'hashes': [h], 'time': t, 'first': t, 'subject': subj})
+        for g in groups:
+            g.update(self.describe(tuple(g['hashes'])))
+        return groups
+
+    def _git(self, *args, timeout=20):
+        try:
+            return subprocess.run(['git', '-C', self.cfg['repo'], *args], capture_output=True, text=True,
+                                  timeout=timeout).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            return ''
+
+    def describe(self, hashes):
+        cache = self.__dict__.setdefault('_described', {})
+        if hashes in cache:
+            return cache[hashes]
+        files, body, fb = {}, [], set()
+        for h in hashes:
+            msg = self._git('show', '-s', '--format=%B', h)
+            fb.update(re.findall(r'\bFB-\d+\b', msg))
+            para = [l for l in msg.split('\n\n', 1)[-1].splitlines() if l.strip() and not re.match(r'[\w-]+-By:|Merge ', l)]
+            if para and '\n\n' in msg:
+                body.append(' '.join(para)[:300])
+            for line in self._git('diff', '--numstat', '--find-renames', f'{h}^1', h).splitlines():
+                a, d, path = (line.split('\t', 2) + ['', ''])[:3]
+                st = files.setdefault(path, {'add': 0, 'del': 0, 'bin': False, 'at': h})
+                if a == '-':
+                    st['bin'] = True
+                else:
+                    st['add'] += int(a); st['del'] += int(d)
+                st['at'] = h
+        items, batches, records, code, tests, ledgers, other = [], [], {}, [], [], [], []
+        for path, st in sorted(files.items()):
+            name = path.rsplit('/', 1)[-1]
+            if re.match(r'data/(lane-bundles|axes/lane-bundle-intake)/[0-9a-f]{64}\.json$', path):
+                try:
+                    b = json.loads(read(Path(self.cfg['repo']) / 'data/lane-bundles' / name)
+                                   or self._git('show', f'{st["at"]}:data/lane-bundles/{name}'))
+                    key = re.sub(r'-\d{4}-\d\d-\d\dT[\d:+]+$', '', str(b.get('key', '')))
+                    entry = f'{key} ({b.get("kind", "?")}, {len(b.get("outputs", {}))} outputs)'
+                    if entry not in batches:
+                        batches.append(entry)
+                except ValueError:
+                    pass
+            elif 'ledger' in name:
+                ledgers.append(name)
+            elif path.endswith('.json') and path.startswith('data/'):
+                records.setdefault(path.rsplit('/', 1)[0], []).append((path, st))
+            elif re.search(r'(^|/)tests?/|test_', path):
+                tests.append(f'{name} +{st["add"]}')
+            elif re.search(r'\.(py|mjs|js|ts|tsx|css|html|sh)$', path):
+                code.append(f'{path} +{st["add"]}/−{st["del"]}')
+            else:
+                other.append(f'{path}' + ('' if st['bin'] else f' +{st["add"]}/−{st["del"]}'))
+        summary = []
+        for folder, xs in records.items():
+            titles = []
+            for path, st in xs[:6]:
+                try:
+                    r = json.loads(self._git('show', f'{st["at"]}:{path}'))
+                except ValueError:
+                    continue
+                if isinstance(r, dict) and r.get('title'):
+                    extra = ', '.join(str(x) for x in (r.get('year'), f'{r["n_entries"]} entries' if r.get('n_entries') else None) if x)
+                    titles.append(f'«{str(r["title"])[:70]}»' + (f' ({extra})' if extra else ''))
+            more = f' and {len(xs) - len(titles)} more' if len(xs) > len(titles) else ''
+            summary.append(f'{len(xs)} record{"s" if len(xs) != 1 else ""} in {folder}')
+            items.append(f'{folder}: ' + ('; '.join(titles) + more if titles else f'{len(xs)} files'))
+        if code:
+            summary.append(f'code: {len(code)} file{"s" if len(code) != 1 else ""}' + (f', {len(tests)} test files' if tests else ''))
+            items.append('code: ' + ', '.join(code[:8]) + (f' and {len(code) - 8} more' if len(code) > 8 else ''))
+        if tests and not code:
+            summary.append(f'{len(tests)} test files')
+        if tests:
+            items.append('tests: ' + ', '.join(tests[:8]))
+        if other:
+            items.append('other: ' + ', '.join(other[:8]) + (f' and {len(other) - 8} more' if len(other) > 8 else ''))
+            if not summary:
+                summary.append(', '.join(o.split(' ')[0].rsplit('/', 1)[-1] for o in other[:3]))
+        if batches:
+            items.insert(0, 'from ' + '; '.join(batches))
+        if fb:
+            summary.append(', '.join(sorted(fb, key=lambda x: int(x[3:]))))
+        if ledgers and not summary:
+            summary.append('bookkeeping only (' + ', '.join(sorted(set(ledgers))) + ')')
+        if body:
+            items.append(body[0])
+        source = ', '.join(b.split(' (')[0] for b in batches)
+        out = {'summary': ' · '.join(summary) or 'no file changes', 'items': items, 'source': source}
+        cache[hashes] = out
+        return out
 
     def incidents(self, n=8):
         text = tail(self.state / 'INCIDENTS.md', 24000)
@@ -655,6 +757,25 @@ def button(action, label, args=None, confirm='', cls=''):
             + (f' data-confirm="{E(confirm)}"' if confirm else '') + f'>{E(label)}</button>')
 
 
+OWNER = re.compile(r'(?:→|->)\s*(?:\w+\s+){0,3}?(?:lane|driver)\s+([\w.:-]*\d[\w.:-]*)')
+
+
+def queue_state(item, lanes):
+    """An item marked [~] shows what its named lane is really doing, not just «running»."""
+    st = item['state']
+    if st != 'running':
+        return st, {'open': 'warn', 'waiting': ''}.get(st, '')
+    names = [n.rstrip('.').split(':')[-1] for n in OWNER.findall(item['title'] + ' ' + item['detail'])]
+    found = [lanes[n] for n in names if n in lanes]
+    if not names:
+        return 'assigned', ''
+    if any(r['state'] in ('running', 'pausing') for r in found):
+        return 'running', 'ok'
+    if not found:
+        return 'lane not found', 'warn'
+    return 'lane ' + found[0]['state'].lower(), 'warn'
+
+
 def pill(label, n=None, cls=''):
     return f'<span class="pill {cls}">{E(label)}{" " + E(n) if n is not None else ""}</span>'
 
@@ -733,11 +854,22 @@ class Page:
                                   f'<span class="mut">{E(e["detail"][:220])}</span></td><td class="mut">{ago(e.get("t"))}</td></tr>'
                                   for e in ev[-25:]) + '</table>') if ev else '<div class="mut">nothing</div>'
         h += f'<h3>Integrated today {pill(len(integ))}</h3>'
-        row = lambda c, t, s: f'<tr><td class="mut">{E(t)}</td><td><code>{E(c)}</code></td><td>{E(s[:140])}</td></tr>'
-        h += ('<table>' + ''.join(row(*x) for x in integ[:6]) + '</table>') if integ else '<div class="mut">none yet</div>'
-        if len(integ) > 6:
-            h += (f'<details id="d-integ"><summary>earlier today ({len(integ) - 6})</summary><table>'
-                  + ''.join(row(*x) for x in integ[6:]) + '</table></details>')
+        def row(g):
+            lane = re.sub(r'-20\d{6}(-\d{4})?', '', g['lane']) if g['lane'] else g['subject'][:60]
+            items = list(g.get('items', []))
+            if g.get('source'):
+                items.append(f'integrated by {g["lane"]}')
+                lane = g['source']
+            when = g['time'] if g['first'] == g['time'] else f'{g["first"]}–{g["time"]}'
+            det = ''.join(f'<li>{E(x)}</li>' for x in items)
+            det = (f'<details><summary class="mut">{len(g["hashes"])} commit{"s" if len(g["hashes"]) > 1 else ""} '
+                   f'<code>{E(" ".join(g["hashes"]))}</code></summary><ul>{det}</ul></details>')
+            return (f'<tr><td class="mut">{E(when)}</td><td><b>{E(lane)}</b><div>{E(g.get("summary", ""))}</div>'
+                    f'{det}</td></tr>')
+        h += ('<table>' + ''.join(row(g) for g in integ[:8]) + '</table>') if integ else '<div class="mut">none yet</div>'
+        if len(integ) > 8:
+            h += (f'<details id="d-integ"><summary>earlier today ({len(integ) - 8})</summary><table>'
+                  + ''.join(row(g) for g in integ[8:]) + '</table></details>')
         return h + '</section>'
 
     def health(self, S):
@@ -847,6 +979,7 @@ class Page:
             for it in s['items']:
                 counts[it['state']] = counts.get(it['state'], 0) + 1
         can = self.allowed('queue-move')
+        lanes = {r['lane']: r for r in S.get('lanes', [])}
         h = '<section class="q"><h2>Queue ' + ''.join(
             pill(k, counts[k], {'open': 'warn', 'running': 'ok'}.get(k, '')) for k in ('open', 'running', 'waiting', 'done') if k in counts) + '</h2>'
         for i, s in enumerate(secs):
@@ -859,8 +992,8 @@ class Page:
                     a = {'item': it['id'], 'rev': Q['rev']}
                     mv = ((button('queue-move', '↑', {**a, 'dir': 'up'}) if j else '')
                           + (button('queue-move', '↓', {**a, 'dir': 'down'}) if j < len(live) - 1 else ''))
-                cls = {'open': 'warn', 'running': 'ok', 'waiting': ''}.get(it['state'], '')
-                h += (f'<tr><td>{pill(it["state"], cls=cls)}</td><td><div class="t">{E(it["title"])}</div>'
+                label, cls = queue_state(it, lanes)
+                h += (f'<tr><td>{pill(label, cls=cls)}</td><td><div class="t">{E(it["title"])}</div>'
                       f'<div class="d">{E(it["detail"][:260])}</div></td><td class="mv">{mv}</td></tr>')
             h += '</table>'
             if done:
