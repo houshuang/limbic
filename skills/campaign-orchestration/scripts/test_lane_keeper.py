@@ -839,6 +839,15 @@ class RunawayTest(unittest.TestCase):
         K = self.keeper(reap_orphans=True); self.scan(K)
         self.assertEqual(self.killed, [[500, 501]])
 
+    def test_seal_runs_are_never_reaped(self):
+        # 1 Nov 2026: a 5.3 GB seal-to-box of campaign evidence ran detached from the session that started it
+        self.proc(700, f'python3 /Users/x/.agents/bin/sleepsafe.py --name seal-skard-lane-evidence -- seal-to-box ev {self.C}/lane/http')
+        self.proc(701, f'rsync -a {self.C}/lane/http box:', ppid=700)
+        self.proc(702, f'/Users/x/src/storage/tools/seal-to-box ev {self.C}/lane/images')
+        self.proc(500, f'python3 {self.wt}/tests/run_parallel.py')
+        K = self.keeper(reap_orphans=True); self.scan(K)
+        self.assertEqual(self.killed, [[500]])
+
     def test_release_and_heavy_holders_protect_wrapper_and_descendants(self):
         for heavy in (False, True):
             with self.subTest(heavy=heavy):

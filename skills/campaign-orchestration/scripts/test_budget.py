@@ -263,6 +263,20 @@ class NotifyFilterTest(unittest.TestCase):
             self.assertEqual(kinds, ['READY', 'BUDGET-HOLD', 'AUTONOMY-EXPIRED'])
 
 
+class DiskHookTest(unittest.TestCase):
+    def test_hourly_and_floor_hooks_run_at_most_hourly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp); (tmp / 'repo').mkdir()
+            cfg = tmp / 'c.json'
+            cfg.write_text(json.dumps({'repo': str(tmp / 'repo'), 'campaigns': [], 'state': str(tmp / 'state'),
+                                       'disk_floor_gb': 10 ** 6,
+                                       'disk_hooks': {'hourly': [['sh', '-c', 'echo h >> hooks.log']],
+                                                      'on_floor': [['sh', '-c', 'echo f >> hooks.log']]}}))
+            K = lk.Keeper(cfg)
+            K.disk_hooks(); K.disk_hooks()
+            self.assertEqual((tmp / 'repo/hooks.log').read_text().split(), ['h', 'f'])
+
+
 class ReportTest(unittest.TestCase):
     def test_status_written_and_digest_once_per_slot(self):
         with tempfile.TemporaryDirectory() as tmp:

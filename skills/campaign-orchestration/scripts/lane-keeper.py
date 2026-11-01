@@ -54,6 +54,9 @@ Optional config keys:
       drivers (release cycles, gates) are never held. Running sessions and drivers finish their current step.
       One machine computes (it reads the account's usage) and mirrors HOLD-codex / HOLD-claude / HOLD-autonomy to the
       hosts in "mirror" over ssh; a keeper with "source": "holds" obeys those files instead of computing.
+  "disk_hooks": {"hourly": [["python3", "scripts/disk_budget.py", "report"]], "on_floor": [[…reap --execute]]}
+      repo-owned disk commands, run in the repo at most hourly; on_floor only while free disk < disk_floor_gb.
+  "protect_patterns": [regex]   processes the orphan reaper never touches (default: seal-to-box, sleepsafe seal-*)
   "digest": {"times": ["07:30", "19:00"]}
       keeper/STATUS.md and STATUS.html are rewritten every tick (report.py, no tokens); at these local times the
       text is mailed through notify.cmd.
@@ -98,6 +101,7 @@ INFO_KINDS = {'HEAVY-WAIT', 'QUIET', 'ORPHAN', 'STOPPED-BUT-RUNNING', 'STALE-PRE
               'BUDGET-HOLD', 'BUDGET-OK', 'AUTONOMY-ENDING', 'AUTONOMY-EXPIRED'}
 NOTIFY_ALWAYS = {'BUDGET-HOLD', 'AUTONOMY-ENDING', 'AUTONOMY-EXPIRED'}   # informational, but the owner must know
 STALL = 3 * 3600
+PROTECT_PATTERNS = [r'seal-to-box', r'sleepsafe\.py --name seal-']
 HANDOVER_CHARS = 2800
 RETIRE_GRACE = 60   # a retiring session still writes its last message after `retire`
 _FNM = Path.home() / 'Library/Application Support/fnm/node-versions/v24.11.1/installation/bin'
@@ -1008,7 +1012,9 @@ Pending events (also in {self.k / 'EVENTS'}):
 Handle each event: integrate READY checkpoints by the repository's integration rules, review DONE files (a DONE before \
 the queue is exhausted is a failure: resume or relaunch the lane), fix or relaunch failed drivers. After handling a \
 lane run `python3 {script} ack <lane-dir> "<one line: what you did>"`, or write RETIRED there with the reason.
-Git safety: integrate in a worktree you create for it. If you must use the main checkout, run `git status` there \
+Git safety: integrate in a worktree you create for it, with the repository's lane command (AGENTS.md; thin lanes), \
+never a bare `git worktree add` of the whole repo: six full 8 GB recovery checkouts filled the disk on 1 Nov. Remove \
+the worktree when its work is integrated. If you must use the main checkout, run `git status` there \
 first, and never run `git reset --hard`, `git checkout -- <path>`, `git restore`, `git stash` or `git clean` in a checkout \
 you did not create: other sessions keep uncommitted work in them.
 Do not watch long jobs from this session and do not arm monitors. Start long jobs detached under \
@@ -1122,6 +1128,10 @@ retire refuses an over-long or run-together handover, so fix it and retire again
                 release_chain.update([pid, *ancestors(table, pid)])
         # Do not traverse descendants of pid 1: that would protect all orphans.
         roots_to_protect = release_chain - {1}
+        # Deliberately detached long jobs (seal-to-box archiving, sleepsafe runs named in "protect_patterns") outlive
+        # the session that started them; reaping one half-way loses hours of upload (1 Nov: a 5.3 GB lane seal).
+        keep_alive = re.compile('|'.join(c.get('protect_patterns', PROTECT_PATTERNS)))
+        roots_to_protect |= {p for p, r in table.items() if p != 1 and keep_alive.search(r['cmd'])}
         release_protected = roots_to_protect | descendants(table, roots_to_protect)
         protected = ({os.getpid(), *ancestors(table, os.getpid())}
                      | descendants(table, [os.getpid(), *sessions, *tracked_pids])
@@ -1185,6 +1195,26 @@ retire refuses an over-long or run-together handover, so fix it and retire again
             self.event(self.k, 'RESOURCE-FLOOR', '; '.join(reasons) + f'; top: {top_processes(table)}; largest: '
                        f'{largest_dirs(c.get("disk_watch", []))}', key=f'runaway|{key}', name='machine')
 
+    def disk_hooks(self):
+        """Repo-owned disk commands: "disk_hooks": {"hourly": [argv], "on_floor": [argv]} (argv lists, run in the repo)."""
+        H = self.cfg.get('disk_hooks') or {}
+        D = self.st.setdefault('disk_hooks', {})
+        floor = disk_free_gb(str(self.repo)) < self.cfg.get('disk_floor_gb', 30)
+        due = [('hourly', 3600)] + ([('on_floor', 3600)] if floor else [])
+        for name, gap in due:
+            if not H.get(name) or now() - D.get(name, 0) < gap:
+                continue
+            D[name] = now()
+            for argv in H[name]:
+                if self.dry:
+                    self.log(f'DISK-HOOK {name}: {" ".join(argv)}'); continue
+                try:
+                    r = subprocess.run(argv, cwd=self.repo, capture_output=True, text=True, timeout=1800,
+                                       env={**os.environ, 'PATH': PATH})
+                    self.log(f'DISK-HOOK {name} exit {r.returncode}: {" ".join(argv)[:120]} {r.stdout.strip()[-200:]}')
+                except (OSError, subprocess.TimeoutExpired) as e:
+                    self.log(f'ERROR disk hook {name}: {e!r}')
+
     def tick(self):
         lock = open(self.k / 'tick.lock', 'w')
         try:
@@ -1209,6 +1239,10 @@ retire refuses an over-long or run-together handover, so fix it and retire again
             self.runaways()
         except Exception as e:
             self.log(f'ERROR runaways: {e!r}')
+        try:
+            self.disk_hooks()
+        except Exception as e:
+            self.log(f'ERROR disk hooks: {e!r}')
         self.check_release_scope()
         self.schedule_events()
         self.clear_events(self.pull_remote())
