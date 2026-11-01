@@ -47,6 +47,16 @@ Optional config keys:
                {"at": "07:00", "date": "2026-11-01", "kind": "DEADLINE", "note": "release live"}]
       local-time events, each fired once per day it applies (days: Mon…Sun; date: one day only); they are actionable,
       so a coordinator starts for them like for READY. Fixed-time checks are what a lane event never says.
+  "budget": {"enabled": true, "mirror": ["alif-ts"]}   |   {"enabled": true, "source": "holds"}
+      gate starts on budget.py: the owner's reserve and pacing line per engine (Codex/Claude usage read from their
+      own logs) and the autonomy window. Without autonomy no coordinator or fresh lane session starts; over the line
+      nothing of that engine starts or resumes, and HOLD-<engine> files make repeating drive-loops wait. --once
+      drivers (release cycles, gates) are never held. Running sessions and drivers finish their current step.
+      One machine computes (it reads the account's usage) and mirrors HOLD-codex / HOLD-claude / HOLD-autonomy to the
+      hosts in "mirror" over ssh; a keeper with "source": "holds" obeys those files instead of computing.
+  "digest": {"times": ["07:30", "19:00"]}
+      keeper/STATUS.md and STATUS.html are rewritten every tick (report.py, no tokens); at these local times the
+      text is mailed through notify.cmd.
   "notify": {"cmd": "/srv/agents/bin/notify", "min_gap_minutes": 30}
       new events are mailed in one batch at most once per gap
   "detach": ["systemd-run", "--scope", "--quiet", "--collect"]
@@ -68,6 +78,7 @@ import datetime as dt
 import fcntl, hashlib, json, os, re, shlex, shutil, signal, subprocess, sys, time, uuid
 from pathlib import Path
 from session_guard import last_session_id, local_codex_session, tail_text
+import budget
 
 DEFAULT_CONFIG = Path.home() / 'src/skard/.coordinator.json'
 SCRIPTS = Path(__file__).resolve().parent
@@ -83,7 +94,8 @@ TRANSCRIPT_TAIL = 1_000_000  # bounded I/O even for a multi-hundred-MB session
 COORD_LIVE = 1200
 # Events a coordinator may read but that never justify starting one: the lane is healthy and waiting, or the keeper
 # already acted (reaped). A lane silent for STALL seconds (QUIET → STALLED) is actionable.
-INFO_KINDS = {'HEAVY-WAIT', 'QUIET', 'ORPHAN', 'STOPPED-BUT-RUNNING', 'STALE-PREVIEW'}
+INFO_KINDS = {'HEAVY-WAIT', 'QUIET', 'ORPHAN', 'STOPPED-BUT-RUNNING', 'STALE-PREVIEW',
+              'BUDGET-HOLD', 'BUDGET-OK', 'AUTONOMY-ENDING', 'AUTONOMY-EXPIRED'}
 STALL = 3 * 3600
 HANDOVER_CHARS = 2800
 RETIRE_GRACE = 60   # a retiring session still writes its last message after `retire`
@@ -342,6 +354,7 @@ class Keeper:
         self.st = json.loads(self.sf.read_text()) if self.sf.exists() else {}
         for key in ('events', 'lanes', 'coordinator', 'remote', 'notify'):
             self.st.setdefault(key, {})
+        self.gates, self.autonomous = {}, True
 
     # bookkeeping
     def log(self, msg):
@@ -433,6 +446,8 @@ class Keeper:
         if (d / 'codex.log').exists() and lived < 300 and not made_driver and fresh_at and started >= fresh_at:
             return self.event(d, 'SHORT-SESSION', f'last fresh session lived {lived:.0f}s and started no driver')
         model = (d / 'model').read_text().split() if (d / 'model').exists() else []
+        if not self.may_spend(self.lane_engine(d), d, new=True):
+            return
         if not self.dry:
             (d / 'fresh').write_text(str(n + 1)); (d / 'fresh-at').write_text(str(int(now())))
         self.log(f'FRESH {d.name} ({why})')
@@ -445,6 +460,8 @@ class Keeper:
             if Keeper.claude_lane(d):   # engine switched to Claude (or its session never started): brief + HANDOFF
                 return self.launch(C, d, f'{why}; no Claude session to resume')
             return self.event(d, 'ENDED', f'{why}; no session id in codex.log to resume')
+        if not self.may_spend(self.lane_engine(d), d):
+            return
         self.log(f'RESUME {d.name} ({why})')
         self.run(['bash', str(SCRIPTS / 'resume.sh'), str(C), d.name, str(msg_file)], self.repo, C / 'autoresume.log')
 
@@ -504,6 +521,8 @@ class Keeper:
         except (ValueError, OSError) as error:
             self.log(f'NEXT-COMMAND {d.name}: refused ({error})')
             return False
+        if argv[1:2] != ['--once'] and not self.may_spend(self.lane_engine(d), d):
+            return True
         process = self.run(['bash', *argv], self.repo, d / 'driver.log')
         if not self.dry:
             if not alive(d / 'driver.pid'):
@@ -615,6 +634,8 @@ class Keeper:
             L['restarts'] = [t for t in L.get('restarts', []) if now() - t < 6 * 3600]
             if len(L['restarts']) >= 3:
                 return self.event(d, 'DRIVER-DYING', 'drive-loop killed three times in six hours', key=f'{d}|DYING|{int(L["restarts"][0])}')
+            if '--once' not in spec['args'] and not self.may_spend(self.lane_engine(d), d):
+                return
             L['restarts'].append(now())
             self.log(f'DRIVER-RESTART {d.name}: drive-loop was killed ({exit_note or "no exit recorded"})')
             return self.run(['bash', str(SCRIPTS / 'drive-loop.sh'), *spec['args']], spec['cwd'], d / 'driver.log')
@@ -772,6 +793,90 @@ class Keeper:
                 return f'session {f.stem[:8]} active'
         return None
 
+    # budget and autonomy (budget.py); a disabled budget allows everything
+    def budget_on(self):
+        return bool(self.cfg.get('budget', {}).get('enabled'))
+
+    @staticmethod
+    def lane_engine(d):
+        f = d / 'engine'
+        if f.exists():
+            return f.read_text().strip() or 'codex'
+        return 'claude' if Keeper.claude_lane(d) else 'codex'
+
+    def update_budget(self):
+        self.gates, self.autonomous = {}, True
+        if not self.budget_on():
+            return
+        hold_dir = Path(self.cfg['budget'].get('hold_dir', budget.HOLD_DIR))
+        if self.cfg['budget'].get('source') == 'holds':
+            for e in budget.ENGINES:
+                f = hold_dir / f'HOLD-{e}'
+                self.gates[e] = (not f.exists(), read_text(f) or 'ok')
+            self.autonomous = not (hold_dir / 'HOLD-autonomy').exists()
+            return
+        P = budget.load()
+        for e in budget.ENGINES:
+            ok, reason, _ = budget.gate(e, P)
+            self.gates[e] = (ok, reason)
+            B = self.st.setdefault('budget', {})
+            if B.get(e) != ok:
+                B[e] = ok
+                self.event(self.k, 'BUDGET-OK' if ok else 'BUDGET-HOLD', reason,
+                           key=f'budget|{e}|{"ok" if ok else "hold"}|{int(now())}', name=f'budget:{e}')
+        self.autonomous, until = budget.autonomy(P)
+        holds = {**self.gates, 'autonomy': (self.autonomous, 'autonomy expired; renew with budget.py allow')}
+        if not self.dry:
+            budget.write_holds(holds, hold_dir)
+            self.mirror_holds(holds)
+        A = self.st.setdefault('autonomy', {})
+        if self.autonomous and until - now() < 3600 and A.get('ending') != until:
+            A['ending'] = until
+            self.event(self.k, 'AUTONOMY-ENDING', f'autonomy ends {budget.fmt_time(until)}; renew with budget.py allow',
+                       key=f'autonomy|ending|{int(until)}', name='autonomy')
+        if not self.autonomous and until and A.get('expired') != until:
+            A['expired'] = until
+            self.event(self.k, 'AUTONOMY-EXPIRED', f'ended {budget.fmt_time(until)}: no new coordinators or lanes until '
+                       'renewed (budget.py allow); running lanes continue', key=f'autonomy|expired|{int(until)}', name='autonomy')
+
+    def mirror_holds(self, holds):
+        """Push hold files to other machines when they change (and hourly, to repair a missed push)."""
+        hosts = self.cfg['budget'].get('mirror', [])
+        if not hosts:
+            return
+        sig = json.dumps({k: v[0] for k, v in sorted(holds.items())})
+        M = self.st.setdefault('budget_mirror', {})
+        for host in hosts:
+            if M.get(host, {}).get('sig') == sig and now() - M[host].get('t', 0) < 3600:
+                continue
+            script = 'mkdir -p ~/.agents/budget; ' + '; '.join(
+                f'rm -f ~/.agents/budget/HOLD-{k}' if ok else f'printf %s {shlex.quote(r)} > ~/.agents/budget/HOLD-{k}'
+                for k, (ok, r) in sorted(holds.items()))
+            try:
+                ok = subprocess.run([*SSH, host, script], capture_output=True, timeout=30).returncode == 0
+            except (OSError, subprocess.TimeoutExpired):
+                ok = False
+            if ok:
+                M[host] = {'sig': sig, 't': now()}
+            else:
+                self.log(f'ERROR budget mirror to {host} failed')
+
+    def may_spend(self, engine, d=None, new=False):
+        """new=True: a fresh session or coordinator also needs autonomy. Logs a deferral once per reason."""
+        if not self.budget_on():
+            return True
+        ok, reason = getattr(self, 'gates', {}).get(engine, (True, ''))
+        if new and not getattr(self, 'autonomous', True):
+            ok, reason = False, 'autonomy expired'
+        if not ok and d is not None:
+            L = self.lane(d)
+            if L.get('deferred') != reason:
+                L['deferred'] = reason
+                self.log(f'DEFERRED {Path(d).name}: {reason}')
+        elif ok and d is not None:
+            self.lane(d).pop('deferred', None)
+        return ok
+
     def lease(self):
         """keeper/LEASE names who holds integration until when; expired or malformed leases count as absent."""
         try:
@@ -860,6 +965,8 @@ class Keeper:
         if live:
             return
         engine = c.get('engine', 'claude')
+        if not self.may_spend(engine, self.k, new=True):
+            return
         if engine not in ('claude', 'codex'):
             raise ValueError('coordinator.engine must be claude or codex')
         S = self.st['coordinator']
@@ -1084,6 +1191,11 @@ retire refuses an over-long or run-together handover, so fix it and retire again
         except OSError:
             return
         (self.k / 'heartbeat').touch()
+        try:
+            self.update_budget()
+        except Exception as e:   # a budget fault must not stop lanes: fall back to allowing
+            self.gates, self.autonomous = {}, True
+            self.log(f'ERROR budget: {e!r}')
         for C, ds in self.lanes():
             (C / '.watcher-heartbeat').touch()   # launch.sh refuses without it: the keeper now runs the cost guard
             self.costguard(C, [d.name for d in ds if alive(d / 'pid')])
@@ -1101,6 +1213,11 @@ retire refuses an over-long or run-together handover, so fix it and retire again
         self.clear_events(self.pull_remote())
         self.maybe_start_coordinator()
         self.notify()
+        try:
+            import report
+            report.tick(self)
+        except Exception as e:
+            self.log(f'ERROR report: {e!r}')
         self.save()
 
 

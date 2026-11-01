@@ -8,6 +8,9 @@
 # Writes its own pid to <state-dir>/driver.pid and its arguments to driver.cmd; on exit it writes DRIVER-EXIT
 # (the exit code, or «term»). lane-keeper.py restarts a drive-loop that was killed (no DRIVER-EXIT, or «term»),
 # so stop one deliberately with <state-dir>/STOP, never with kill alone.
+# Budget: a repeating loop waits (does not stop) while ~/.agents/budget/HOLD-<engine> exists (written by lane-keeper
+# from budget.py); <state-dir>/engine names the engine (default codex; «none» for drivers that call no model).
+# --once jobs (release cycles, gates) never wait.
 # sleepsafe.py is $SLEEPSAFE, else ~/.agents/bin/sleepsafe.py, else the one on PATH. Runs under bash 3.2 (macOS) and Linux.
 once=0; [[ $1 == --once ]] && { once=1; shift; }
 S=$(cd "$1" && pwd -P); name=$2; limit=$3; shift 3; [[ $1 == -- ]] && shift
@@ -22,6 +25,14 @@ finish() { echo $1 > $S/DRIVER-EXIT; exit $1; }
 failures=0
 while true; do
   [[ -e $S/STOP || -e $S/DONE.md ]] && { echo "$(date -u +%FT%TZ) drive-loop: stop file"; finish 0; }
+  if (( ! once )); then
+    engine=$(cat $S/engine 2>/dev/null || echo codex); hold=${AGENTS_BUDGET_DIR:-$HOME/.agents/budget}/HOLD-$engine
+    if [[ $engine != none && -e $hold ]]; then
+      echo "$(date -u +%FT%TZ) drive-loop: budget hold ($(cat $hold 2>/dev/null)); waiting"
+      while [[ -e $hold && ! -e $S/STOP && ! -e $S/DONE.md ]]; do sleep ${BUDGET_POLL:-300}; done
+      continue
+    fi
+  fi
   "$SLEEPSAFE" --name $name --limit $limit -- "$@"
   code=$?
   echo "$(date -u +%FT%TZ) drive-loop: exit $code"

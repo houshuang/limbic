@@ -264,6 +264,23 @@ Claude nights built; the shape is what carries over:
 - **Guards are config, not conversation.** A coordinator does not raise `max_starts_per_day` or other caps to keep
   itself going (16→24→48 on 31 Oct); a cap it hits is an incident.
 
+## Budget, autonomy and the owner's view (1 Nov 2026)
+
+The owner shares both subscriptions with other work, and the allowance varies. A campaign does not take what is
+available; it takes its paced share and reports.
+- **Usage is measured, not guessed.** Codex sessions log the account's weekly window (`rate_limits.primary`); headless
+  Claude logs `rate_limit_event` (five-hour and seven-day). `scripts/budget.py` reads the newest snapshot.
+- **Pacing line:** `min(100 − reserve, (100 − reserve) × elapsed share of the window + slack)`. Owner settings in
+  `~/.agents/budget.json`: `budget.py reserve codex 40`, `budget.py mode claude off|low|normal|burn` (burn = use up to the
+  reserve now; it ends at the next reset). Measured 1 Nov: one overnight campaign used 26% of the Codex week in nine hours.
+- **Autonomy window:** `budget.py allow [hours]` (default 16). After it, the keeper starts no coordinator and no fresh lane
+  session; running work continues. AUTONOMY-ENDING fires an hour before.
+- **Enforcement points:** the keeper gates coordinator starts, fresh sessions, resumes, NEXT-COMMAND and driver restarts;
+  repeating drive-loops wait while `~/.agents/budget/HOLD-<engine>` exists (`<lane>/engine` = codex | claude | none);
+  `--once` jobs never wait. One machine computes and mirrors hold files to the others (`budget.mirror`).
+- **The owner sees it without asking:** keeper/STATUS.md and STATUS.html (every 5 min) and a mailed digest at
+  `digest.times`; budget and autonomy events go out with the batched notify mail. All of it costs no tokens.
+
 ## Threads: one orchestrator, or more chats?
 
 The coordinator's context is the main cost. skard 23–29 Oct: two coordinator sessions averaged 357k and
