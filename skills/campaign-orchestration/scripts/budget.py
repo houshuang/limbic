@@ -25,10 +25,10 @@ Policy file ~/.agents/budget.json (override with AGENTS_BUDGET). Hold files for 
     budget.py reserve codex|claude PCT
     budget.py mode codex|claude off|low|normal|burn
     budget.py pacing codex|claude ceiling|linear
-    budget.py allow [HOURS]          # renew autonomy (default autonomy_hours)
+    budget.py allow [HOURS|forever]  # renew autonomy (default autonomy_hours); forever = until `stop`
     budget.py stop                   # end autonomy now
 """
-import glob, json, os, sys, time
+import glob, json, math, os, sys, time
 from pathlib import Path
 
 POLICY = Path(os.environ.get('AGENTS_BUDGET', Path.home() / '.agents/budget.json'))
@@ -202,6 +202,8 @@ def gate(engine, P=None, t=None, snap=None):
 def autonomy(P=None, t=None):
     P = P or load(); t = t or now()
     until = float(P.get('autonomy_until') or 0)
+    if until < 0:
+        return True, math.inf
     return t < until, until
 
 
@@ -217,6 +219,8 @@ def write_holds(results, hold_dir=None):
 
 
 def fmt_time(t):
+    if t == math.inf:
+        return 'stopped by the owner (no end)'
     return time.strftime('%a %d %b %H:%M', time.localtime(t)) if t else '—'
 
 
@@ -250,8 +254,11 @@ def main(argv):
     elif cmd == 'pacing' and len(argv) == 3 and argv[1] in ENGINES and argv[2] in ('ceiling', 'linear'):
         P.setdefault('pacing', {})[argv[1]] = argv[2]
     elif cmd == 'allow':
-        hours = float(argv[1].rstrip('h')) if len(argv) > 1 else float(P['autonomy_hours'])
-        P['autonomy_until'] = now() + hours * 3600
+        if len(argv) > 1 and argv[1] == 'forever':
+            P['autonomy_until'] = -1
+        else:
+            hours = float(argv[1].rstrip('h')) if len(argv) > 1 else float(P['autonomy_hours'])
+            P['autonomy_until'] = now() + hours * 3600
     elif cmd == 'stop':
         P['autonomy_until'] = 0
     else:

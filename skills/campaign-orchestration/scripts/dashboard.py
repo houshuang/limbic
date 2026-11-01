@@ -739,7 +739,8 @@ class Page:
             ('Coordinator', (f'<span class="ok">{E(S.get("coordinator"))}</span>' if S.get('coordinator') else '<span class="mut">none live</span>')
              + f' <span class="mut">{E(S.get("engine", ""))} · starts {S.get("coordinator_starts", 0)}/{S.get("max_starts", "")}</span>'
              + (' ' + pill('stuck', cls='bad') if S.get('stuck') else '') + (f' <span class="mut">until {E(S["lease"].split(" until ")[-1])}</span>' if S.get('lease') else '')),
-            ('Autonomy', (f'<span class="{"ok" if until - now() > 3600 else "warn"}">until {time.strftime("%a %H:%M", time.localtime(until))}</span>'
+            ('Autonomy', ('<span class="ok">no end</span>' if ok and until == float('inf') else
+                          f'<span class="{"ok" if until - now() > 3600 else "warn"}">until {time.strftime("%a %H:%M", time.localtime(until))}</span>'
                           if ok else '<span class="bad">' + ('expired' if until else 'not granted') + '</span>')
              + (' ' + button('autonomy-renew', self.C.D['actions']['autonomy-renew'].get('label', 'Renew'), {}, 'Renew autonomy?')
                 if self.allowed('autonomy-renew') else '')),

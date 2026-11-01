@@ -1,4 +1,5 @@
 """Run: python3 skills/campaign-orchestration/scripts/test_budget.py"""
+import math
 import importlib.util, json, os, subprocess, sys, tempfile, time, unittest
 from pathlib import Path
 from unittest import mock
@@ -124,6 +125,19 @@ class CliTest(unittest.TestCase):
             P = json.loads(Path(f'{tmp}/b.json').read_text())
             self.assertEqual((P['reserve']['codex'], P['mode']['claude'], P['autonomy_until']), (55, 'off', 0))
             self.assertEqual(run('mode', 'claude', 'everything').returncode, 2)
+
+    def test_allow_forever_until_stop(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {**os.environ, 'AGENTS_BUDGET': f'{tmp}/b.json', 'CODEX_HOME': tmp}
+            run = lambda *a: subprocess.run([sys.executable, str(HERE / 'budget.py'), *a], env=env, capture_output=True, text=True)
+            r = run('allow', 'forever')
+            self.assertEqual(r.returncode, 0)
+            self.assertIn('no end', r.stdout)
+            P = json.loads(Path(f'{tmp}/b.json').read_text())
+            self.assertEqual(budget.autonomy(P, time.time() + 10 ** 8), (True, math.inf))
+            run('stop')
+            P = json.loads(Path(f'{tmp}/b.json').read_text())
+            self.assertEqual(budget.autonomy(P), (False, 0))
 
     def test_hold_files_follow_gates(self):
         with tempfile.TemporaryDirectory() as tmp:
