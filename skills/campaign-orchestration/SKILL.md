@@ -270,7 +270,7 @@ The owner shares both subscriptions with other work, and the allowance varies. A
 available; it takes its paced share and reports.
 - **Usage is measured, not guessed.** Codex sessions log the account's weekly window (`rate_limits.primary`); headless
   Claude logs `rate_limit_event` (five-hour and seven-day). `scripts/budget.py` reads the newest snapshot.
-- **Pacing line:** `min(100 − reserve, (100 − reserve) × elapsed share of the window + slack)`. Owner settings in
+- **Pacing line:** `min(100 − reserve, (100 − reserve) × elapsed share of the window + slack)` for Claude; Codex uses `"pacing": "ceiling"` (line = 100 − reserve), because its allowance refills unpredictably and spacing out wastes it (Stian, 1 Nov). Owner settings in
   `~/.agents/budget.json`: `budget.py reserve codex 40`, `budget.py mode claude off|low|normal|burn` (burn = use up to the
   reserve now; it ends at the next reset). Measured 1 Nov: one overnight campaign used 26% of the Codex week in nine hours.
 - **Autonomy window:** `budget.py allow [hours]` (default 16). After it, the keeper starts no coordinator and no fresh lane

@@ -34,13 +34,23 @@ class PacingTest(unittest.TestCase):
         self.assertAlmostEqual(mid, 35, delta=0.5)
         self.assertEqual(late, 60)
 
-    def test_overnight_burn_is_held(self):
-        # 1 Nov 2026: 26% of the Codex week used nine hours into it
+    def test_linear_pacing_holds_an_overnight_burn(self):
+        # 1 Nov 2026: 26% of a week used nine hours into it
+        self.P['pacing']['codex'] = 'linear'
         ok, reason, info = budget.gate('codex', self.P, snap=snap(26, WEEK - 9 * 3600))
         self.assertFalse(ok)
         self.assertIn('pacing line', reason)
 
+    def test_codex_ceiling_keeps_only_the_reserve(self):
+        # Codex refills unpredictably: no spacing out, but the 40% reserve is never used
+        self.assertTrue(budget.gate('codex', self.P, snap=snap(26, WEEK - 9 * 3600))[0])
+        self.assertTrue(budget.gate('codex', self.P, snap=snap(59, WEEK - 3600 * 9))[0])
+        self.assertFalse(budget.gate('codex', self.P, snap=snap(61, WEEK - 3600 * 9))[0])
+        self.P['mode']['codex'] = 'low'
+        self.assertFalse(budget.gate('codex', self.P, snap=snap(31, WEEK - 3600 * 9))[0])
+
     def test_modes(self):
+        self.P['pacing']['codex'] = 'linear'
         s = snap(30, WEEK / 2)
         self.assertTrue(budget.gate('codex', self.P, snap=s)[0])
         self.P['mode']['codex'] = 'low'
@@ -139,7 +149,8 @@ class KeeperGateTest(unittest.TestCase):
         self.K.st['coordinator'] = {'last': 0, 'day': time.strftime('%F'), 'starts': 0}
 
     def gates(self, codex_used, allow_hours):
-        budget.save({**budget.load(), 'autonomy_until': time.time() + allow_hours * 3600})
+        P = budget.load(); P['pacing']['codex'] = 'linear'
+        budget.save({**P, 'autonomy_until': time.time() + allow_hours * 3600})
         s = snap(codex_used, WEEK / 2)
         with mock.patch.object(budget, 'snapshot', side_effect=lambda e, P: s if e == 'codex' else None):
             self.K.update_budget()

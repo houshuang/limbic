@@ -11,7 +11,8 @@ The pacing line lets a campaign spend at most its share of the time elapsed in t
     line = min(cap, cap * elapsed_fraction + slack),   cap = 100 - reserve
 
 so early in the week it cannot burn the week, and near a reset it may use what would otherwise lapse,
-never the reserve. Modes: off (nothing), low (half the line), normal, burn (up to cap now; ends at the
+never the reserve. Per engine, "pacing": "ceiling" drops the time term (line = cap): for an allowance that
+refills unpredictably (Codex, Stian 1 Nov 2026), spacing out wastes capacity; only the reserve is kept. Modes: off (nothing), low (half the line), normal, burn (up to cap now; ends at the
 reset that was current when it was set).
 
 Autonomy: after `allow` the keeper may start coordinators and fresh lane sessions for autonomy_hours
@@ -23,6 +24,7 @@ Policy file ~/.agents/budget.json (override with AGENTS_BUDGET). Hold files for 
     budget.py status
     budget.py reserve codex|claude PCT
     budget.py mode codex|claude off|low|normal|burn
+    budget.py pacing codex|claude ceiling|linear
     budget.py allow [HOURS]          # renew autonomy (default autonomy_hours)
     budget.py stop                   # end autonomy now
 """
@@ -38,6 +40,7 @@ DEFAULT = {
     'reserve': {'codex': 40, 'claude': 50},
     'mode': {'codex': 'normal', 'claude': 'normal'},
     'mode_until': {},
+    'pacing': {'codex': 'ceiling', 'claude': 'linear'},
     'slack': 5,
     'autonomy_hours': 16,
     'autonomy_until': 0,
@@ -146,12 +149,14 @@ def snapshot(engine, P):
     return codex_snapshot() if engine == 'codex' else claude_snapshot(P['claude_logs'])
 
 
-def pacing_line(S, reserve, slack, mode, t):
+def pacing_line(S, reserve, slack, mode, t, pacing='linear'):
     cap = max(0.0, 100.0 - reserve)
     if mode == 'off':
         return 0.0
     if mode == 'burn':
         return cap
+    if pacing == 'ceiling':
+        return cap / 2 if mode == 'low' else cap
     window = S['window_min'] * 60
     if t >= S['resets_at']:     # a reset passed since the snapshot: a new window has barely begun
         frac = min(1.0, (t - S['resets_at']) / window)
@@ -181,7 +186,7 @@ def gate(engine, P=None, t=None, snap=None):
     if not S:
         return True, f'{engine}: no usage data seen', info
     used = S['used'] if t < S['resets_at'] else 0.0
-    line = pacing_line(S, reserve, P['slack'], m, t)
+    line = pacing_line(S, reserve, P['slack'], m, t, P.get('pacing', {}).get(engine, 'linear'))
     info.update(used=used, line=line, resets_at=S['resets_at'], age_h=(t - S['t']) / 3600)
     if S.get('blocked') and t < S['resets_at']:
         return False, f'{engine} limit reached; resets {time.strftime("%a %H:%M", time.localtime(S["resets_at"]))}', info
@@ -242,6 +247,8 @@ def main(argv):
             S = snapshot(argv[1], P)
             if S and S['resets_at'] > now():
                 P['mode_until'][argv[1]] = S['resets_at']
+    elif cmd == 'pacing' and len(argv) == 3 and argv[1] in ENGINES and argv[2] in ('ceiling', 'linear'):
+        P.setdefault('pacing', {})[argv[1]] = argv[2]
     elif cmd == 'allow':
         hours = float(argv[1].rstrip('h')) if len(argv) > 1 else float(P['autonomy_hours'])
         P['autonomy_until'] = now() + hours * 3600
