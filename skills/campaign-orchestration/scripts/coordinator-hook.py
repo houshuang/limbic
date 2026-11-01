@@ -128,7 +128,7 @@ def main():
         tokens = context_tokens(h.get('transcript_path', ''))
         mark = REG / f'{sid}.warned'
         if tokens >= BLOCK:
-            print(json.dumps({'decision': 'block', 'reason': f'Coordinator context is {tokens//1000}k tokens (limit {BLOCK//1000}k). Write the handover now (state, live lanes, next steps, under 400 words) to {reg.get("state", "the state dir")}/<session>-HANDOVER-<YYYYMMDD-HHMM>.md and stop. lane-keeper starts the successor from the newest *HANDOVER*.md there as soon as lanes raise events and no coordinator is live; leave the keeper armed and do not stop lanes or drivers.'}))
+            print(json.dumps({'decision': 'block', 'reason': f'Coordinator context is {tokens//1000}k tokens (limit {BLOCK//1000}k). Write the handover now (state, live lanes, and for each next step the lane that owns it or the file it waits on; normally spaced sentences, at most 2,800 characters) to {reg.get("state", "the state dir")}/<session>-HANDOVER-<YYYYMMDD-HHMM>.md and stop. lane-keeper starts the successor from the newest *HANDOVER*.md there as soon as lanes raise events and no coordinator is live; leave the keeper armed and do not stop lanes or drivers.'}))
         elif tokens >= WARN and not mark.exists():
             mark.touch()
             print(json.dumps({'hookSpecificOutput': {'hookEventName': 'PostToolUse', 'additionalContext': f'Coordinator context is {tokens//1000}k tokens. Plan the handover: finish the current step, then write it before {BLOCK//1000}k.'}}))

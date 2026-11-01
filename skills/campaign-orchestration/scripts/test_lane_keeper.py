@@ -75,7 +75,7 @@ class RetireTest(unittest.TestCase):
         self.register('new', self.t - 50, self.t - 5)
         self.assertEqual(self.K.coordinator_live(), 'session new active')
 
-    def test_retire_bypasses_min_gap_once(self):
+    def test_retire_does_not_bypass_min_gap(self):
         self.K.dry = True
         self.K.st['events'] = {'k': {'lane': '/x', 'name': 'x', 'kind': 'READY', 'detail': 'd', 't': self.t}}
         self.K.st['coordinator'] = {'last': self.t - 60, 'day': time.strftime('%F'), 'starts': 1}
@@ -83,10 +83,97 @@ class RetireTest(unittest.TestCase):
         self.assertEqual(self.K.st['coordinator']['starts'], 1)   # within min gap
         self.retire_at(self.t - 30)
         self.K.maybe_start_coordinator()
-        self.assertEqual(self.K.st['coordinator']['starts'], 2)
-        self.K.st['events']['k2'] = dict(self.K.st['events']['k'])
+        self.assertEqual(self.K.st['coordinator']['starts'], 1)   # a two-minute coordinator does not earn an immediate successor
+        self.K.st['coordinator']['last'] = self.t - 601
         self.K.maybe_start_coordinator()
-        self.assertEqual(self.K.st['coordinator']['starts'], 2)   # bypass used up
+        self.assertEqual(self.K.st['coordinator']['starts'], 2)
+
+    def test_informational_events_never_start_a_coordinator(self):
+        # 1 Nov 2026 00:01–02:32: a successor every ~2 min, each only acknowledging HEAVY-WAIT, used all 48 daily starts
+        self.K.dry = True
+        self.K.st['coordinator'] = {'last': self.t - 3600, 'day': time.strftime('%F'), 'starts': 0}
+        self.K.st['events'] = {f'h{i}': {'lane': f'/l{i}', 'name': f'l{i}', 'kind': k, 'detail': 'd', 't': self.t}
+                               for i, k in enumerate(['HEAVY-WAIT', 'QUIET', 'STALE-PREVIEW', 'ORPHAN', 'STOPPED-BUT-RUNNING'])}
+        for _ in range(5):
+            self.K.maybe_start_coordinator()
+            self.K.st['coordinator']['last'] = self.t - 3600
+        self.assertEqual(self.K.st['coordinator']['starts'], 0)
+        self.K.st['events']['r'] = {'lane': '/r', 'name': 'r', 'kind': 'READY', 'detail': 'd', 't': self.t}
+        self.K.maybe_start_coordinator()
+        self.assertEqual(self.K.st['coordinator']['starts'], 1)
+        self.assertEqual(self.K.st['coordinator']['last_keys'], ['r'])   # stuck detection follows actionable events only
+
+    def test_info_kinds_configurable(self):
+        self.K.dry = True
+        self.K.cfg['coordinator'] = {'info_kinds': []}
+        self.K.st['coordinator'] = {'last': self.t - 3600, 'day': time.strftime('%F'), 'starts': 0}
+        self.K.st['events'] = {'h': {'lane': '/l', 'name': 'l', 'kind': 'HEAVY-WAIT', 'detail': 'd', 't': self.t}}
+        self.K.maybe_start_coordinator()
+        self.assertEqual(self.K.st['coordinator']['starts'], 1)
+
+    def test_lease_counts_as_live_until_it_expires_or_is_released(self):
+        self.assertIsNone(self.K.coordinator_live())
+        self.K.set_lease('overnight-executor', 30, 'release 15')
+        self.assertEqual(self.K.coordinator_live(), 'lease overnight-executor')
+        self.K.dry = True
+        self.K.st['coordinator'] = {'last': self.t - 3600, 'day': time.strftime('%F'), 'starts': 0}
+        self.K.st['events'] = {'r': {'lane': '/r', 'name': 'r', 'kind': 'READY', 'detail': 'd', 't': self.t}}
+        self.K.maybe_start_coordinator()
+        self.assertEqual(self.K.st['coordinator']['starts'], 0)   # the executor holds integration
+        self.K.release_lease()
+        self.assertIsNone(self.K.coordinator_live())
+        (self.K.k / 'LEASE').write_text(json.dumps({'owner': 'old', 'until': self.t - 1}))
+        self.assertIsNone(self.K.coordinator_live())
+        (self.K.k / 'LEASE').write_text('not json')
+        self.assertIsNone(self.K.coordinator_live())
+
+    def test_schedule_fires_once_per_applicable_day(self):
+        today = dt.datetime.now()
+        self.K.cfg['schedule'] = [{'at': '00:00', 'kind': 'CUTOFF', 'note': 'freeze scope'},
+                                  {'at': '00:00', 'days': [(today + dt.timedelta(days=1)).strftime('%a')], 'kind': 'RELEASE-DAY'},
+                                  {'at': '00:00', 'date': '2000-01-01', 'kind': 'DEADLINE'},
+                                  {'at': '23:59' if today.strftime('%H:%M') < '23:59' else '00:00', 'kind': 'LATER'},
+                                  {'kind': 'BROKEN'}]
+        self.K.schedule_events()
+        self.K.schedule_events()
+        kinds = [e['kind'] for e in self.K.st['events'].values()]
+        self.assertEqual(kinds.count('CUTOFF'), 1)
+        self.assertNotIn('RELEASE-DAY', kinds)
+        self.assertNotIn('DEADLINE', kinds)
+        if today.strftime('%H:%M') < '23:59':
+            self.assertNotIn('LATER', kinds)
+        self.K.st['events'].clear()
+        self.K.schedule_events()
+        self.assertEqual(self.K.st['events'], {})   # acknowledged today's cutoff: it does not fire again today
+
+    def test_handover_check_refuses_long_or_run_together_text(self):
+        self.K.state_dir.mkdir(parents=True, exist_ok=True)
+        good = self.K.state_dir / 'a-HANDOVER-20261101-0100.md'
+        good.write_text('Release 15 is live. The songbook lane waits on /Users/stian/src/skard-state/x/READY-2.md.\n' * 10)
+        self.assertEqual(self.K.handover_problems(good), [])
+        bad = self.K.state_dir / 'b-HANDOVER-20261101-0200.md'
+        bad.write_text('Owner Codexchat01a19402,appointed byStian. First release15code/subjectbatch integrated14e11b726,'
+                       'feedbackregeneratedeff9c230e;mainclean. Itsthinworktreeautomaticallyremoved,preservedhandoff.')
+        self.assertTrue(any('per word' in p or 'run-together' in p for p in self.K.handover_problems(bad)))
+        long = self.K.state_dir / 'c-HANDOVER-20261101-0300.md'
+        long.write_text('word ' * 700)
+        self.assertTrue(any('characters (limit' in p for p in self.K.handover_problems(long)))
+        self.assertEqual(self.K.handover(), long)
+
+    def test_retire_cli_refuses_bad_handover_unless_forced(self):
+        self.K.state_dir.mkdir(parents=True, exist_ok=True)
+        (self.K.state_dir / 'x-HANDOVER-20261101-0300.md').write_text('a' * 3000)
+        cfg = str(self.tmp / 'coordinator.json')
+        run = lambda *a: subprocess.run([sys.executable, str(Path(__file__).with_name('lane-keeper.py')), 'retire',
+                                         '--config', cfg, '--session', 'abc', *a], capture_output=True, text=True,
+                                        env={**os.environ, 'HOME': str(self.tmp)})
+        r = run()
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn('retire refused', r.stdout)
+        self.assertFalse((self.K.k / 'retired').exists())
+        r = run('--force')
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn('abc', (self.K.k / 'retired').read_text())
 
     def append(self, sid, kind, t, **fields):
         with (self.tmp / f'{sid}.jsonl').open('a') as fh:

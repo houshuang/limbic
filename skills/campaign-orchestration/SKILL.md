@@ -163,16 +163,28 @@ watcher processes were running the next morning.
   `<state>/keeper/EVENTS`. `lane-keeper.py ack <lane-dir> "<what you did>"` (HANDLED) or RETIRED clears them.
 - **A coordinator is started when none is live.** Live = a `lane-keeper.py watch` Monitor heartbeat, a keeper-started
   coordinator still running, or a registered coordinator with an assistant or user tool-result entry in the last
-  20 minutes (read from a bounded transcript tail; metadata writes do not count). Otherwise the keeper
-  starts `claude -p` in the repo on the newest handover, at most one at a time, 10 minutes apart, 16 a day; if two
-  successive runs leave the same events pending it stops and writes COORDINATOR-STUCK.md.
+  20 minutes (read from a bounded transcript tail; metadata writes do not count), or an unexpired lease
+  (`lane-keeper.py lease --owner NAME --minutes N`, `--release`): an executor or interactive session that holds
+  integration takes a lease so the keeper starts no competing coordinator. Otherwise the keeper starts one (`engine`
+  claude or codex) on the newest handover, at most one at a time, 10 minutes apart (also after a retire), 16 a day; if two
+  successive runs leave the same actionable events pending it stops and writes COORDINATOR-STUCK.md.
+- **Only actionable events start a coordinator.** HEAVY-WAIT, QUIET and reaped runaways (ORPHAN, STOPPED-BUT-RUNNING,
+  STALE-PREVIEW) are listed for the next coordinator but never wake one; a lane silent for 3 h becomes STALLED, which
+  does. Measured 1 Nov 00:01–02:32: a successor every ~2 min, each reading ~350k tokens to acknowledge a heavy-slot wait,
+  used all 48 daily starts 28 minutes before a release cutoff.
+- **Fixed times are events too.** `"schedule"` in .coordinator.json fires CUTOFF / RELEASE-DAY / DEADLINE events at local
+  times (optionally on given weekdays or one date). The one night that met its goal (31 Oct–1 Nov) had a 03:00 scope
+  freeze and 06:00/07:00 checks; no lane event says «it is 03:00».
 - An interactive coordinator arms `lane-keeper.py watch` under a Monitor (re-arm on expiry) instead of lane-audit --loop.
 - **Handing over: write the handover, then `lane-keeper.py retire [--config F] [--session ID]`.** A retiring coordinator
   writes `<state>/<id>-HANDOVER-<YYYYMMDD-HHMM>.md` and runs retire (ID defaults to `$CLAUDE_CODE_SESSION_ID`). Without it
   the successor waited ~20 minutes, because the retiring transcript kept it «live». Retire appends the session ID to `keeper/retired` and
   removes `~/.agents/coordinators/<ID>.json`; named retired IDs never count again, even if late transcript or registry
   writes follow the marker. Older anonymous signals stop counting, running watches exit, and the next
-  tick starts the successor without waiting out `min_gap_minutes`. A coordinator started after the retire counts as usual.
+  tick starts a successor once `min_gap_minutes` has passed since the last start. Retire refuses (exit 2) when the newest
+  handover exceeds 2,800 characters or is run-together text (more than 12 characters per word, or 60+ character tokens
+  that are not paths): Codex met a «400 words» cap by deleting spaces (82 «words» in 2,028 characters, 1 Nov).
+  `--force` is for a watchdog retiring a dead session.
 - **Registration requires a real coordinator signal.** `scripts/coordinator-hook.py` is the versioned source for
   `~/.agents/bin/coordinator-hook.py`; install it alongside keeper updates. It registers only the session owning a
   fresh `watch.heartbeat` (session ID and PID, written by `watch`) or `coordinator.session` with a live headless PID.
@@ -230,6 +242,27 @@ was a wrapper or bookkeeping gap. Scripts:
   lane worktree's cache; three lived only in the main checkout's cache (written by an earlier run there),
   and the lane crashed in the freeze step. When a lane inherits work, copy the keys it references into the
   lane cache up front (content-addressed, so it is safe), or look them up in both places.
+
+## Running unattended: who coordinates (1 Nov 2026)
+
+Compared over five skard nights (skard-state/orchestration-review-20261101/FINDINGS.md): four Claude-coordinated
+nights produced no release by morning three times and one release after three cycles; the Codex-coordinated night
+(31 Oct–1 Nov) shipped a release 12 minutes past its 07:00 goal with 23 lane integrations and no owner message after
+23:48. Claude coordinators used 180–550M tokens a night; the Codex root 66M (99% cached). Part of that is the tooling the
+Claude nights built; the shape is what carries over:
+- **Codex is the default coordinator engine** (`"coordinator": {"engine": "codex"}`); Claude takes design lanes and
+  interactive design rounds. Switch only when Codex has no credit.
+- **The coordinator is short-lived and stateless.** It is started per batch of actionable events, reads the newest
+  handover and the event list, acts, writes a bounded handover, retires. It never watches a job, so its context never
+  grows; the keeper is the only thing that runs all night, and it spends no tokens.
+- **One writer.** An integration or release executor takes a lease for its run and releases it at the end; supervisors
+  read and never integrate. A backstop chat is not needed: the keeper's liveness, STALLED and schedule events are the
+  backstop. Four overlapping authorities on 31 Oct–1 Nov spent most of their text agreeing who was in charge.
+- **Deadlines go in the schedule**, on fixed release days; nights run deadline-free reading lanes on the server.
+- **Every coordinator keeps INCIDENTS.md**: one dated entry per failure, in the turn it happens (Codex wrote 30
+  STATUS files and one incident line that night).
+- **Guards are config, not conversation.** A coordinator does not raise `max_starts_per_day` or other caps to keep
+  itself going (16→24→48 on 31 Oct); a cap it hits is an incident.
 
 ## Threads: one orchestrator, or more chats?
 

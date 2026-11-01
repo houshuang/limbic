@@ -16,15 +16,21 @@ Lane outcomes that need judgement (READY-*, DONE.md, a driver-only job's exit, c
 events in <state>/keeper/EVENTS. A lane's events are cleared by `ack <lane-dir> <note>` (writes HANDLED) or RETIRED.
 
 When events are pending and no coordinator is live, the keeper starts one (Claude by default; optional Codex) on the newest
-handover. Live means: a `lane-keeper.py watch` heartbeat (an interactive coordinator's Monitor), a keeper-started
-coordinator still running, or a registered coordinator with an assistant/tool-result entry in the last 20 minutes. `retire` (run by a
-coordinator after it writes its handover) appends keeper/retired: named sessions never count again; older signals stop counting, so the
-next tick starts a successor, without waiting out min_gap_minutes. The headless run's log is
+handover. Only actionable events start one: informational kinds (INFO_KINDS, or "coordinator": {"info_kinds": [...]})
+stay listed for the next coordinator but never wake one. min_gap_minutes always applies between starts, also after a
+retire: a coordinator that retires within minutes gains nothing from an immediate successor (31 Oct–1 Nov: 48 starts in
+2.5 h, each acknowledging a heavy-slot wait). Live means: an unexpired owner lease (`lease`; an executor or interactive
+coordinator holding the integration), a `lane-keeper.py watch` heartbeat (an interactive coordinator's Monitor), a
+keeper-started coordinator still running, or a registered coordinator with an assistant/tool-result entry in the last
+20 minutes. `retire` (run by a coordinator after it writes its handover) checks the newest handover (at most
+max_handover_chars, default 2800, in normally spaced prose; --force skips the check) and appends keeper/retired: named
+sessions never count again; older signals stop counting. The headless run's log is
 keeper/coordinator-<stamp>.log (stream-json); its session id is in keeper/coordinator.session and keeper.log.
 
     lane-keeper.py tick   [--config F] [--dry-run]
     lane-keeper.py watch  [--config F]          # Monitor command for an interactive coordinator
-    lane-keeper.py retire [--config F] [--session ID]   # ID defaults to $CLAUDE_CODE_SESSION_ID
+    lane-keeper.py retire [--config F] [--session ID] [--force]   # ID defaults to $CLAUDE_CODE_SESSION_ID
+    lane-keeper.py lease  [--config F] --owner NAME --minutes N [--note TEXT] | --release
     lane-keeper.py ack    <lane-dir | host:lane-dir> [note…]
     lane-keeper.py status [--config F]
 
@@ -36,6 +42,11 @@ Optional config keys:
   "remote_events": [{"ssh": "alif-ts", "path": "/srv/agents/skard/keeper/EVENTS", "prefix": "alif"}]
       each tick reads that keeper's new EVENTS lines over ssh and records them here, lane named <prefix>:<lane> and
       kept as host:<lane-dir>; they clear when the remote keeper clears them (ack host:<lane-dir> writes HANDLED there)
+  "schedule": [{"at": "03:00", "kind": "CUTOFF", "note": "freeze release scope"},
+               {"at": "10:00", "days": ["Tue", "Fri"], "kind": "RELEASE-DAY", "note": "start the release cycle"},
+               {"at": "07:00", "date": "2026-11-01", "kind": "DEADLINE", "note": "release live"}]
+      local-time events, each fired once per day it applies (days: Mon…Sun; date: one day only); they are actionable,
+      so a coordinator starts for them like for READY. Fixed-time checks are what a lane event never says.
   "notify": {"cmd": "/srv/agents/bin/notify", "min_gap_minutes": 30}
       new events are mailed in one batch at most once per gap
   "detach": ["systemd-run", "--scope", "--quiet", "--collect"]
@@ -70,6 +81,11 @@ CLAUDE_MODEL = re.compile(r'^(opus|sonnet|haiku|fable|claude-)')
 FRESH_LIMIT, CONTINUE_LIMIT, QUIET = 25, 2, 3600
 TRANSCRIPT_TAIL = 1_000_000  # bounded I/O even for a multi-hundred-MB session
 COORD_LIVE = 1200
+# Events a coordinator may read but that never justify starting one: the lane is healthy and waiting, or the keeper
+# already acted (reaped). A lane silent for STALL seconds (QUIET → STALLED) is actionable.
+INFO_KINDS = {'HEAVY-WAIT', 'QUIET', 'ORPHAN', 'STOPPED-BUT-RUNNING', 'STALE-PREVIEW'}
+STALL = 3 * 3600
+HANDOVER_CHARS = 2800
 RETIRE_GRACE = 60   # a retiring session still writes its last message after `retire`
 _FNM = Path.home() / 'Library/Application Support/fnm/node-versions/v24.11.1/installation/bin'
 PATH = ':'.join(dict.fromkeys([*([str(_FNM)] if _FNM.is_dir() else []), str(Path.home() / '.local/bin'), '/opt/homebrew/bin',
@@ -570,7 +586,10 @@ class Keeper:
                     self.event(d, 'HEAVY-WAIT', 'waiting on the heavy lock; lane remains running',
                                key=f'{d}|HEAVY-WAIT|{int(started)}')
                 return
-            if quiet > QUIET:
+            if quiet > STALL:
+                self.event(d, 'STALLED', f'{"session" if s_alive else "driver"} running, lane folder silent {quiet/3600:.1f} h',
+                           key=f'{d}|STALLED|{int(newest_in(d))}')
+            elif quiet > QUIET:
                 bucket = int(newest_in(d))
                 self.event(d, 'QUIET', f'{"session" if s_alive else "driver"} running, lane folder silent {quiet/60:.0f} min',
                            key=f'{d}|QUIET|{bucket}')
@@ -725,7 +744,10 @@ class Keeper:
 
     # coordinator
     def coordinator_live(self):
-        """Retired IDs never revive; other sessions need a watch, headless PID or recent work."""
+        """Retired IDs never revive; other sessions need a lease, watch, headless PID or recent work."""
+        lease = self.lease()
+        if lease:
+            return f'lease {lease["owner"]}'
         retired = mtime(self.k / 'retired')
         ids = retired_ids(self.k / 'retired')
         beat = mtime(self.k / 'watch.heartbeat')
@@ -750,6 +772,63 @@ class Keeper:
                 return f'session {f.stem[:8]} active'
         return None
 
+    def lease(self):
+        """keeper/LEASE names who holds integration until when; expired or malformed leases count as absent."""
+        try:
+            L = json.loads((self.k / 'LEASE').read_text())
+            return L if float(L['until']) > now() else None
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+
+    def set_lease(self, owner, minutes, note=''):
+        L = {'owner': owner, 'until': now() + minutes * 60, 'note': note, 'set': stamp()}
+        (self.k / 'LEASE').write_text(json.dumps(L) + '\n')
+        self.log(f'LEASE {owner} for {minutes} min{": " + note if note else ""}')
+
+    def release_lease(self):
+        (self.k / 'LEASE').unlink(missing_ok=True)
+        self.log('LEASE released')
+
+    def handover_problems(self, path=None):
+        """A successor reads this first: bounded, and prose a reader can parse (Codex dropped spaces to meet a word cap)."""
+        path = path or self.handover()
+        if not path:
+            return []
+        text = read_text(path)
+        limit = self.cfg.get('coordinator', {}).get('max_handover_chars', HANDOVER_CHARS)
+        problems = []
+        if len(text) > limit:
+            problems.append(f'{len(text)} characters (limit {limit})')
+        words = text.split()
+        if words and len(text) / len(words) > 12:
+            problems.append(f'{len(text) / len(words):.1f} characters per word: write normally spaced sentences')
+        glued = [w for w in words if len(w) > 60 and '/' not in w and '://' not in w]
+        if glued:
+            problems.append(f'{len(glued)} run-together tokens, e.g. {glued[0][:40]}…')
+        return problems
+
+    def schedule_events(self):
+        """Fire configured local-time events once per applicable day."""
+        fired = self.st.setdefault('schedule_fired', {})
+        t = dt.datetime.now()
+        for i, S in enumerate(self.cfg.get('schedule', [])):
+            try:
+                hh, mm = map(int, S['at'].split(':'))
+            except (KeyError, ValueError):
+                self.log(f'ERROR schedule entry {i}: needs "at": "HH:MM"'); continue
+            if S.get('date') and S['date'] != t.strftime('%F'):
+                continue
+            if S.get('days') and t.strftime('%a') not in S['days']:
+                continue
+            if (t.hour, t.minute) < (hh, mm):
+                continue
+            key = f'schedule|{i}|{t:%F}'
+            if fired.get(str(i)) == t.strftime('%F'):
+                continue
+            fired[str(i)] = t.strftime('%F')
+            kind = S.get('kind', 'SCHEDULE')
+            self.event(self.k, kind, f'{S["at"]} {S.get("note", "")}'.strip(), key=key, name='schedule')
+
     def retire(self, sid=None):
         """Publish retirement before removing registration: the writer must not recreate it."""
         sid = sid or os.environ.get('CLAUDE_CODE_SESSION_ID') or os.environ.get('CLAUDE_SESSION_ID')
@@ -773,12 +852,13 @@ class Keeper:
 
     def maybe_start_coordinator(self):
         pending = self.st['events']
-        if not pending:
+        c = self.cfg.get('coordinator', {})
+        info = set(c.get('info_kinds', INFO_KINDS))
+        if not any(e.get('kind') not in info for e in pending.values()):
             return
         live = self.coordinator_live()
         if live:
             return
-        c = self.cfg.get('coordinator', {})
         engine = c.get('engine', 'claude')
         if engine not in ('claude', 'codex'):
             raise ValueError('coordinator.engine must be claude or codex')
@@ -786,10 +866,9 @@ class Keeper:
         today = time.strftime('%F')
         if S.get('day') != today:
             S['day'], S['starts'] = today, 0
-        after_retire = mtime(self.k / 'retired') > S.get('last', 0)   # once: the start below moves 'last' past it
-        if not after_retire and now() - S.get('last', 0) < c.get('min_gap_minutes', 10) * 60:
+        if now() - S.get('last', 0) < c.get('min_gap_minutes', 10) * 60:
             return
-        keys = sorted(pending)
+        keys = sorted(k for k, e in pending.items() if e.get('kind') not in info)
         if keys == S.get('last_keys') and S.get('same', 0) >= 2:
             if not S.get('stuck_noted'):
                 S['stuck_noted'] = True
@@ -827,8 +906,11 @@ you did not create: other sessions keep uncommitted work in them.
 Do not watch long jobs from this session and do not arm monitors. Start long jobs detached under \
 `{SCRIPTS / 'drive-loop.sh'}` in a folder under one of the campaign dirs (use --once for a job that must not rerun on \
 failure, such as a release cycle); use subprocess.Popen with stdin=DEVNULL and start_new_session=True, since nohup alone does not leave the tool process group. The keeper reports how they end and starts a coordinator then.
-Before you end, write {self.state_dir}/keeper-HANDOVER-<YYYYMMDD-HHMM>.md (under 400 words): what you did, what runs, \
-what each remaining item waits on. The next coordinator starts from it. Then run `{retire}` and end."""
+Before you end, write {self.state_dir}/keeper-HANDOVER-<YYYYMMDD-HHMM>.md in normally spaced sentences, at most \
+{c.get('max_handover_chars', HANDOVER_CHARS)} characters: what you did, what runs, and for each remaining item the lane that \
+owns it or the file it waits on. The next coordinator starts from it. If anything failed or surprised you, append one dated \
+entry to {self.state_dir}/INCIDENTS.md (symptom, cause, what would have refused it). Then run `{retire}` and end; \
+retire refuses an over-long or run-together handover, so fix it and retire again."""
         self.log(f'COORDINATOR-START ({len(pending)} events; handover {handover and handover.name}) → {out.name}')
         if engine == 'claude':
             self.log(f'COORDINATOR-SESSION {sid}: log {out}; take over with kill -9 <coordinator.pid>, then '
@@ -1015,6 +1097,7 @@ what each remaining item waits on. The next coordinator starts from it. Then run
         except Exception as e:
             self.log(f'ERROR runaways: {e!r}')
         self.check_release_scope()
+        self.schedule_events()
         self.clear_events(self.pull_remote())
         self.maybe_start_coordinator()
         self.notify()
@@ -1064,9 +1147,23 @@ def main():
                 beat.unlink(missing_ok=True)
     elif mode == 'retire':
         sid = args[args.index('--session') + 1] if '--session' in args else None
+        problems = [] if '--force' in args else K.handover_problems()
+        if problems:
+            print(f'retire refused: handover {K.handover()} has ' + '; '.join(problems) + '. Rewrite it and retire again.')
+            sys.exit(2)
         K.retire(sid)
+    elif mode == 'lease':
+        if '--release' in args:
+            K.release_lease(); return
+        opt = lambda f, d=None: args[args.index(f) + 1] if f in args else d
+        if not opt('--owner') or not opt('--minutes'):
+            sys.exit('lease needs --owner NAME --minutes N (or --release)')
+        K.set_lease(opt('--owner'), float(opt('--minutes')), opt('--note', ''))
     elif mode == 'status':
         print(f'keeper heartbeat {now() - mtime(K.k / "heartbeat"):.0f}s ago; coordinator live: {K.coordinator_live()}')
+        L = K.lease()
+        if L:
+            print(f'lease: {L["owner"]} until {stamp(L["until"])} {L.get("note", "")}')
         for name in ('retired', 'coordinator.session'):
             if (K.k / name).exists():
                 print(f'{name}: {(K.k / name).read_text().strip()}')
