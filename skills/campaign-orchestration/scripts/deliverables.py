@@ -13,9 +13,38 @@ import subprocess
 import sys
 from driver_state import driver_dirs, owns_process
 
+LANE_REGISTRY = Path.home() / '.agents/lanes'
 
-def live_driver(lane):
+
+def commit_repository(repo, branch):
+    """A removed checkout may only resolve through its completed integration.
+
+    A missing worktree is otherwise a refusal, never an invitation to recreate
+    it or to accept a same-named branch in an arbitrary repository.
+    """
+    if repo.is_dir():
+        return repo
+    for path in LANE_REGISTRY.glob('*.json'):
+        row = json.loads(path.read_text())
+        if Path(row.get('path', '')).resolve() != repo.resolve() or row.get('branch') != branch:
+            continue
+        if not (row.get('released') and row.get('removed_utc') and row.get('integrated_commit')):
+            break
+        shared = Path(row['shared_root'])
+        env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+        def ancestor(a, b):
+            return subprocess.run(['git', '-C', str(shared), 'merge-base', '--is-ancestor', a, b],
+                                  env=env, capture_output=True).returncode == 0
+        if shared.is_dir() and ancestor(branch, row['integrated_commit']) and ancestor(row['integrated_commit'], 'HEAD'):
+            return shared
+        break
+    return repo
+
+
+def live_driver(lane, *, children_only=False):
     for folder in driver_dirs(lane):
+        if children_only and folder.resolve() == Path(lane).resolve():
+            continue
         try:
             path = folder / 'driver.pid'
             pid = int(path.read_text())
@@ -63,11 +92,11 @@ def missing(lane):
         if 'commit' in spec:
             commit = spec['commit']
             repo, base, branch = lane / commit['repo'], commit['base'], commit['branch']
+            repo = commit_repository(repo, branch)
             # An explicit base is required: mere branch existence is not a deliverable.
             def git(*args):
                 return subprocess.run(['git', '-C', str(repo), *args], capture_output=True, text=True,
-                                      env={k: v for k, v in os.environ.items() if k not in
-                                           ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR')})
+                                      env={k: v for k, v in os.environ.items() if not k.startswith('GIT_')})
             ancestor = git('merge-base', '--is-ancestor', base, branch)
             count = git('rev-list', '--count', base + '..' + branch)
             if ancestor.returncode or count.returncode or not int(count.stdout.strip()):
@@ -77,8 +106,11 @@ def missing(lane):
         return ['invalid EXPECTS: ' + str(error)]
 
 
-def check(lane):
+def check(lane, *, allow_continuation=False):
     errors = missing(lane)
+    if (errors and allow_continuation and not (Path(lane) / 'DONE.md').exists()
+            and live_driver(lane, children_only=True)):
+        return 0
     if errors:
         message = '# Deliverable contract failed\n\n' + '\n'.join('- ' + e for e in errors) + '\n'
         (Path(lane) / 'DRIVER-FAILED.md').write_text(message)
@@ -90,7 +122,7 @@ def check(lane):
 def main():
     mode, lane = sys.argv[1:3]
     if mode == 'check':
-        return check(lane)
+        return check(lane, allow_continuation='--allow-continuation' in sys.argv[3:])
     process = subprocess.Popen(sys.argv[4:])
     def forward(signum, frame):
         try:
@@ -102,7 +134,7 @@ def main():
     code = process.wait()
     if code < 0:
         code = 128 - code
-    if code == 0 and not live_driver(lane):
+    if code == 0 and not live_driver(lane, children_only=True):
         code = check(lane)
     (Path(lane) / 'SESSION-EXIT').write_text(str(code) + '\n')
     return code

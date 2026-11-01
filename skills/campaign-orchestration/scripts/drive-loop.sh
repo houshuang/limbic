@@ -40,7 +40,7 @@ while true; do
   code=$?
   echo "$(date -u +%FT%TZ) drive-loop: exit $code"
   if (( code == 0 )); then
-    python3 "$scripts/deliverables.py" check "$S" || finish $?
+    python3 "$scripts/deliverables.py" check "$S" --allow-continuation || finish $?
   fi
   (( code == 0 )) && { echo "$(date -u +%FT%TZ) drive-loop: driver finished"; finish 0; }
   if (( code == 124 || code == 125 )); then failures=0; else failures=$((failures + 1)); fi
