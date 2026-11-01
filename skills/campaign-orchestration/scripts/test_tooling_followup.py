@@ -58,6 +58,7 @@ class OwnershipTest(unittest.TestCase):
         marker(self.source)
         command=f'bash drive-loop.sh --once {self.source} fixture 30 -- true'
         self.assertTrue(owns_process(self.source,123,command,cwd=str(self.source)))
+        self.assertTrue(owns_process(self.source,'123\n',command,cwd=str(self.source)))
         self.assertFalse(owns_process(self.source,123,'codex exec --prompt '+command,cwd=str(self.source)))
         self.assertFalse(owns_process(self.source,123,command,cwd=str(self.target)))
         self.assertFalse(owns_process(self.source,123,command.replace(str(self.source),str(self.target)),cwd=str(self.source)))

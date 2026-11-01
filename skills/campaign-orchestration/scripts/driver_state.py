@@ -53,6 +53,7 @@ def process_cwd(pid):
 def owns_process(folder, pid, command=None, cwd=None):
     """Destructive operations require positive state, argv AND cwd evidence."""
     try:
+        pid = int(str(pid).strip())
         row = spec(folder)
         if command is None:
             command = subprocess.run(['ps', '-o', 'command=', '-p', str(pid)], capture_output=True, text=True).stdout
