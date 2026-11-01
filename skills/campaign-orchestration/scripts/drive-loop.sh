@@ -17,15 +17,21 @@ once=0; [[ $1 == --once ]] && { once=1; shift; }
 S=$(cd "$1" && pwd -P) || exit 2; name=$2; limit=$3; shift 3; [[ $1 == -- ]] && shift
 SLEEPSAFE=${SLEEPSAFE:-$HOME/.agents/bin/sleepsafe.py}
 [ -x "$SLEEPSAFE" ] || SLEEPSAFE=$(command -v sleepsafe.py) || { echo "drive-loop: no sleepsafe.py (set SLEEPSAFE)"; exit 2; }
+if ! python3 "$scripts/driver_state.py" "$S" --verify-claim 2>/dev/null; then
+  exec python3 "$scripts/driver_state.py" "$S" "${BASH_SOURCE[0]}" $([[ $once == 1 ]] && echo --once) "$S" "$name" "$limit" -- "$@"
+fi
+unset DRIVE_LOOP_CLAIM_FD
 python3 "$scripts/driver_state.py" "$S" || exit $?
+owner() { [[ $(cat "$S/driver.pid" 2>/dev/null) == $$ ]]; }
 echo $$ > "$S/driver.pid"
 python3 -c 'import json, os, sys; print(json.dumps({"cwd": os.getcwd(), "args": sys.argv[1:]}))' \
   $([[ $once == 1 ]] && echo --once) $S $name $limit -- "$@" > $S/driver.cmd
 rm -f $S/DRIVER-FAILED.md $S/DRIVER-EXIT
-trap 'echo term > $S/DRIVER-EXIT; exit 143' TERM INT HUP
-finish() { echo $1 > $S/DRIVER-EXIT; exit $1; }
+trap 'owner && echo term > "$S/DRIVER-EXIT"; exit 143' TERM INT HUP
+finish() { owner && echo "$1" > "$S/DRIVER-EXIT"; exit "$1"; }
 failures=0
 while true; do
+  owner || exit 65
   [[ -e $S/DONE.md && ! -e $S/STOP ]] && { python3 "$scripts/deliverables.py" check "$S" || finish $?; }
   [[ -e $S/STOP || -e $S/DONE.md ]] && { echo "$(date -u +%FT%TZ) drive-loop: stop file"; finish 0; }
   if (( ! once )); then
@@ -40,11 +46,13 @@ while true; do
   code=$?
   echo "$(date -u +%FT%TZ) drive-loop: exit $code"
   if (( code == 0 )); then
+    owner || exit 65
     python3 "$scripts/deliverables.py" check "$S" --allow-continuation || finish $?
   fi
   (( code == 0 )) && { echo "$(date -u +%FT%TZ) drive-loop: driver finished"; finish 0; }
   if (( code == 124 || code == 125 )); then failures=0; else failures=$((failures + 1)); fi
   if (( failures >= 3 || (once && failures >= 1) )); then
+    owner || exit 65
     { echo "# $name: $failures failed run(s) in a row ($(date -u +%FT%TZ))"; echo; echo '```'; tail -40 $S/driver.log 2>/dev/null; echo '```'; } > $S/DRIVER-FAILED.md
     finish $code
   fi

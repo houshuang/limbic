@@ -142,9 +142,7 @@ def check(lane, *, allow_continuation=False):
 def main():
     mode, lane = sys.argv[1:3]
     if mode == 'check':
-        # Already-running wrappers may predate the explicit flag. A genuine
-        # child handoff is also honored there; DONE always forces the contract.
-        return check(lane, allow_continuation=True)
+        return check(lane, allow_continuation='--allow-continuation' in sys.argv[3:])
     process = subprocess.Popen(sys.argv[4:])
     def forward(signum, frame):
         try:

@@ -130,7 +130,7 @@ class RetireTest(unittest.TestCase):
         if camp is None:
             camp = Path(tempfile.mkdtemp()); self.K.cfg['campaigns'] = [str(camp)]
         (camp / 'serial-executor').mkdir(parents=True, exist_ok=True)
-        self.K.set_lease('serial-executor', 480, 'queue')
+        self.K.set_lease('serial-executor', 60, 'queue')
         self.assertIsNone(self.K.coordinator_live())
         self.assertIn('locked by lane serial-executor', self.K.lease_line())
         self.K.set_lease('interactive-night', 60, 'owner session')
@@ -300,7 +300,7 @@ class RetireTest(unittest.TestCase):
 
     def test_codex_engine_keeps_start_gap_daily_and_stuck_limits(self):
         self.K.dry=True
-        self.K.cfg['coordinator']={'engine':'codex','max_starts_per_day':2,'min_gap_minutes':10}
+        self.K.cfg['coordinator']={'engine':'codex','max_starts_per_hour':1,'min_gap_minutes':10}
         self.K.st['events']={'k':{'lane':'/lane','kind':'READY','detail':'checkpoint'}}
         self.K.st['coordinator']={'day':time.strftime('%F'),'starts':1,'last':self.t-60}
         self.K.maybe_start_coordinator()

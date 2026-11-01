@@ -156,7 +156,9 @@ watcher processes were running the next morning.
 - **Lanes continue by themselves.** A session that ends with HANDOFF.md and no live driver gets a fresh session; one that
   ended on 429/capacity is resumed after a backoff, with no cap; one that ended with no DONE/READY/HANDOFF is resumed twice
   with «continue or write the right file»; DRIVER-FAILED.md resumes the worker once to fix it; costguard runs every tick.
-- **Drivers survive reboots.** drive-loop.sh records `driver.cmd` and writes `DRIVER-EXIT` when it ends; a drive-loop
+- **Drivers survive reboots.** drive-loop.sh takes a per-state-directory lock and refuses a second owner. Its
+  lock remains held by inherited descendants after wrapper death, preventing unsafe restart until those descendants exit.
+  It records `driver.cmd` and writes `DRIVER-EXIT` when it ends; a drive-loop
   that vanished without one is restarted, unless its sleepsafe child still runs. Stop one with STOP, never kill alone.
   `--once` is for jobs that must not rerun on failure (release cycles); a driver-only folder's exit becomes an event.
 - **Outcomes that need judgement are events** (READY-*, DONE.md, job exit, caps, an hour's silence) in
@@ -164,10 +166,16 @@ watcher processes were running the next morning.
 - **A coordinator is started when none is live.** Live = a `lane-keeper.py watch` Monitor heartbeat, a keeper-started
   coordinator still running, or a registered coordinator with an assistant or user tool-result entry in the last
   20 minutes (read from a bounded transcript tail; metadata writes do not count), or an unexpired lease
-  (`lane-keeper.py lease --owner NAME --minutes N`, `--release`): an executor or interactive session that holds
-  integration takes a lease so the keeper starts no competing coordinator. Otherwise the keeper starts one (`engine`
-  claude or codex) on the newest handover, at most one at a time, 10 minutes apart (also after a retire), 16 a day; if two
+  (`lane-keeper.py lease --owner NAME --minutes N`, `--release`): interactive coordinators hold liveness; lane executor
+  leases lock integration without suppressing coordinators. Leases last at most 60 minutes and may be renewed.
+  Otherwise the keeper starts one (`engine` claude or codex) on the newest handover, at most one at a time,
+  10 minutes apart (also after a retire), subject to rolling hourly start and token limits; if two
   successive runs leave the same actionable events pending it stops and writes COORDINATOR-STUCK.md.
+- **Checkpoint queue:** `scripts/checkpoint_queue.py <manifest.json> <private-state-dir> --heavy <repo>/scripts/heavy.sh --lease <keeper/LEASE> --owner <lane>`
+  runs a frozen JSON array of `{id,cwd,argv}` entries one at a time under the exclusive heavy lock. An executor
+  must renew the integration lease while a command runs and supply independently safe, repository-appropriate commands and distinct workspaces. The runner rejects nested or same-Git-worktree directories, but cannot prove that commands avoid other shared mutable state. Failed items are
+  parked with a log; interruption parks the in-flight item rather than replaying it. The caller must inspect and
+  reconcile a partially applied checkpoint before retrying. This tool does not acquire a lease or alter QUEUE.md.
 - **Only actionable events start a coordinator.** HEAVY-WAIT, QUIET and reaped runaways (ORPHAN, STOPPED-BUT-RUNNING,
   STALE-PREVIEW) are listed for the next coordinator but never wake one; a lane silent for 3 h becomes STALLED, which
   does. Measured 1 Nov 00:01–02:32: a successor every ~2 min, each reading ~350k tokens to acknowledge a heavy-slot wait,

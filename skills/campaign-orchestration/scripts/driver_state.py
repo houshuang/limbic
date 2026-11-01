@@ -90,7 +90,31 @@ def prepare(folder):
 if __name__ == '__main__':
     import sys
     try:
+        if len(sys.argv) > 2 and sys.argv[2] == '--verify-claim':
+            import fcntl
+            fd = int(os.environ['DRIVE_LOOP_CLAIM_FD'])
+            path = Path(sys.argv[1]) / '.driver-owner.lock'
+            a, b = os.fstat(fd), path.lstat()
+            if path.is_symlink() or a.st_nlink != 1 or (a.st_dev, a.st_ino) != (b.st_dev, b.st_ino):
+                raise ValueError('invalid driver lock')
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            raise SystemExit(0)
         prepare(sys.argv[1])
+        if len(sys.argv) > 2:
+            import fcntl
+            lock = os.open(str(Path(sys.argv[1]) / '.driver-owner.lock'), os.O_CREAT | os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+            if os.fstat(lock).st_nlink != 1:
+                raise ValueError('aliased driver lock')
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise ValueError('another drive-loop owns this state directory')
+            pidfile = Path(sys.argv[1]) / 'driver.pid'
+            if pidfile.exists() and owns_process(sys.argv[1], pidfile.read_text()):
+                raise ValueError('a live drive-loop owns this state directory')
+            os.set_inheritable(lock, True)
+            os.environ['DRIVE_LOOP_CLAIM_FD'] = str(lock)
+            os.execv('/bin/bash', ['/bin/bash', *sys.argv[2:]])
     except (OSError, ValueError, KeyError, TypeError) as error:
         print('drive-loop refused: ' + str(error), file=sys.stderr)
         raise SystemExit(65)

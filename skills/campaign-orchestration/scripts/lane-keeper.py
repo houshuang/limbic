@@ -107,8 +107,8 @@ COORD_LIVE = 1200
 # Events a coordinator may read but that never justify starting one: the lane is healthy and waiting, or the keeper
 # already acted (reaped). A lane silent for STALL seconds (QUIET → STALLED) is actionable.
 INFO_KINDS = {'HEAVY-WAIT', 'QUIET', 'ORPHAN', 'STOPPED-BUT-RUNNING', 'STALE-PREVIEW',
-              'BUDGET-HOLD', 'BUDGET-OK', 'AUTONOMY-ENDING', 'AUTONOMY-EXPIRED'}
-NOTIFY_ALWAYS = {'BUDGET-HOLD', 'AUTONOMY-ENDING', 'AUTONOMY-EXPIRED'}   # informational, but the owner must know
+              'BUDGET-HOLD', 'BUDGET-OK', 'AUTONOMY-ENDING', 'AUTONOMY-EXPIRED', 'COORDINATOR-RATE-LIMIT'}
+NOTIFY_ALWAYS = {'BUDGET-HOLD', 'AUTONOMY-ENDING', 'AUTONOMY-EXPIRED', 'COORDINATOR-RATE-LIMIT'}   # informational, but the owner must know
 STALL = 3 * 3600
 PROTECT_PATTERNS = [r'seal-to-box', r'sleepsafe\.py --name seal-']
 HANDOVER_CHARS = 2800
@@ -381,6 +381,13 @@ class Keeper:
                 fh.write(line + '\n')
 
     def event(self, d, kind, detail, key=None, name=None):
+        if kind in ('PARKED-STALE', 'DRIVER-OWNER'):
+            # Persist across acknowledgements and aliases of the same lane.
+            throttle = self.st.setdefault('daily_lane_events', {})
+            token = f'{Path(d).resolve()}|{kind}'
+            if now() - throttle.get(token, 0) < 86400:
+                return
+            throttle[token] = now()
         key = key or f'{d}|{kind}'
         if key in self.st['events']:
             return
@@ -452,6 +459,9 @@ class Keeper:
         return bool(later)
 
     def launch(self, C, d, why):
+        # A live owned child driver is already the lane's continuation.
+        if any(alive(p / 'driver.pid') for p in driver_dirs(d)):
+            return
         try:
             require_lane_workspace(d)
         except (OSError, ValueError, KeyError, TypeError) as error:
@@ -980,6 +990,8 @@ class Keeper:
                 "another integrator. Handle the other events and launch open queue items; leave READY events for the lock owner.\n")
 
     def set_lease(self, owner, minutes, note=''):
+        if not owner or not 0 < minutes <= 60:
+            raise ValueError('lease duration must be greater than zero and at most 60 minutes; renew as needed')
         L = {'owner': owner, 'until': now() + minutes * 60, 'note': note, 'set': stamp()}
         (self.k / 'LEASE').write_text(json.dumps(L) + '\n')
         self.log(f'LEASE {owner} for {minutes} min{": " + note if note else ""}')
@@ -1049,6 +1061,33 @@ class Keeper:
         files = [p for p in self.state_dir.glob(self.cfg.get('handover_glob', '*HANDOVER*.md')) if p.is_file()]
         return max(files, key=mtime) if files else None
 
+    def coordinator_hour_tokens(self):
+        """Count Codex turns and Claude final usage in recent coordinator logs."""
+        total = 0
+        for path in self.k.glob('coordinator-*.log'):
+            if mtime(path) < now() - 3600:
+                continue
+            try:
+                with path.open(errors='replace') as fh:
+                    for line in fh:
+                        try:
+                            row = json.loads(line)
+                            if row.get('type') == 'turn.completed':
+                                when = dt.datetime.fromisoformat(row['timestamp'].replace('Z', '+00:00')).timestamp()
+                                if when < now() - 3600 or when > now(): continue
+                                usage = row['usage']
+                                total += int(usage.get('input_tokens', 0)) + int(usage.get('output_tokens', 0))
+                            elif row.get('type') == 'result' and isinstance(row.get('usage'), dict):
+                                # Claude's result has cumulative usage and no event timestamp;
+                                # the recent log mtime conservatively charges the whole run.
+                                usage = row['usage']
+                                total += sum(int(usage.get(k, 0)) for k in ('input_tokens', 'output_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens'))
+                        except (ValueError, TypeError, KeyError, AttributeError):
+                            continue
+            except OSError:
+                continue
+        return total
+
     def maybe_start_coordinator(self):
         pending = self.st['events']
         c = self.cfg.get('coordinator', {})
@@ -1074,11 +1113,21 @@ class Keeper:
             if not S.get('stuck_noted'):
                 S['stuck_noted'] = True
                 self.log('COORDINATOR-STUCK: two coordinators left the same events pending; waiting for a human or an ack')
+                self.event(self.k, 'COORDINATOR-RATE-LIMIT', 'two coordinators left the same actionable events pending; human or ack required', key='coordinator-stuck-notice', name='coordinator')
                 (self.k / 'COORDINATOR-STUCK.md').write_text(f'{stamp()}: these events survived two coordinator runs:\n\n'
                                                             + '\n'.join(f'- {pending[k]["kind"]} {pending[k]["lane"]}: {pending[k]["detail"]}' for k in keys) + '\n')
             return
-        if S['starts'] >= c.get('max_starts_per_day', 16):
+        # A configured zero remains an explicit no-coordinator setting (e.g. a remote keeper).
+        starts = [t for t in S.get('hour_starts', []) if now() - 3600 < t <= now()]
+        S['hour_starts'] = starts
+        tokens = self.coordinator_hour_tokens()
+        limit_starts = c.get('max_starts_per_hour', 6)
+        limit_tokens = c.get('max_tokens_per_hour', 15_000_000)
+        if c.get('max_starts_per_day') == 0 or len(starts) >= limit_starts or tokens >= limit_tokens:
+            reason = f'coordinator hourly budget: {len(starts)}/{limit_starts} starts, {tokens}/{limit_tokens} tokens; actionable events pending'
+            self.event(self.k, 'COORDINATOR-RATE-LIMIT', reason, key=f'coordinator-rate|{int(now() // 3600)}', name='coordinator')
             return
+        starts.append(now())
         S['same'] = S.get('same', 0) + 1 if keys == S.get('last_keys') else 1
         S.update(last=now(), last_keys=keys, starts=S['starts'] + 1, stuck_noted=False)
         handover = self.handover()
@@ -1098,7 +1147,7 @@ events are pending and no coordinator was live. Read the newest handover first: 
 Pending events (also in {self.k / 'EVENTS'}):
 {events}
 
-Handle each event: integrate READY checkpoints by the repository's integration rules, review DONE files (a DONE before \
+Handle each event: scope any integration executor to one checkpoint or one failure class; park errors with their reason and continue other work. Never assign the whole unfinished queue to a single fragile executor. Integrate READY checkpoints by the repository's integration rules, review DONE files (a DONE before \
 the queue is exhausted is a failure: resume or relaunch the lane), fix or relaunch failed drivers. After handling a \
 lane run `python3 {script} ack <lane-dir> "<one line: what you did>"`, or write RETIRED there with the reason.
 Git safety: integrate in a worktree you create for it, with the repository's lane command (AGENTS.md; thin lanes), \
@@ -1298,6 +1347,7 @@ retire refuses an over-long or run-together handover, so fix it and retire again
                 value = read_text(folder / 'driver.pid')
                 if value.isdigit() and int(value) in table and owns_process(folder, int(value), table[int(value)]['cmd']):
                     owned.append((lane, int(value)))
+        protected |= descendants(table, [pid for _, pid in owned])
         # STOPPED-BUT-RUNNING
         for root, d in [(d, p) for _, d in lanes for p in driver_dirs(d)]:
             stop = root / 'STOP'
@@ -1330,7 +1380,7 @@ retire refuses an over-long or run-together handover, so fix it and retire again
                 self.reap(table, p, protected, 'STALE-PREVIEW')
         # ORPHAN
         for p in old:
-            if preview.search(table[p]['cmd']) or not under(p, roots):
+            if p in protected or preview.search(table[p]['cmd']) or not under(p, roots):
                 continue
             if self.runaway_event(seen, 'ORPHAN', p, table[p], f'cwd={cwd.get(p, "?")}', reap) and reap:
                 self.reap(table, p, protected, 'ORPHAN')
