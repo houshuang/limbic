@@ -91,9 +91,23 @@ class ContractsTest(unittest.TestCase):
         (self.lane/'EXPECTS').write_text(json.dumps(dict(files=['DONE.md'],commit=dict(repo=str(released),base=base,branch='accepted'))))
         with mock.patch.object(deliverables,'LANE_REGISTRY',registry):
             self.assertEqual(deliverables.missing(self.lane),[])
+            # Production registry contains an empty unrelated file and legacy
+            # list-shaped records. Neither may poison a valid released owner.
+            (registry/'000-empty.json').write_text('')
+            (registry/'001-legacy.json').write_text('[]')
+            self.assertEqual(deliverables.missing(self.lane),[])
             for field,value in [('released',False),('removed_utc',None),('integrated_commit',base),('branch','other')]:
                 marker.write_text(json.dumps({**row,field:value}))
                 self.assertTrue(deliverables.missing(self.lane),field)
+                self.assertNotIn('invalid EXPECTS', str(deliverables.missing(self.lane)))
+            marker.write_text(json.dumps(row))
+            duplicate=registry/'duplicate.json';duplicate.write_text(json.dumps(row))
+            self.assertIn('found 2', str(deliverables.missing(self.lane)))
+            duplicate.unlink()
+            # A malformed matching registry supplies no proof, even though
+            # another branch exists in the shared repository.
+            marker.write_text('')
+            self.assertIn(str(marker), str(deliverables.missing(self.lane)))
             marker.unlink()
             self.assertTrue(deliverables.missing(self.lane))
 
