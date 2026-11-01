@@ -207,11 +207,11 @@ class ActionTest(Env):
 
 
 class LaneTest(Env):
-    def lane(self, name, args=('st', 'n', '60', '--', 'true')):
+    def lane(self, name, args=('n', '60', '--', 'true')):
         d = self.camp / name
         d.mkdir()
         (d / 'driver.pid').write_text('999999\n')
-        (d / 'driver.cmd').write_text(json.dumps({'cwd': str(self.tmp), 'args': [*args[:1], str(d), *args[1:]]}))
+        (d / 'driver.cmd').write_text(json.dumps({'cwd': str(self.tmp), 'args': [args[0], str(d), *args[1:]] if args[0] == '--once' else [str(d), *args]}))
         return d
 
     def test_scan_states(self):
@@ -238,7 +238,7 @@ class LaneTest(Env):
             K.resume_driver(d)
         self.assertFalse((d / 'STOP').exists() or (d / 'PAUSED').exists())
         argv = run.call_args[0][0]
-        self.assertEqual(['bash', str(lk.SCRIPTS / 'drive-loop.sh'), 'st', str(d), 'n', '60', '--', 'true'], argv)
+        self.assertEqual(['bash', str(lk.SCRIPTS / 'drive-loop.sh'), str(d), 'n', '60', '--', 'true'], argv)
 
     def test_resume_leaves_a_coordinator_stop(self):
         d = self.lane('c')

@@ -30,6 +30,7 @@ A feed prints {"panels": [panel…]}; a panel is {"id", "title", "pills": [[labe
 "actions": [action names], "prioritise": bool}. With "prioritise", rows with an id get an owner-priority selector;
 choices are stored in <state>/OWNER-PRIORITIES.json, which coordinators read.
 """
+from driver_state import driver_dirs, owns_process
 import hashlib, hmac, html, json, os, re, secrets, shlex, shutil, subprocess, sys, threading, time
 from pathlib import Path
 
@@ -92,7 +93,9 @@ def ago(t):
 # ---------------------------------------------------------------- lanes (also run on remote hosts over ssh)
 
 def alive(pidfile):
-    """Same rule as lane-keeper: a process that started after its pid file was written holds a recycled pid."""
+    """A live driver must match its recorded owner, argv and cwd."""
+    if Path(pidfile).name == "driver.pid" and not owns_process(Path(pidfile).parent, read(pidfile)):
+        return False
     try:
         pid = int(Path(pidfile).read_text().split()[0])
         if pid <= 0:
@@ -119,12 +122,6 @@ def newest_file(d):
     except OSError:
         pass
     return best
-
-
-def driver_dirs(d):
-    # Keep the remote scan self-contained: dashboard.py is also sent over SSH on stdin.
-    return [d] + sorted(p for p in d.iterdir() if p.is_dir() and not p.is_symlink()
-                        and ((p / 'driver.cmd').is_file() or (p / 'driver.pid').is_file()))
 
 
 def progress_line(d):
@@ -220,6 +217,16 @@ def scan_main(argv):
     print(json.dumps({'host': host, 't': now(), 'lanes': scan(opt['--dirs'], host), 'disk': disks(opt['--disk']),
                       'keeper_heartbeat': mtime(Path(keeper) / 'heartbeat') if keeper else 0,
                       'load': os.getloadavg()[0] if hasattr(os, 'getloadavg') else None}))
+
+
+def remote_source():
+    """Ship the same ownership helper with the existing stdin scan on uninstalled hosts."""
+    helper = (Path(__file__).resolve().parent / 'driver_state.py').read_text()
+    bootstrap = ("import sys, types\n"
+                 "_driver_state = types.ModuleType('driver_state')\n"
+                 "sys.modules['driver_state'] = _driver_state\n"
+                 "exec(" + repr(helper) + ", _driver_state.__dict__)\n")
+    return bootstrap.encode() + Path(__file__).read_bytes()
 
 
 # ---------------------------------------------------------------- queue (QUEUE.md)
@@ -389,7 +396,7 @@ class Collector:
                 self.feeds[i] = {**cur, 't': now(), 'error': f'{e!r}'[:300], 'panels': cur.get('panels', [])}
 
     def refresh_remote(self, force=False):
-        src = Path(__file__).read_bytes()
+        src = remote_source()
         for R in self.D.get('remote', []):
             name = R.get('name', R['ssh'])
             cur = self.remote.get(name, {})

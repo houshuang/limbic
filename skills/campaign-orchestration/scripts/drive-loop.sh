@@ -14,10 +14,11 @@
 # sleepsafe.py is $SLEEPSAFE, else ~/.agents/bin/sleepsafe.py, else the one on PATH. Runs under bash 3.2 (macOS) and Linux.
 scripts=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve().parent)' "${BASH_SOURCE[0]}")
 once=0; [[ $1 == --once ]] && { once=1; shift; }
-S=$(cd "$1" && pwd -P); name=$2; limit=$3; shift 3; [[ $1 == -- ]] && shift
+S=$(cd "$1" && pwd -P) || exit 2; name=$2; limit=$3; shift 3; [[ $1 == -- ]] && shift
 SLEEPSAFE=${SLEEPSAFE:-$HOME/.agents/bin/sleepsafe.py}
 [ -x "$SLEEPSAFE" ] || SLEEPSAFE=$(command -v sleepsafe.py) || { echo "drive-loop: no sleepsafe.py (set SLEEPSAFE)"; exit 2; }
-echo $$ > $S/driver.pid
+python3 "$scripts/driver_state.py" "$S" || exit $?
+echo $$ > "$S/driver.pid"
 python3 -c 'import json, os, sys; print(json.dumps({"cwd": os.getcwd(), "args": sys.argv[1:]}))' \
   $([[ $once == 1 ]] && echo --once) $S $name $limit -- "$@" > $S/driver.cmd
 rm -f $S/DRIVER-FAILED.md $S/DRIVER-EXIT

@@ -9,6 +9,7 @@ import time
 import unittest
 from unittest import mock
 import test_lane_keeper as fixtures
+import deliverables
 lk = fixtures.lk
 SCRIPTS = Path(__file__).resolve().parent
 
@@ -75,7 +76,11 @@ class ContractsTest(unittest.TestCase):
 
     def test_session_handoff_defers_contract_to_live_nested_driver(self):
         child=self.lane/'processing-driver'; child.mkdir()
-        (child/'driver.pid').write_text(str(os.getpid()))
+        command=f'bash drive-loop.sh --once {child} fixture 30 -- true'
+        process=subprocess.Popen(['bash','-c','exec -a "$1" sleep 30','fixture',command],cwd=self.root)
+        self.addCleanup(lambda: (process.terminate(), process.wait(timeout=5)) if process.poll() is None else None)
+        (child/'driver.pid').write_text(str(process.pid))
+        (child/'driver.cmd').write_text(json.dumps({'cwd':str(self.root),'args':['--once',str(child),'fixture','30','--','true']}))
         (self.lane/'EXPECTS').write_text('{"files":["final.json"]}')
         result=subprocess.run([sys.executable,str(SCRIPTS/'deliverables.py'),'run',str(self.lane),'--','true'],capture_output=True,text=True)
         self.assertEqual(result.returncode,0,result.stderr)
@@ -112,11 +117,12 @@ class KeeperRepeatsTest(unittest.TestCase):
     setUp = fixtures.RetireTest.setUp
     lane = fixtures.FrictionTest.lane
 
-    def test_nested_live_driver_prevents_short_session_and_uses_nested_progress(self):
+    @mock.patch.object(lk, "owns_process", return_value=True)
+    def test_nested_live_driver_prevents_short_session_and_uses_nested_progress(self, owner):
         C,d=self.lane(); nested=d/'processing-driver'; nested.mkdir()
         (d/'codex.log').write_text('discovery ended'); (d/'HANDOFF.md').write_text('next: process queue')
         (d/'fresh-at').write_text(str(self.t-20)); (d/'session-at').write_text(str(self.t-10))
-        (nested/'driver.pid').write_text(str(os.getpid())); (nested/'driver.cmd').write_text('{}')
+        (nested/'driver.pid').write_text(str(os.getpid())); (nested/'driver.cmd').write_text(json.dumps({'cwd':str(self.tmp),'args':[str(nested),'fixture','30','--','true']}))
         for p in d.iterdir():
             if p.is_file(): os.utime(p,(self.t-20000,self.t-20000))
         with mock.patch.object(self.K,'waiting_heavy',return_value=False), mock.patch.object(self.K,'run') as run:
@@ -127,7 +133,8 @@ class KeeperRepeatsTest(unittest.TestCase):
             self.K.launch(C,d,'fixture')
         self.assertNotIn('SHORT-SESSION',[e['kind'] for e in self.K.st['events'].values()])
 
-    def test_reports_use_nested_liveness_progress_and_failure(self):
+    @mock.patch.object(lk, "owns_process", return_value=True)
+    def test_reports_use_nested_liveness_progress_and_failure(self, owner):
         import dashboard
         import report
         C,d=self.lane(); child=d/'processing-driver'; child.mkdir()
@@ -135,7 +142,8 @@ class KeeperRepeatsTest(unittest.TestCase):
         self.K.cfg['campaigns']=[str(C)]
         with mock.patch.dict(sys.modules,{type(self.K).__module__:lk}):
             self.assertIn('driver',report.lanes(self.K)[0]['state'])
-        row=dashboard.scan([C])[0]
+        with mock.patch.object(dashboard,'owns_process',return_value=True):
+            row=dashboard.scan([C])[0]
         self.assertTrue(row['driver']); self.assertEqual(row['progress'],'admission 20/70')
         (child/'driver.pid').write_text('99999998'); (child/'DRIVER-FAILED.md').write_text('missing intake.jsonl')
         (d/'DONE.md').write_text('failed')

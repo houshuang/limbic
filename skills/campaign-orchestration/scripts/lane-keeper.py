@@ -84,11 +84,12 @@ Runaway checks (each tick; events are reported once per process, under the keepe
 Linux: systemd timer instead of launchd; CODEX_HOME is honoured; caffeinate is used only where it exists.
 """
 from deliverables import driver_dirs, missing as missing_deliverables
+from driver_state import spec as driver_spec, valid as valid_driver, owns_process
 
 import datetime as dt
 import fcntl, hashlib, json, os, re, shlex, shutil, signal, subprocess, sys, time, uuid
 from pathlib import Path
-from session_guard import last_session_id, local_codex_session, tail_text
+from session_guard import require_lane_workspace, last_session_id, local_codex_session, tail_text
 import budget
 
 DEFAULT_CONFIG = Path.home() / 'src/skard/.coordinator.json'
@@ -213,6 +214,8 @@ def birth(p):
 
 def alive(pidfile, pid=None):
     """A pid file is written after its process starts; a process that started later holds a recycled pid."""
+    if Path(pidfile).name == "driver.pid" and not owns_process(Path(pidfile).parent, pid if pid is not None else read_text(pidfile)):
+        return False
     try:
         pid = int(pid if pid is not None else Path(pidfile).read_text().split()[0])
         if pid <= 0:
@@ -449,6 +452,10 @@ class Keeper:
         return bool(later)
 
     def launch(self, C, d, why):
+        try:
+            require_lane_workspace(d)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            return self.event(d, 'LANE-WORKSPACE', str(error))
         n = int((d / 'fresh').read_text()) if (d / 'fresh').exists() else 0
         if n >= FRESH_LIMIT:
             return self.event(d, 'FRESH-LIMIT', f'{n} fresh sessions')
@@ -469,6 +476,10 @@ class Keeper:
         self.run(['env', f'CAMPAIGN_DIR={C}', 'bash', str(SCRIPTS / 'launch.sh'), d.name, *model], self.repo, C / 'autoresume.log')
 
     def resume(self, C, d, msg_file, why):
+        try:
+            require_lane_workspace(d)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            return self.event(d, 'LANE-WORKSPACE', str(error))
         if not self.session_id(d):
             if Keeper.claude_lane(d):   # engine switched to Claude (or its session never started): brief + HANDOFF
                 return self.launch(C, d, f'{why}; no Claude session to resume')
@@ -605,9 +616,12 @@ class Keeper:
     def tend_driver(self, C, d, driver):
         L = self.lane(driver)
         cmd = driver / 'driver.cmd'
+        if cmd.exists() and not valid_driver(driver):
+            self.event(d, 'DRIVER-OWNER', 'refused invalid/aliased driver ownership: ' + str(cmd))
+            return True
         exit_note = (driver / 'DRIVER-EXIT').read_text().strip() if (driver / 'DRIVER-EXIT').exists() else None
         if (driver / 'driver.pid').exists() and cmd.exists() and exit_note in (None, 'term') and not (driver / 'DRIVER-FAILED.md').exists():
-            spec = json.loads(cmd.read_text())
+            spec = driver_spec(driver)
             name = [a for a in spec['args'] if a != '--once'][1]
             if subprocess.run(['pgrep', '-f', f'sleepsafe.py --name {name} '], capture_output=True).returncode == 0:
                 self.event(d, 'DRIVER-ORPHAN', f'drive-loop is gone but its driver {name} still runs', key=f'{driver}|ORPHAN|{int(mtime(driver / "driver.pid"))}'); return True
@@ -628,12 +642,30 @@ class Keeper:
             return True
         return False
 
+    def parked_stale(self, d, running):
+        if running or (d / 'RETIRED').exists():
+            return False
+        stop = d / 'STOP'
+        handoffs = list(d.glob('HANDOFF*.md'))
+        handoff = max(handoffs, key=mtime) if handoffs else None
+        anchor = stop if stop.exists() else handoff
+        if anchor is None or now() - mtime(anchor) < 86400:
+            return False
+        L = self.lane(d)
+        if now() - L.get('parked_stale_at', 0) >= 86400:
+            L['parked_stale_at'] = now()
+            self.event(d, 'PARKED-STALE', f'{anchor.name} idle over 24h; review wait condition and existing workspace, continue or RETIRE',
+                       key=f'{d}|PARKED-STALE|{int(now() // 86400)}')
+        return True  # stale handoffs require a coordinator decision, never an automatic duplicate launch
+
     def tend(self, C, d):
         L = self.lane(d)
         drivers = driver_dirs(d)
         s_alive, d_alive = alive(d / 'pid'), any(alive(p / 'driver.pid') for p in drivers)
         progress = max(newest_in(p) for p in drivers)
         quiet = now() - progress
+        if self.parked_stale(d, s_alive or d_alive):
+            return
         if not s_alive and not d_alive and not (d / 'STOP').exists():
             for driver in drivers:
                 if (driver / 'DRIVER-FAILED.md').exists() and self.tend_driver(C, d, driver):
@@ -713,7 +745,7 @@ class Keeper:
             C = Path(c)
             if not C.is_dir():
                 continue
-            yield C, [d for d in sorted(C.iterdir()) if d.is_dir() and ((d / 'pid').exists() or any((p / 'driver.pid').exists() for p in driver_dirs(d)))]
+            yield C, [d for d in sorted(C.iterdir()) if d.is_dir() and ((d / 'pid').exists() or (d / 'STOP').exists() or any(d.glob('HANDOFF*.md')) or any((p / 'driver.pid').exists() for p in driver_dirs(d)))]
 
     def clear_events(self, remote_pending):
         for key, e in list(self.st['events'].items()):
@@ -1097,9 +1129,9 @@ retire refuses an over-long or run-together handover, so fix it and retire again
 
     def pause(self, d):
         """Pause a repeating driver: STOP ends drive-loop before its next run; PAUSED marks that resume may undo it."""
-        if not (d / 'driver.cmd').exists():
-            raise ValueError('no driver.cmd: nothing to pause')
-        if '--once' in json.loads((d / 'driver.cmd').read_text()).get('args', []):
+        spec = driver_spec(d)
+        require_lane_workspace(d)
+        if '--once' in spec['args']:
             raise ValueError('a --once job cannot be paused; it must not rerun')
         if (d / 'STOP').exists() and not (d / 'PAUSED').exists():
             raise ValueError('already stopped (STOP not written by pause)')
@@ -1112,6 +1144,8 @@ retire refuses an over-long or run-together handover, so fix it and retire again
         """Undo pause, under the tick lock so a concurrent tick does not report the stop as a finished job."""
         if not (d / 'PAUSED').exists():
             raise ValueError('not paused by lane-keeper.py pause; a STOP from a coordinator stays')
+        spec = driver_spec(d)
+        require_lane_workspace(d)
         lock = open(self.k / 'tick.lock', 'w')
         for _ in range(40):
             try:
@@ -1126,7 +1160,6 @@ retire refuses an over-long or run-together handover, so fix it and retire again
             self.log(f'RESUME {d.name}')
             if alive(d / 'driver.pid'):
                 return f'resumed {d.name}: its drive-loop was still running and continues'
-            spec = json.loads((d / 'driver.cmd').read_text())
             self.run(['bash', str(SCRIPTS / 'drive-loop.sh'), *spec['args']], spec['cwd'], d / 'driver.log')
             return f'resumed {d.name}: drive-loop restarted'
         finally:
@@ -1195,7 +1228,9 @@ retire refuses an over-long or run-together handover, so fix it and retire again
         tracked = [self.k / 'coordinator.pid']
         lanes = [(C, d) for C, ds in self.lanes() for d in ds]
         for _, d in lanes:
-            tracked += [d / 'pid', *(p / 'driver.pid' for p in driver_dirs(d))]
+            # Unverified legacy PID markers may protect a process, never authorize a kill.
+            folders = [d] + [p for p in d.iterdir() if p.is_dir() and not p.is_symlink()]
+            tracked += [d / 'pid', *(p / 'driver.pid' for p in folders)]
         tracked_pids = [int(t) for t in map(read_text, tracked) if t.isdigit()]
         # Detached release wrappers can legitimately have ppid 1. Protect the
         # holder's ancestors and descendants, including the heavy-slot wrapper.
@@ -1230,6 +1265,14 @@ retire refuses an over-long or run-together handover, so fix it and retire again
             where = cwd.get(p, '') + '/'
             return any(x in table[p]['cmd'] or where.startswith(x) for x in paths)
 
+        # A STOP applies only to this lane. Independently owned descendant lanes
+        # remain protected even when a historical wrapper started them.
+        owned = []
+        for _, lane in lanes:
+            for folder in driver_dirs(lane):
+                value = read_text(folder / 'driver.pid')
+                if value.isdigit() and int(value) in table and owns_process(folder, int(value), table[int(value)]['cmd']):
+                    owned.append((lane, int(value)))
         # STOPPED-BUT-RUNNING
         for root, d in [(d, p) for _, d in lanes for p in driver_dirs(d)]:
             stop = root / 'STOP'
@@ -1238,13 +1281,13 @@ retire refuses an over-long or run-together handover, so fix it and retire again
             pid = int(read_text(d / 'driver.pid'))
             if pid not in table:
                 continue
+            if not owns_process(d, pid, table[pid]['cmd']):
+                self.event(root, 'DRIVER-OWNER', 'STOP reap refused: process ownership differs for ' + str(d))
+                continue
             group = [pid]
-            spec = json.loads(read_text(d / 'driver.cmd') or '{}')
-            name = [a for a in spec.get('args', []) if a != '--once'][1:2]
-            if name:
-                group += [p for p, r in table.items() if f'sleepsafe.py --name {name[0]} ' in r['cmd'] + ' ']
             tree = descendants(table, group)
-            keep = (protected - tree) | release_protected
+            foreign = [p for owner, p in owned if owner != root]
+            keep = (protected - tree) | release_protected | set(foreign) | descendants(table, foreign)
             for p in group:
                 if p in release_protected: continue
                 if self.runaway_event(seen, 'STOPPED-BUT-RUNNING', p, table[p], f'lane {d.name} STOP {stamp(mtime(stop))}', reap) and reap:

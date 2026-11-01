@@ -225,12 +225,15 @@ wrappers were called dead or reaped. Shared enforcement now replaces the private
 - `drive-loop.sh`, `launch.sh` and `resume.sh` refuse zero-exit completion with exit **65** and `DRIVER-FAILED.md`
   naming the missing/invalid item. A session handing work to a live driver defers the contract to its completion;
   the keeper checks it when idle. A failed DONE/READY cannot override the contract or a failure report.
+- Driver launch refuses aliased PID/command/exit/failure markers before writing any status. Preserve legacy links and their targets as evidence, then have the lane owner remove the aliases explicitly; never silently rebind a STOPped sequence. Root and nested liveness require a `driver.cmd` naming that state directory, an existing recorded cwd and a live drive-loop whose argv and cwd agree. A STOP reap requires the same positive ownership proof and preserves independently owned descendant lanes; a same-name sleepsafe elsewhere is never a kill target.
 - The keeper follows root and immediate child folders containing `driver.cmd` or `driver.pid` for liveness,
   restart, exit/failure, progress and orphan protection. Status/dashboard scans follow them too. No root symlinks.
   A HANDOFF with no live driver raises `HANDOFF-IDLE`; the existing short-session guard still prevents repeat churn.
 - Invoke `scripts/lane-audit.sh …` directly via its executable shebang. Accidental `bash lane-audit.sh …` re-execs zsh.
 
-Regressions: `scripts/test_repeats.py` (fake zero-exit launch, driver, JSONL, commit, nested wrappers and bash audit).
+- STOPped lanes and idle handoffs older than 24 hours without RETIRED raise actionable `PARKED-STALE`, at most once per 24 hours across acknowledgments/reloads. Old idle handoffs require a coordinator decision. Launch/resume checks any existing `~/.agents/lanes/<lane>.json` against a present Git root and matching branch before changing handoff/session files or spawning. Missing/released paths refuse; do not recreate old parked work or duplicate its replacement lane.
+
+Regressions: `scripts/test_tooling_followup.py`, `scripts/test_repeats.py` (fake zero-exit launch, driver, JSONL, commit, nested wrappers and bash audit).
 
 ## Lane lifecycle: nothing may go quiet
 

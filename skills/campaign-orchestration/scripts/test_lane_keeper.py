@@ -468,7 +468,8 @@ class FrictionTest(unittest.TestCase):
         spawn.assert_not_called()
         self.assertIn('ENDED',[e['kind'] for e in self.K.st['events'].values()])
 
-    def test_next_command_rejects_shell_and_other_lane_and_is_not_restarted_twice(self):
+    @mock.patch.object(lk, "owns_process", return_value=True)
+    def test_next_command_rejects_shell_and_other_lane_and_is_not_restarted_twice(self, owner):
         C,d=self.lane()
         for command in ('echo unsafe',f'bash {lk.SCRIPTS / "drive-loop.sh"} {C} job 30 -- true',
                         f'bash {lk.SCRIPTS / "drive-loop.sh"} {d} job 30 -- true\necho unsafe'):
@@ -524,7 +525,8 @@ class FrictionTest(unittest.TestCase):
         self.assertEqual(output.read_text(),'yes')
         self.assertFalse((d/'NEXT-COMMAND').exists())
 
-    def test_waiting_for_a_silent_heavy_slot_is_reported_from_process_tree(self):
+    @mock.patch.object(lk, "owns_process", return_value=True)
+    def test_waiting_for_a_silent_heavy_slot_is_reported_from_process_tree(self, owner):
         C,d=self.lane();(d/'driver.pid').write_text(str(os.getpid()))
         tree=f'{os.getpid()} 1 bash drive-loop.sh\n123456 {os.getpid()} bash scripts/heavy.sh python3 tests/run_parallel.py\n123457 123456 sleep 30\n'
         with mock.patch.object(lk.subprocess,'run',return_value=subprocess.CompletedProcess([],0,stdout=tree)), \
@@ -538,7 +540,8 @@ class FrictionTest(unittest.TestCase):
         self.K.cfg['release_scope']=str(scope)
         self.K.check_release_scope();self.assertFalse(self.K.st['events'])
 
-    def test_waiting_on_heavy_lock_is_reported_without_stop_or_quiet(self):
+    @mock.patch.object(lk, "owns_process", return_value=True)
+    def test_waiting_on_heavy_lock_is_reported_without_stop_or_quiet(self, owner):
         C,d=self.lane()
         (d/'driver.pid').write_text(str(os.getpid()))
         (d/'driver.log').write_text('heavy.sh: memory free 9%, waiting\n')
@@ -549,7 +552,8 @@ class FrictionTest(unittest.TestCase):
         self.assertFalse((d/'STOP').exists())
 
 
-    def test_acknowledged_heavy_wait_stays_quiet_but_new_driver_reports(self):
+    @mock.patch.object(lk, "owns_process", return_value=True)
+    def test_acknowledged_heavy_wait_stays_quiet_but_new_driver_reports(self, owner):
         C,d=self.lane()
         (d/'driver.pid').write_text(str(os.getpid()))
         touch(d/'driver.pid',self.t)
@@ -815,6 +819,7 @@ class RunawayTest(unittest.TestCase):
     def scan(self, K):
         with mock.patch.object(lk, 'ps_table', return_value=self.table), \
              mock.patch.object(lk, 'proc_cwds', side_effect=lambda pids: {p: self.cwd[p] for p in pids if p in self.cwd}), \
+             mock.patch('driver_state.process_cwd', side_effect=lambda pid: self.cwd.get(int(pid), '')),  \
              mock.patch.object(lk, 'disk_free_gb', side_effect=lambda p: self.disk), \
              mock.patch.object(lk, 'swap_used_gb', side_effect=lambda: self.swap), \
              mock.patch.object(lk, 'top_processes', return_value='1 7366M python3 run_unit.py'), \
@@ -904,7 +909,9 @@ class RunawayTest(unittest.TestCase):
         self.assertEqual(self.kinds(K), [])
 
     def test_stopped_lane_driver_alive_after_ten_minutes(self):
-        self.proc(700, f'bash drive-loop.sh {self.d} job 172800')
+        self.proc(700, f'bash drive-loop.sh {self.d} job 172800 -- true')
+        (self.d / 'driver.cmd').write_text(json.dumps({'cwd':str(self.repo),'args':[str(self.d),'job','172800','--','true']}))
+        self.cwd[700] = str(self.repo)
         self.proc(701, 'python3 sleepsafe.py --name job --limit 172800 -- python3 driver.py', ppid=700, pgid=700)
         (self.d / 'driver.pid').write_text('700')
         stop = self.d / 'STOP'; stop.write_text('stop'); touch(stop, time.time() - 300)

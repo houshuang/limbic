@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+from driver_state import prepare as prepare_driver_state
 
 
 def tail_text(path, limit=4000):
@@ -64,6 +65,31 @@ def local_codex_session(sid, sessions=None):
     return None
 
 
+def require_lane_workspace(lane):
+    """Existing ownership is authoritative; a stale parked checkout is never recreated here."""
+    lane = Path(lane)
+    prepare_driver_state(lane)
+    if (lane / 'RETIRED').exists():
+        raise ValueError('retired lane: ' + str(lane))
+    registry = Path(os.environ.get('LANE_REGISTRY_DIR', Path.home() / '.agents/lanes')) / (lane.name + '.json')
+    if not registry.exists():
+        return  # generic campaigns need not use a repository lane registry
+    row = json.loads(registry.read_text())
+    path = Path(row['path'])
+    if row.get('released') or not path.is_dir():
+        raise ValueError('stale lane registry: ' + str(path) + ' is released or missing')
+    env = {k:v for k,v in os.environ.items() if not k.startswith('GIT_')}
+    def git(*args):
+        result = subprocess.run(['git', '-C', str(path), *args], env=env, capture_output=True, text=True)
+        if result.returncode:
+            raise ValueError('invalid registered worktree: ' + str(path))
+        return result.stdout.strip()
+    if Path(git('rev-parse', '--show-toplevel')).resolve() != path.resolve():
+        raise ValueError('registered path is not a worktree root: ' + str(path))
+    if git('branch', '--show-current') != row['branch']:
+        raise ValueError('registered worktree branch differs: ' + str(path))
+
+
 def main():
     if sys.argv[1] in ('--session-id', '--codex-session-id'):
         sid=last_session_id(sys.argv[2])
@@ -73,6 +99,10 @@ def main():
         return 2
     lane=Path(sys.argv[1]).resolve(); lane.mkdir(parents=True,exist_ok=True)
     command=sys.argv[3:]
+    try:
+        require_lane_workspace(lane)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        print('refused: ' + str(error), file=sys.stderr); return 2
     with (lane/'session.lock').open('a') as lock:
         try:
             fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)

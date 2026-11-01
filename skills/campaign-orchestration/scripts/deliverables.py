@@ -11,13 +11,7 @@ import signal
 from pathlib import Path
 import subprocess
 import sys
-
-
-def driver_dirs(lane):
-    """Root and immediate children only; no recursive walk through caches."""
-    lane = Path(lane)
-    return [lane] + sorted(p for p in lane.iterdir() if p.is_dir() and not p.is_symlink()
-                           and ((p / 'driver.cmd').is_file() or (p / 'driver.pid').is_file()))
+from driver_state import driver_dirs, owns_process
 
 
 def live_driver(lane):
@@ -25,7 +19,7 @@ def live_driver(lane):
         try:
             path = folder / 'driver.pid'
             pid = int(path.read_text())
-            if pid <= 0:
+            if pid <= 0 or not owns_process(folder, pid):
                 continue
             os.kill(pid, 0)
             result = subprocess.run(['ps', '-o', 'lstart=', '-p', str(pid)], capture_output=True, text=True)
