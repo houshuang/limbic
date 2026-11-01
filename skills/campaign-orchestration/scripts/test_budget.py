@@ -277,6 +277,29 @@ class DiskHookTest(unittest.TestCase):
             self.assertEqual((tmp / 'repo/hooks.log').read_text().split(), ['h', 'f'])
 
 
+class CapacityTest(unittest.TestCase):
+    def test_idle_capacity_fires_when_queue_open_and_lanes_below_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp); (tmp / 'repo').mkdir(); (tmp / 'state').mkdir()
+            q = tmp / 'state/QUEUE.md'
+            q.write_text('# Queue\n- [~] sweep → lane verify-1\n- [ ] sivesind recall\n- [x] disk\n')
+            cfg = tmp / 'c.json'
+            cfg.write_text(json.dumps({'repo': str(tmp / 'repo'), 'campaigns': [], 'state': str(tmp / 'state'),
+                                       'capacity': {'queue': str(q), 'target_lanes': 2, 'every_minutes': 60}}))
+            K = lk.Keeper(cfg); K.dry = True
+            K.capacity_event(); K.capacity_event()
+            kinds = [e['kind'] for e in K.st['events'].values()]
+            self.assertEqual(kinds, ['IDLE-CAPACITY'])     # once per hour
+            self.assertIn('1 open queue items', list(K.st['events'].values())[0]['detail'])
+            K.st['events'].clear(); K.st['capacity']['last'] = 0
+            with mock.patch.object(K, 'running_lanes', return_value=['a', 'b']):
+                K.capacity_event()
+            self.assertEqual(K.st['events'], {})            # at target
+            q.write_text('- [x] all done\n'); K.capacity_event()
+            self.assertEqual(K.st['events'], {})            # nothing open
+            self.assertNotIn('IDLE-CAPACITY', lk.INFO_KINDS)  # actionable: it starts a coordinator
+
+
 class ReportTest(unittest.TestCase):
     def test_status_written_and_digest_once_per_slot(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -54,6 +54,10 @@ Optional config keys:
       drivers (release cycles, gates) are never held. Running sessions and drivers finish their current step.
       One machine computes (it reads the account's usage) and mirrors HOLD-codex / HOLD-claude / HOLD-autonomy to the
       hosts in "mirror" over ssh; a keeper with "source": "holds" obeys those files instead of computing.
+  "capacity": {"queue": "<state>/QUEUE.md", "target_lanes": 4, "every_minutes": 60}
+      IDLE-CAPACITY (actionable) when fewer lanes run than target_lanes and the queue has open items («- [ ] …»),
+      at most once per every_minutes: the coordinator it starts launches the next items and marks them «- [~] … → lane».
+      Without it the keeper only reacts to lane events, and a plan nobody turned into lanes never starts (1 Nov).
   "disk_hooks": {"hourly": [["python3", "scripts/disk_budget.py", "report"]], "on_floor": [[…reap --execute]]}
       repo-owned disk commands, run in the repo at most hourly; on_floor only while free disk < disk_floor_gb.
   "protect_patterns": [regex]   processes the orphan reaper never touches (default: seal-to-box, sleepsafe seal-*)
@@ -1195,6 +1199,25 @@ retire refuses an over-long or run-together handover, so fix it and retire again
             self.event(self.k, 'RESOURCE-FLOOR', '; '.join(reasons) + f'; top: {top_processes(table)}; largest: '
                        f'{largest_dirs(c.get("disk_watch", []))}', key=f'runaway|{key}', name='machine')
 
+    def running_lanes(self):
+        return [d for _, ds in self.lanes() for d in ds if alive(d / 'pid') or alive(d / 'driver.pid')]
+
+    def capacity_event(self):
+        c = self.cfg.get('capacity') or {}
+        q = Path(c['queue']) if c.get('queue') else None
+        if not q or not q.exists():
+            return
+        open_items = [l for l in read_text(q).splitlines() if l.lstrip().startswith('- [ ]')]
+        running = len(self.running_lanes())
+        target = c.get('target_lanes', 4)
+        C = self.st.setdefault('capacity', {})
+        if not open_items or running >= target or now() - C.get('last', 0) < c.get('every_minutes', 60) * 60:
+            return
+        C['last'] = now()
+        self.event(q.parent, 'IDLE-CAPACITY', f'{running} of {target} lanes running; {len(open_items)} open queue items in '
+                   f'{q}: launch the next ones (mark «- [~] … → lane»), within the budget', key=f'capacity|{int(now())}',
+                   name='queue')
+
     def disk_hooks(self):
         """Repo-owned disk commands: "disk_hooks": {"hourly": [argv], "on_floor": [argv]} (argv lists, run in the repo)."""
         H = self.cfg.get('disk_hooks') or {}
@@ -1245,6 +1268,10 @@ retire refuses an over-long or run-together handover, so fix it and retire again
             self.log(f'ERROR disk hooks: {e!r}')
         self.check_release_scope()
         self.schedule_events()
+        try:
+            self.capacity_event()
+        except Exception as e:
+            self.log(f'ERROR capacity: {e!r}')
         self.clear_events(self.pull_remote())
         self.maybe_start_coordinator()
         self.notify()
