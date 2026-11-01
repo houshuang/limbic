@@ -39,11 +39,15 @@ class CoordinatorCardTest(unittest.TestCase):
             missing = card.make_card(q, i)
             self.assertIn('queue unavailable', missing)
             self.assertIn('incidents unavailable', missing)
-            q.write_text(''.join(f'- [ ] **Item {n}**\n' for n in range(300)))
+            q.write_text('**Priority (owner): books first.**\n\n' + ''.join(f'- [ ] **Item {n}**\n' for n in range(300)))
             i.write_text('## last\n')
             result = card.make_card(q, i)
-            self.assertIn('queue index exceeds card limit', result)
             self.assertLessEqual(len(result.encode()), 4096)
+            self.assertIn('**Priority (owner): books first.**', result)
+            self.assertIn('**Item 0**', result)
+            shown = sum(f'**Item {n}**' in result for n in range(300))
+            self.assertIn(f'(+{300 - shown} more open items in the queue source)', result)
+            self.assertIn('## last', result)
 
     def test_keeper_prompt_inlines_card(self):
         # The keeper test supplies its real startup fixture and captures its generated prompt.

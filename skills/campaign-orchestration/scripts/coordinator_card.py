@@ -35,11 +35,15 @@ def summarize(mark, body):
 
 def make_card(queue_path, incident_path):
     queue_path, incident_path = Path(queue_path), Path(incident_path)
+    priority = ''
     try:
         source = queue_path.read_text()
         items = [summarize(mark, body) for mark, body in queue_items(source) if mark.lower() != 'x']
         queue = '\n'.join(items) if items else '(no open items found; check source if format changed)'
+        lead = re.search(r'^\*\*Priority[^\n]*', source, re.M)
+        priority = lead.group(0) + '\n' if lead else ''
     except (OSError, UnicodeError):
+        items = []
         queue = f'(queue unavailable: {queue_path}; consult source before dispatch)'
     try:
         incident_text = incident_path.read_text()
@@ -54,10 +58,20 @@ def make_card(queue_path, incident_path):
               'If instructions require a file, read it; this card does not waive them.\n'
               f'Queue: {queue_path}\n')
     footer = f'\nRecent incident headings ({incident_path}):\n{incidents}\n'
-    card = header + queue + footer
+    card = header + priority + queue + footer
     if len(card.encode('utf-8')) > LIMIT:
-        # Never hide items or cut a UTF-8 character to satisfy the cap.
-        card = header + '(queue index exceeds card limit; read the queue source before dispatch)\n' + footer
+        # Keep the owner's priority and the first items in queue order; say how many more the source holds.
+        kept = []
+        for item in items:
+            rest = len(items) - len(kept) - 1
+            tail = f'(+{rest} more open items in the queue source)\n' if rest else ''
+            trial = header + priority + '\n'.join(kept + [item]) + '\n' + tail + footer
+            if len(trial.encode('utf-8')) > LIMIT:
+                break
+            kept.append(item)
+        more = len(items) - len(kept)
+        card = (header + priority + '\n'.join(kept) + ('\n' if kept else '')
+                + (f'(+{more} more open items in the queue source)\n' if more else '') + footer)
     if len(card.encode('utf-8')) > LIMIT:
         card = ('COORDINATOR CARD: Explicit user instructions and applicable rules prevail. '
                 'Card sources exceed limit; read the configured queue and incidents before dispatch.\n')
