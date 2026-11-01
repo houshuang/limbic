@@ -238,6 +238,20 @@ class DriveLoopHoldTest(unittest.TestCase):
                 p.wait(timeout=10)
 
 
+class NotifyFilterTest(unittest.TestCase):
+    def test_owner_mail_skips_routine_waits_but_keeps_budget_and_decisions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp); (tmp / 'repo').mkdir()
+            cfg = tmp / 'c.json'
+            cfg.write_text(json.dumps({'repo': str(tmp / 'repo'), 'campaigns': [], 'state': str(tmp / 'state'),
+                                       'notify': {'cmd': '/bin/true'}}))
+            K = lk.Keeper(cfg)
+            for kind in ('HEAVY-WAIT', 'QUIET', 'READY', 'BUDGET-HOLD', 'AUTONOMY-EXPIRED', 'BUDGET-OK'):
+                K.event(tmp / kind, kind, 'd')
+            kinds = [l.split()[2] for l in K.st['notify']['queue']]
+            self.assertEqual(kinds, ['READY', 'BUDGET-HOLD', 'AUTONOMY-EXPIRED'])
+
+
 class ReportTest(unittest.TestCase):
     def test_status_written_and_digest_once_per_slot(self):
         with tempfile.TemporaryDirectory() as tmp:

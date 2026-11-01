@@ -96,6 +96,7 @@ COORD_LIVE = 1200
 # already acted (reaped). A lane silent for STALL seconds (QUIET → STALLED) is actionable.
 INFO_KINDS = {'HEAVY-WAIT', 'QUIET', 'ORPHAN', 'STOPPED-BUT-RUNNING', 'STALE-PREVIEW',
               'BUDGET-HOLD', 'BUDGET-OK', 'AUTONOMY-ENDING', 'AUTONOMY-EXPIRED'}
+NOTIFY_ALWAYS = {'BUDGET-HOLD', 'AUTONOMY-ENDING', 'AUTONOMY-EXPIRED'}   # informational, but the owner must know
 STALL = 3 * 3600
 HANDOVER_CHARS = 2800
 RETIRE_GRACE = 60   # a retiring session still writes its last message after `retire`
@@ -372,7 +373,7 @@ class Keeper:
         self.st['events'][key] = {'lane': str(d), 'name': name, 'kind': kind, 'detail': detail, 't': now()}
         self.log(f'EVENT {kind} {name}: {detail}')
         line = f'{stamp()} {kind} {name} {detail} ({d})'
-        if self.cfg.get('notify'):
+        if self.cfg.get('notify') and (kind in NOTIFY_ALWAYS or kind not in self.cfg.get('coordinator', {}).get('info_kinds', INFO_KINDS)):
             self.st['notify'].setdefault('queue', []).append(line)
         if not self.dry:
             with open(self.k / 'EVENTS', 'a') as fh:
