@@ -1,6 +1,7 @@
 """Bind driver markers to their lexical state directory before trusting them."""
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 
@@ -57,6 +58,10 @@ def owns_process(folder, pid, command=None, cwd=None):
             command = subprocess.run(['ps', '-o', 'command=', '-p', str(pid)], capture_output=True, text=True).stdout
         if cwd is None:
             cwd = process_cwd(pid)
+        # A driver command quoted inside a model prompt is not the executable.
+        invocation = re.match(r'^(?:(?:\S*/)?(?:bash|sh|zsh)\s+)?(?:\S*/)?drive-loop\.sh\s+', command.strip())
+        if not invocation:
+            return False
         args = row['args'][1:] if row['args'][0] == '--once' else row['args']
         # ps doesn't preserve shell quoting; compare the exact state argument between
         # the script and driver name, never a substring elsewhere in the payload.
