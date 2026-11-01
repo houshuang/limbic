@@ -444,6 +444,13 @@ class Collector:
             return f'next start {time.strftime("%H:%M", time.localtime(due))} ({len(S["events"])} events waiting, {gap // 60:.0f}-min gap)'
         return f'{len(S["events"])} events waiting; starts at the next keeper tick (≤2 min) unless the budget refuses'
 
+    def overseer_report(self):
+        """The newest entry of the overseer's report (overseer.py), shown first so the owner sees its verdict."""
+        path = (self.cfg.get('overseer') or {}).get('report')
+        text = tail(Path(path), 12000) if path else ''
+        i = text.rfind('\n## ')
+        return text[i + 1:].strip() if i >= 0 else ''
+
     def git_today(self):
         """Today's integrations, one row per batch (merge + integrate + apply of one lane), each described from its diff."""
         repo = self.cfg['repo']
@@ -605,6 +612,7 @@ class Collector:
                       'target': (self.cfg.get('capacity') or {}).get('target_lanes')}
         S['integrated'] = self.git_today()
         S['incidents'] = self.incidents()
+        S['overseer'] = self.overseer_report()
         S['schedule'] = self.cfg.get('schedule', [])
         S['priorities'] = load_priorities(priorities_path(self.cfg))['items']
         S['audit'] = [json.loads(l) for l in tail(self.k / 'dashboard-audit.jsonl', 6000).splitlines()[-6:] if l.startswith('{')]
@@ -1022,6 +1030,14 @@ class Page:
                     f'<tr class="done"><td>{pill("done")}</td><td>{E(it["title"])}</td></tr>' for it in done) + '</table></details>')
         return h + '</section>'
 
+    def overseer(self, S):
+        rep = S.get('overseer')
+        if not rep:
+            return ''
+        first, _, rest = rep.partition('\n')
+        return (f'<section><h2>Overseer</h2><div class="inc"><b>{E(first.lstrip("# ")[:300])}</b>'
+                f'<div class="mut" style="white-space:pre-wrap">{E(rest[:2000])}</div></div></section>')
+
     def incidents(self, S):
         inc = S.get('incidents', [])
         if not inc:
@@ -1051,7 +1067,7 @@ class Page:
         prios = S.get('priorities', {})
         fe = self.feeds(S, prios)
         left = self.lanes(S) + self.waiting(S) + self.queue(S) + ''.join(h for p, h in fe if p == 'main')
-        right = (self.health(S) + ''.join(h for p, h in fe if p == 'side') + self.schedule(S) + self.incidents(S) + self.audit(S))
+        right = (self.overseer(S) + self.health(S) + ''.join(h for p, h in fe if p == 'side') + self.schedule(S) + self.incidents(S) + self.audit(S))
         name = self.C.cfg.get('name', Path(self.C.cfg['repo']).name)
         top = (f'<header><h1>{E(name)} keeper</h1><span class="mut">{time.strftime("%a %d %b %H:%M:%S", time.localtime(S["t"]))}</span>'
                + (f'<span class="bad">{E(S["fatal"])}</span>' if S.get('fatal') else '') + '</header>')
