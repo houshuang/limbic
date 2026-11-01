@@ -563,8 +563,12 @@ class Keeper:
                 self.event(d, 'READY', f'{f} written {stamp(mtime(d / f))}', key=f'{d}|{f}|{int(mtime(d / f))}')
         if s_alive or d_alive:
             if self.waiting_heavy(d):
-                self.event(d, 'HEAVY-WAIT', 'waiting on the heavy lock; lane remains running',
-                           key=f'{d}|HEAVY-WAIT|{int(mtime(d / "driver.pid"))}')
+                # An ack clears pending events. Do not recreate this healthy
+                # wait on every tick until the lane starts a new driver/session.
+                started = max(mtime(d / 'driver.pid'), mtime(d / 'pid'))
+                if started > self.acked(d):
+                    self.event(d, 'HEAVY-WAIT', 'waiting on the heavy lock; lane remains running',
+                               key=f'{d}|HEAVY-WAIT|{int(started)}')
                 return
             if quiet > QUIET:
                 bucket = int(newest_in(d))

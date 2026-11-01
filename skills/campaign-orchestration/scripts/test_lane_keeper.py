@@ -462,6 +462,46 @@ class FrictionTest(unittest.TestCase):
         self.assertFalse((d/'STOP').exists())
 
 
+    def test_acknowledged_heavy_wait_stays_quiet_but_new_driver_reports(self):
+        C,d=self.lane()
+        (d/'driver.pid').write_text(str(os.getpid()))
+        touch(d/'driver.pid',self.t)
+        (d/'driver.log').write_text('heavy.sh: memory free 9%, waiting\n')
+        self.K.tend(C,d)
+        self.assertEqual([e['kind'] for e in self.K.st['events'].values()],['HEAVY-WAIT'])
+        (d/'HANDLED').write_text('verified healthy wait')
+        touch(d/'HANDLED',self.t+1)
+        self.K.clear_events({})
+        # Simulate several ticks, including a keeper reload after persisted ack.
+        for _ in range(3):
+            self.K.tend(C,d)
+            self.assertFalse(self.K.st['events'])
+        self.K.save()
+        self.K=lk.Keeper(self.K.cfg_path)
+        self.K.tend(C,d)
+        self.assertFalse(self.K.st['events'])
+        touch(d/'driver.pid',self.t+2)
+        self.K.tend(C,d)
+        self.assertEqual([e['kind'] for e in self.K.st['events'].values()],['HEAVY-WAIT'])
+
+    def test_acknowledged_heavy_wait_does_not_hide_ready_or_terminal(self):
+        C,d=self.lane()
+        (d/'driver.pid').write_text(str(os.getpid()))
+        touch(d/'driver.pid',self.t)
+        (d/'driver.log').write_text('heavy.sh: waiting for slots\n')
+        (d/'HANDLED').write_text('verified healthy wait')
+        touch(d/'HANDLED',self.t+1)
+        (d/'READY-1.md').write_text('partial checkpoint')
+        touch(d/'READY-1.md',self.t+2)
+        self.K.tend(C,d)
+        self.assertEqual([e['kind'] for e in self.K.st['events'].values()],['READY'])
+        (d/'driver.pid').write_text('99999999')
+        (d/'DONE.md').write_text('queue outcomes')
+        touch(d/'DONE.md',self.t+3)
+        self.K.tend(C,d)
+        self.assertIn('DONE',[e['kind'] for e in self.K.st['events'].values()])
+
+
 class SessionGuardTest(unittest.TestCase):
     def setUp(self):
         temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup)
