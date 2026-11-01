@@ -222,6 +222,9 @@ wrappers were called dead or reaped. Shared enforcement now replaces the private
   Use only the fields the lane needs. Paths are relative to that state folder (absolute paths also work).
   `files` must exist; each `jsonl` must contain at least one row and parse completely; `commit` requires a descendant
   commit on the named branch after the explicit base. These check presence and shape, not semantic acceptance.
+  After sanctioned worktree removal, a commit contract resolves only through a matching released lane registry
+  with `removed_utc` and an `integrated_commit` containing the branch and already on the shared repository's HEAD.
+  Missing/unreleased/unintegrated paths still refuse; never recreate a checkout to satisfy a completion check.
 - `drive-loop.sh`, `launch.sh` and `resume.sh` refuse zero-exit completion with exit **65** and `DRIVER-FAILED.md`
   naming the missing/invalid item. A session handing work to a live driver defers the contract to its completion;
   the keeper checks it when idle. A failed DONE/READY cannot override the contract or a failure report.
