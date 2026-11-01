@@ -99,7 +99,7 @@ table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid var(--li
 th{color:var(--mut);font-weight:500;font-size:13px}code{font-size:13px}"""
 
 
-def page(S):
+def page(S, live=''):
     e = html.escape
     cards = ''.join(f'<div class="card {"hold" if ": HOLD" in b or "expired" in b or "not granted" in b else "ok"}">{e(b)}</div>'
                     for b in S['budget'])
@@ -114,12 +114,17 @@ def page(S):
     run = sum(r['state'].startswith('running') for r in S['lanes'])
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="refresh" content="300"><title>Keeper status</title><style>{CSS}</style></head><body>
-<h1>Keeper status <span class="mut">{e(S["time"])}</span></h1>
+<h1>Keeper status <span class="mut">{e(S["time"])}</span>{f' <a href="{e(live)}" style="font-size:14px">live dashboard</a>' if live else ''}</h1>
 <div class="cards">{cards}</div>
 <h2>Waiting on a decision ({len(S["decisions"])})</h2><table><tr><th>Kind</th><th>Lane</th><th>Detail</th></tr>{dec}</table>
 <h2>Lanes ({run} running of {len(S["lanes"])})</h2><table><tr><th>Lane</th><th>State</th><th>Last write</th><th>Deferred</th></tr>{ln}</table>
 <h2>Main, last 12 h ({len(S["commits"])} commits)</h2><ul>{mn}</ul>
 </body></html>"""
+
+
+def dashboard_url(K):
+    D = K.cfg.get('dashboard')
+    return f'http://127.0.0.1:{D.get("port", 4170)}/' if isinstance(D, dict) else ''
 
 
 def due_digest(K, t=None):
@@ -145,7 +150,7 @@ def tick(K):
     body = text(S)
     if not K.dry:
         (K.k / 'STATUS.md').write_text(body)
-        (K.k / 'STATUS.html').write_text(page(S))
+        (K.k / 'STATUS.html').write_text(page(S, dashboard_url(K)))
     K.st['status_written'] = lk.now()
     if not slot:
         return
@@ -156,7 +161,7 @@ def tick(K):
     subject = f'{K.cfg.get("name", K.repo.name)}: {len(S["decisions"])} decisions, ' \
               f'{sum(r["state"].startswith("running") for r in S["lanes"])} lanes running, {len(S["integrations"])} integrations'
     try:
-        ok = subprocess.run([cmd, subject, body + f'\nFull page: {K.k / "STATUS.html"}\n'], capture_output=True, timeout=90).returncode == 0
+        ok = subprocess.run([cmd, subject, body + (f'\nDashboard: {dashboard_url(K)}' if dashboard_url(K) else '') + f'\nFull page: {K.k / "STATUS.html"}\n'], capture_output=True, timeout=90).returncode == 0
     except (OSError, subprocess.TimeoutExpired):
         ok = False
     K.log(f'DIGEST {slot} {"sent" if ok else "failed"}')

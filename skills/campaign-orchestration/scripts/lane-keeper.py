@@ -33,6 +33,8 @@ keeper/coordinator-<stamp>.log (stream-json); its session id is in keeper/coordi
     lane-keeper.py lease  [--config F] --owner NAME --minutes N [--note TEXT] | --release
     lane-keeper.py ack    <lane-dir | host:lane-dir> [note…]
     lane-keeper.py status [--config F]
+    lane-keeper.py pause  <lane-dir> [--config F]   # STOP + PAUSED: the drive-loop ends after its current step
+    lane-keeper.py resume <lane-dir> [--config F]   # only a lane paused this way: remove STOP, restart its drive-loop
 
 Optional config keys:
   "coordinator": {"engine": "codex"} opts into a subscription Codex successor (default "claude").
@@ -1021,7 +1023,7 @@ never a bare `git worktree add` of the whole repo: six full 8 GB recovery checko
 the worktree when its work is integrated. If you must use the main checkout, run `git status` there \
 first, and never run `git reset --hard`, `git checkout -- <path>`, `git restore`, `git stash` or `git clean` in a checkout \
 you did not create: other sessions keep uncommitted work in them.
-Do not watch long jobs from this session and do not arm monitors. Start long jobs detached under \
+{self.priorities_line()}Do not watch long jobs from this session and do not arm monitors. Start long jobs detached under \
 `{SCRIPTS / 'drive-loop.sh'}` in a folder under one of the campaign dirs (use --once for a job that must not rerun on \
 failure, such as a release cycle); use subprocess.Popen with stdin=DEVNULL and start_new_session=True, since nohup alone does not leave the tool process group. The keeper reports how they end and starts a coordinator then.
 Before you end, write {self.state_dir}/keeper-HANDOVER-<YYYYMMDD-HHMM>.md in normally spaced sentences, at most \
@@ -1053,6 +1055,54 @@ retire refuses an over-long or run-together handover, so fix it and retire again
                              cwd=self.repo, stdin=subprocess.DEVNULL, stdout=open(out, 'a'), stderr=subprocess.STDOUT,
                              start_new_session=True, env={**os.environ, 'PATH': PATH})
         (self.k / 'coordinator.pid').write_text(str(p.pid))
+
+    def priorities_line(self):
+        f = self.state_dir / 'OWNER-PRIORITIES.json'
+        return (f'Owner priorities (set by the owner from the dashboard) are in {f}: P0 before P1 before P2 before P3, ahead of '
+                'queue order where they name an item; read it, never edit it.\n') if f.exists() else ''
+
+    def lane_dir(self, path):
+        d = Path(path).resolve()
+        if not any(d.parent == Path(c).resolve() for c in self.cfg.get('campaigns', [])) or not d.is_dir():
+            raise ValueError(f'{d} is not a lane folder of this config')
+        return d
+
+    def pause(self, d):
+        """Pause a repeating driver: STOP ends drive-loop before its next run; PAUSED marks that resume may undo it."""
+        if not (d / 'driver.cmd').exists():
+            raise ValueError('no driver.cmd: nothing to pause')
+        if '--once' in json.loads((d / 'driver.cmd').read_text()).get('args', []):
+            raise ValueError('a --once job cannot be paused; it must not rerun')
+        if (d / 'STOP').exists() and not (d / 'PAUSED').exists():
+            raise ValueError('already stopped (STOP not written by pause)')
+        (d / 'PAUSED').write_text(f'{stamp()} paused by the owner\n')
+        (d / 'STOP').write_text(f'{stamp()} paused by the owner (lane-keeper.py resume undoes it)\n')
+        self.log(f'PAUSE {d.name}')
+        return f'paused {d.name}: its driver stops after the current step'
+
+    def resume_driver(self, d):
+        """Undo pause, under the tick lock so a concurrent tick does not report the stop as a finished job."""
+        if not (d / 'PAUSED').exists():
+            raise ValueError('not paused by lane-keeper.py pause; a STOP from a coordinator stays')
+        lock = open(self.k / 'tick.lock', 'w')
+        for _ in range(40):
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB); break
+            except OSError:
+                time.sleep(0.5)
+        else:
+            raise ValueError('the keeper tick is running; try again in a minute')
+        try:
+            (d / 'STOP').unlink(missing_ok=True)
+            (d / 'PAUSED').unlink(missing_ok=True)
+            self.log(f'RESUME {d.name}')
+            if alive(d / 'driver.pid'):
+                return f'resumed {d.name}: its drive-loop was still running and continues'
+            spec = json.loads((d / 'driver.cmd').read_text())
+            self.run(['bash', str(SCRIPTS / 'drive-loop.sh'), *spec['args']], spec['cwd'], d / 'driver.log')
+            return f'resumed {d.name}: drive-loop restarted'
+        finally:
+            lock.close()
 
     @staticmethod
     def coordinator_cmd(prompt, sid):
@@ -1338,6 +1388,12 @@ def main():
         if not opt('--owner') or not opt('--minutes'):
             sys.exit('lease needs --owner NAME --minutes N (or --release)')
         K.set_lease(opt('--owner'), float(opt('--minutes')), opt('--note', ''))
+    elif mode in ('pause', 'resume'):
+        try:
+            d = K.lane_dir(args[0])
+            print(K.pause(d) if mode == 'pause' else K.resume_driver(d))
+        except (IndexError, ValueError, OSError) as e:
+            sys.exit(f'{mode} refused: {e}')
     elif mode == 'status':
         print(f'keeper heartbeat {now() - mtime(K.k / "heartbeat"):.0f}s ago; coordinator live: {K.coordinator_live()}')
         L = K.lease()

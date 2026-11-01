@@ -278,8 +278,21 @@ available; it takes its paced share and reports.
 - **Enforcement points:** the keeper gates coordinator starts, fresh sessions, resumes, NEXT-COMMAND and driver restarts;
   repeating drive-loops wait while `~/.agents/budget/HOLD-<engine>` exists (`<lane>/engine` = codex | claude | none);
   `--once` jobs never wait. One machine computes and mirrors hold files to the others (`budget.mirror`).
-- **The owner sees it without asking:** keeper/STATUS.md and STATUS.html (every 5 min) and a mailed digest at
+- **The owner sees it without asking:** the dashboard below, keeper/STATUS.md and STATUS.html (every 5 min) and a mailed digest at
   `digest.times`; budget and autonomy events go out with the batched notify mail. All of it costs no tokens.
+- **The owner acts from one page: `scripts/dashboard.py`** (1 Nov 2026), a live local dashboard kept alive by launchd
+  (`scripts/install-dashboard.sh <repo>/.coordinator.json`, run from the limbic main checkout; label
+  `com.<user>.keeper-dashboard`, logs in `<state>/keeper/dashboard.{out,err}`; `--uninstall` removes it). It shows lanes on
+  the Mac and remote hosts (`dashboard.remote`, read over ssh every 5 min with a timeout and cached), READY, today's
+  integrations, keeper health, budget and autonomy, QUEUE.md, schedule, INCIDENTS.md tail and the repo's own panels
+  (`dashboard.feeds`: commands that print `{"panels": […]}`). STATUS.html stays as the fallback and links to it; the digest
+  links to it too. Actions are a whitelist in `dashboard.actions` (builtins: queue-move, owner-priority, lane-pause,
+  lane-resume, autonomy-renew; or a fixed argv); a request passes structured arguments only, needs the per-start token
+  embedded in the page, same Origin and a 127.0.0.1/localhost Host, and is appended to `keeper/dashboard-audit.jsonl`.
+  Owner priorities (P0–P3) go to `<state>/OWNER-PRIORITIES.json`; the coordinator prompt names that file when it exists.
+  Pause is `lane-keeper.py pause <lane>` (STOP + PAUSED: the drive-loop ends after its current step; the runaway check
+  reaps a step still running 10 min later); `resume` only undoes such a pause and restarts the drive-loop under the tick
+  lock. A coordinator's STOP and `--once` jobs are refused.
 
 ## Threads: one orchestrator, or more chats?
 
