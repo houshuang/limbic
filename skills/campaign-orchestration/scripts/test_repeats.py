@@ -74,6 +74,29 @@ class ContractsTest(unittest.TestCase):
         self.assertEqual((lane/'SESSION-EXIT').read_text().strip(),'65')
         self.assertIn('DONE.md',(lane/'DRIVER-FAILED.md').read_text())
 
+    def test_removed_checkout_requires_proven_completed_integration(self):
+        env = {k:v for k,v in os.environ.items() if not k.startswith('GIT_')}
+        def git(*args):
+            return subprocess.check_output(['git','-C',str(self.root),*args],env=env,text=True).strip()
+        git('init','-b','main');git('config','user.name','Fixture');git('config','user.email','f@example.org')
+        git('commit','--allow-empty','-m','base');base=git('rev-parse','HEAD')
+        git('checkout','-b','accepted');git('commit','--allow-empty','-m','result')
+        accepted=git('rev-parse','HEAD');git('checkout','main');git('merge','--ff-only','accepted')
+        released = self.root/'removed-worktree'
+        registry=self.root/'registry';registry.mkdir()
+        row=dict(path=str(released),branch='accepted',shared_root=str(self.root),released=True,
+                 removed_utc='2026-11-01',integrated_commit=accepted)
+        marker=registry/'lane.json';marker.write_text(json.dumps(row))
+        (self.lane/'DONE.md').write_text('complete')
+        (self.lane/'EXPECTS').write_text(json.dumps(dict(files=['DONE.md'],commit=dict(repo=str(released),base=base,branch='accepted'))))
+        with mock.patch.object(deliverables,'LANE_REGISTRY',registry):
+            self.assertEqual(deliverables.missing(self.lane),[])
+            for field,value in [('released',False),('removed_utc',None),('integrated_commit',base),('branch','other')]:
+                marker.write_text(json.dumps({**row,field:value}))
+                self.assertTrue(deliverables.missing(self.lane),field)
+            marker.unlink()
+            self.assertTrue(deliverables.missing(self.lane))
+
     def test_session_handoff_defers_contract_to_live_nested_driver(self):
         child=self.lane/'processing-driver'; child.mkdir()
         command=f'bash drive-loop.sh --once {child} fixture 30 -- true'

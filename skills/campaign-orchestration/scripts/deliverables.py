@@ -13,6 +13,33 @@ import subprocess
 import sys
 from driver_state import driver_dirs, owns_process
 
+LANE_REGISTRY = Path.home() / '.agents/lanes'
+
+
+def commit_repository(repo, branch):
+    """A removed checkout may only resolve through its completed integration.
+
+    A missing worktree is otherwise a refusal, never an invitation to recreate
+    it or to accept a same-named branch in an arbitrary repository.
+    """
+    if repo.is_dir():
+        return repo
+    for path in LANE_REGISTRY.glob('*.json'):
+        row = json.loads(path.read_text())
+        if Path(row.get('path', '')).resolve() != repo.resolve() or row.get('branch') != branch:
+            continue
+        if not (row.get('released') and row.get('removed_utc') and row.get('integrated_commit')):
+            break
+        shared = Path(row['shared_root'])
+        env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+        def ancestor(a, b):
+            return subprocess.run(['git', '-C', str(shared), 'merge-base', '--is-ancestor', a, b],
+                                  env=env, capture_output=True).returncode == 0
+        if shared.is_dir() and ancestor(branch, row['integrated_commit']) and ancestor(row['integrated_commit'], 'HEAD'):
+            return shared
+        break
+    return repo
+
 
 def live_driver(lane):
     for folder in driver_dirs(lane):
@@ -63,11 +90,11 @@ def missing(lane):
         if 'commit' in spec:
             commit = spec['commit']
             repo, base, branch = lane / commit['repo'], commit['base'], commit['branch']
+            repo = commit_repository(repo, branch)
             # An explicit base is required: mere branch existence is not a deliverable.
             def git(*args):
                 return subprocess.run(['git', '-C', str(repo), *args], capture_output=True, text=True,
-                                      env={k: v for k, v in os.environ.items() if k not in
-                                           ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR')})
+                                      env={k: v for k, v in os.environ.items() if not k.startswith('GIT_')})
             ancestor = git('merge-base', '--is-ancestor', base, branch)
             count = git('rev-list', '--count', base + '..' + branch)
             if ancestor.returncode or count.returncode or not int(count.stdout.strip()):
