@@ -108,6 +108,11 @@ class ContractsTest(unittest.TestCase):
         result=subprocess.run([sys.executable,str(SCRIPTS/'deliverables.py'),'run',str(self.lane),'--','true'],capture_output=True,text=True)
         self.assertEqual(result.returncode,0,result.stderr)
         self.assertFalse((self.lane/'DRIVER-FAILED.md').exists())
+        # The outer drive-loop must honor the same actual nested ownership,
+        # without treating its own wrapper as proof of continuation.
+        self.assertEqual(self.drive().returncode, 0)
+        (self.lane/'DONE.md').write_text('premature milestone')
+        self.assertEqual(self.drive().returncode, 65)
 
 
     def test_session_wrapper_forwards_stop_to_its_worker(self):
