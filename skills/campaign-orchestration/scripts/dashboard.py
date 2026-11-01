@@ -428,6 +428,22 @@ class Collector:
             return free - old[-1][1] if old else None
         return {'samples': [s for s in S if now() - s[0] < 24 * 3600], 'd1': at(1), 'd24': at(24)}
 
+    def next_coordinator(self, K, S):
+        """Why no coordinator runs and when the next one starts, so the owner never has to ask."""
+        if S.get('coordinator'):
+            return ''
+        if not S.get('events'):
+            return 'nothing waiting; the keeper starts one when an event or free capacity appears'
+        if S.get('stuck'):
+            return 'stuck on the same events; see COORDINATOR-STUCK.md'
+        if S.get('coordinator_starts', 0) >= S.get('max_starts', 16):
+            return f'daily start cap {S["max_starts"]} reached; raise coordinator.max_starts_per_day'
+        gap = self.cfg.get('coordinator', {}).get('min_gap_minutes', 10) * 60
+        due = K.st['coordinator'].get('last', 0) + gap
+        if due > now():
+            return f'next start {time.strftime("%H:%M", time.localtime(due))} ({len(S["events"])} events waiting, {gap // 60:.0f}-min gap)'
+        return f'{len(S["events"])} events waiting; starts at the next keeper tick (≤2 min) unless the budget refuses'
+
     def git_today(self):
         """Today's integrations, one row per batch (merge + integrate + apply of one lane), each described from its diff."""
         repo = self.cfg['repo']
@@ -569,6 +585,8 @@ class Collector:
             S['max_starts'] = self.cfg.get('coordinator', {}).get('max_starts_per_day', 16)
             S['engine'] = self.cfg.get('coordinator', {}).get('engine', 'claude')
             S['stuck'] = (self.k / 'COORDINATOR-STUCK.md').exists()
+            S['coordinator_next'] = self.next_coordinator(K, S)
+            S['target_lanes'] = self.cfg.get('capacity', {}).get('target_lanes')
         except Exception as e:
             S['errors'].append(f'keeper: {e!r}'[:300])
         S['heartbeat'] = mtime(self.k / 'heartbeat')
@@ -829,7 +847,9 @@ class Page:
         closed = sorted([r for r in allr if r['state'] in ('DONE', 'RETIRED', 'DRIVER') and now() - r['close_t'] < 24 * 3600],
                         key=lambda r: -r['close_t'])
         head = '<tr><th>Lane</th><th>State</th><th>Engine</th><th>Last write</th><th></th></tr>'
-        h = (f'<section><h2>Lanes {pill("running", len(running), "ok")}{pill("ready", len(ready), "warn" if ready else "")}'
+        target = S.get('target_lanes')
+        low = bool(target) and len(running) < target
+        h = (f'<section><h2>Lanes {pill("running", f"{len(running)} of {target}" if target else len(running), "warn" if low else "ok")}{pill("ready", len(ready), "warn" if ready else "")}'
              f'{pill("paused/idle", len(paused))}{pill("closed 24 h", len(closed))}</h2>'
              f'<table>{head}{self.lane_rows(running) or "<tr><td class=mut colspan=5>none running</td></tr>"}</table>')
         if ready:
@@ -887,7 +907,8 @@ class Page:
             ('Keeper', f'<span class="{"ok" if hb < 300 else "bad"}">tick {ago(S.get("heartbeat"))} ago</span>'),
             ('Coordinator', (f'<span class="ok">{E(S.get("coordinator"))}</span>' if S.get('coordinator') else '<span class="mut">none live</span>')
              + f' <span class="mut">{E(S.get("engine", ""))} · starts {S.get("coordinator_starts", 0)}/{S.get("max_starts", "")}</span>'
-             + (' ' + pill('stuck', cls='bad') if S.get('stuck') else '') + (f' <span class="mut">until {E(S["lease"].split(" until ")[-1])}</span>' if S.get('lease') else '')),
+             + (' ' + pill('stuck', cls='bad') if S.get('stuck') else '')
+             + (f'<div class="mut">{E(S["coordinator_next"])}</div>' if S.get('coordinator_next') else '') + (f' <span class="mut">until {E(S["lease"].split(" until ")[-1])}</span>' if S.get('lease') else '')),
             ('Autonomy', ('<span class="ok">no end</span>' if ok and until == float('inf') else
                           f'<span class="{"ok" if until - now() > 3600 else "warn"}">until {time.strftime("%a %H:%M", time.localtime(until))}</span>'
                           if ok else '<span class="bad">' + ('expired' if until else 'not granted') + '</span>')
