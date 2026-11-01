@@ -27,6 +27,8 @@ def lanes(K):
                 state = 'running' + (' (session)' if session else '') + (' (driver)' if driver else '')
             elif close:
                 state = close.replace('.md', '')
+                if state.startswith('READY') and lk.mtime(d / 'HANDLED') >= lk.mtime(d / close):
+                    state = 'handled'
             else:
                 state = 'idle'
             age = (lk.now() - lk.newest_in(d)) / 60

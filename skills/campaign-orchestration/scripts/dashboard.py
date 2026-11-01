@@ -151,6 +151,8 @@ def scan_lane(d, host):
         state = 'paused' if paused else 'stopped'
     elif close:
         state = close.split('.')[0].split('-')[0]
+        if state == 'READY' and handled >= mtime(d / close):
+            state = 'handled'
     elif (d / 'HANDOFF.md').exists():
         state = 'handoff'
     else:
