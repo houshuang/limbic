@@ -212,6 +212,26 @@ watcher processes were running the next morning.
   events show as `alif:<lane>`; `lane-keeper.py ack alif-ts:/srv/agents/skard/campaign-research/<lane> "<note>"` writes
   HANDLED there, and the mirrored event clears once the alif keeper has cleared it. Update alif with `git -C /srv/agents/skard/limbic pull`.
 
+## Repeated completion and status failures (1 Nov 2026)
+
+Five zero-exit workers/drivers stopped before their assigned deliverables; three nested `processing-driver/`
+wrappers were called dead or reaped. Shared enforcement now replaces the private wrappers and root symlinks:
+
+- Optional `<lane>/EXPECTS` (also usable in a drive-loop state folder) is JSON, for example
+  `{"files":["DONE.md"],"jsonl":["intake.jsonl"],"commit":{"repo":"/path/to/worktree","base":"<base-sha>","branch":"sh/lane"}}`.
+  Use only the fields the lane needs. Paths are relative to that state folder (absolute paths also work).
+  `files` must exist; each `jsonl` must contain at least one row and parse completely; `commit` requires a descendant
+  commit on the named branch after the explicit base. These check presence and shape, not semantic acceptance.
+- `drive-loop.sh`, `launch.sh` and `resume.sh` refuse zero-exit completion with exit **65** and `DRIVER-FAILED.md`
+  naming the missing/invalid item. A session handing work to a live driver defers the contract to its completion;
+  the keeper checks it when idle. A failed DONE/READY cannot override the contract or a failure report.
+- The keeper follows root and immediate child folders containing `driver.cmd` or `driver.pid` for liveness,
+  restart, exit/failure, progress and orphan protection. Status/dashboard scans follow them too. No root symlinks.
+  A HANDOFF with no live driver raises `HANDOFF-IDLE`; the existing short-session guard still prevents repeat churn.
+- Invoke `scripts/lane-audit.sh …` directly via its executable shebang. Accidental `bash lane-audit.sh …` re-execs zsh.
+
+Regressions: `scripts/test_repeats.py` (fake zero-exit launch, driver, JSONL, commit, nested wrappers and bash audit).
+
 ## Lane lifecycle: nothing may go quiet
 
 Measured (skard, night of 28–29 Oct 2026): five lanes stopped overnight and the coordinator noticed none

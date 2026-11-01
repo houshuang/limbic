@@ -19,19 +19,22 @@ def lanes(K):
     rows = []
     for C, ds in K.lanes():
         for d in ds:
-            session, driver = lk.alive(d / 'pid'), lk.alive(d / 'driver.pid')
+            drivers = lk.driver_dirs(d)
+            session, driver = lk.alive(d / 'pid'), any(lk.alive(p / 'driver.pid') for p in drivers)
             close = K.closing(d)
             if (d / 'STOP').exists():
                 state = 'stopped'
             elif session or driver:
                 state = 'running' + (' (session)' if session else '') + (' (driver)' if driver else '')
+            elif any(lk.mtime(p / 'DRIVER-FAILED.md') > K.acked(d) for p in drivers):
+                state = 'DRIVER-FAILED'
             elif close:
                 state = close.replace('.md', '')
                 if state.startswith('READY') and lk.mtime(d / 'HANDLED') >= lk.mtime(d / close):
                     state = 'handled'
             else:
                 state = 'idle'
-            age = (lk.now() - lk.newest_in(d)) / 60
+            age = (lk.now() - max(lk.newest_in(p) for p in drivers)) / 60
             if state in ('DONE', 'RETIRED') and age > 24 * 60:
                 continue
             note = K.st['lanes'].get(str(d), {}).get('deferred', '')

@@ -40,15 +40,17 @@ if [ -f "$C/WRAP" ]; then prompt="$(cat "$C/wrap-common.md")
 $prompt"; fi
 printf '%s' "$prompt" > "$C/$lane/PROMPT.txt"
 cd "$REPO"
+runner=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve().with_name("deliverables.py"))' "${BASH_SOURCE[0]}")
+rm -f "$C/$lane/SESSION-EXIT" "$C/$lane/DRIVER-FAILED.md"
 caf=(); command -v caffeinate >/dev/null && caf=(caffeinate -i)
 date +%s > "$C/$lane/session-at"   # Linux has no file birth time: the keeper reads the session start here
 if [[ $engine == Claude ]]; then
   # Subscription, not API billing: the child must not see ANTHROPIC_API_KEY. Effort has no Claude CLI flag and is ignored.
   sid=$(python3 -c 'import uuid; print(uuid.uuid4())')
   echo "session id: $sid" >> "$C/$lane/codex.log"
-  nohup ${caf[@]+"${caf[@]}"} env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u LANE_SESSION_GUARDED claude -p "$(cat "$C/$lane/PROMPT.txt")" --model "$model" --permission-mode bypassPermissions --session-id "$sid" --output-format stream-json --verbose < /dev/null >> "$C/$lane/codex.log" 2>&1 &
+  nohup ${caf[@]+"${caf[@]}"} python3 "$runner" run "$C/$lane" -- env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u LANE_SESSION_GUARDED claude -p "$(cat "$C/$lane/PROMPT.txt")" --model "$model" --permission-mode bypassPermissions --session-id "$sid" --output-format stream-json --verbose < /dev/null >> "$C/$lane/codex.log" 2>&1 &
 else
-nohup ${caf[@]+"${caf[@]}"} env -u OPENAI_API_KEY -u LANE_SESSION_GUARDED codex exec -m "$model" -c model_reasoning_effort="$effort" --dangerously-bypass-approvals-and-sandbox -C "$REPO" "$(cat "$C/$lane/PROMPT.txt")" < /dev/null >> "$C/$lane/codex.log" 2>&1 &
+nohup ${caf[@]+"${caf[@]}"} python3 "$runner" run "$C/$lane" -- env -u OPENAI_API_KEY -u LANE_SESSION_GUARDED codex exec -m "$model" -c model_reasoning_effort="$effort" --dangerously-bypass-approvals-and-sandbox -C "$REPO" "$(cat "$C/$lane/PROMPT.txt")" < /dev/null >> "$C/$lane/codex.log" 2>&1 &
 fi
 echo $! > "$C/$lane/pid"; echo "$model $effort" > "$C/$lane/model"
 echo "launched $lane ($model/$effort)"

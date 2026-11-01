@@ -24,11 +24,13 @@ fi
 n=$( (ls "$C/$lane"/DONE*.md 2>/dev/null || true) | wc -l | tr -d ' ')
 if [ -f "$C/$lane/DONE.md" ]; then mv "$C/$lane/DONE.md" "$C/$lane/DONE.partial-$n.md"; fi
 cd "${REPO:-$PWD}"
+runner=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve().with_name("deliverables.py"))' "${BASH_SOURCE[0]}")
+rm -f "$C/$lane/SESSION-EXIT" "$C/$lane/DRIVER-FAILED.md"
 caf=(); command -v caffeinate >/dev/null && caf=(caffeinate -i)
 date +%s > "$C/$lane/session-at"   # Linux has no file birth time: the keeper reads the session start here
 if [[ -n $claude_lane ]]; then
-  nohup ${caf[@]+"${caf[@]}"} env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u LANE_SESSION_GUARDED claude -p --resume "$sid" "$(cat "$msg")" --permission-mode bypassPermissions --output-format stream-json --verbose < /dev/null >> "$C/$lane/codex.log" 2>&1 &
+  nohup ${caf[@]+"${caf[@]}"} python3 "$runner" run "$C/$lane" -- env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u LANE_SESSION_GUARDED claude -p --resume "$sid" "$(cat "$msg")" --permission-mode bypassPermissions --output-format stream-json --verbose < /dev/null >> "$C/$lane/codex.log" 2>&1 &
 else
-nohup ${caf[@]+"${caf[@]}"} env -u OPENAI_API_KEY -u LANE_SESSION_GUARDED codex exec resume --dangerously-bypass-approvals-and-sandbox "$sid" "$(cat "$msg")" < /dev/null >> "$C/$lane/codex.log" 2>&1 &
+nohup ${caf[@]+"${caf[@]}"} python3 "$runner" run "$C/$lane" -- env -u OPENAI_API_KEY -u LANE_SESSION_GUARDED codex exec resume --dangerously-bypass-approvals-and-sandbox "$sid" "$(cat "$msg")" < /dev/null >> "$C/$lane/codex.log" 2>&1 &
 fi
 echo $! > "$C/$lane/pid"; echo "resumed $lane session $sid"

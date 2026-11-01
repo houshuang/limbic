@@ -83,6 +83,8 @@ Runaway checks (each tick; events are reported once per process, under the keepe
                        coordinator.pid, and every lane's pid / driver.pid tree (except a STOPped lane's driver).
 Linux: systemd timer instead of launchd; CODEX_HOME is honoured; caffeinate is used only where it exists.
 """
+from deliverables import driver_dirs, missing as missing_deliverables
+
 import datetime as dt
 import fcntl, hashlib, json, os, re, shlex, shutil, signal, subprocess, sys, time, uuid
 from pathlib import Path
@@ -124,8 +126,8 @@ detached under drive-loop.sh, write HANDOFF.md (state, queue position, the comma
 session will pick up when the driver finishes. If the work is finished, write READY-<n>.md or DONE.md. If it is
 blocked on something outside the lane, write DONE.md naming the blocker and the file that would release it."""
 
-MSG_DRIVER_FAILED = """Lane keeper (automatic): your driver failed three runs in a row; DRIVER-FAILED.md in the lane folder
-has the log tail. Fix the cause and restart the driver under drive-loop.sh, then continue the queue. If it cannot be
+MSG_DRIVER_FAILED = """Lane keeper (automatic): your driver failed; DRIVER-FAILED.md in the lane folder
+names the failure (exit, contract or log tail). Fix the cause and restart the driver under drive-loop.sh, then continue the queue. If it cannot be
 fixed inside the lane, write DONE.md saying what failed, what you tried, and the log path."""
 
 
@@ -452,7 +454,7 @@ class Keeper:
             return self.event(d, 'FRESH-LIMIT', f'{n} fresh sessions')
         started = float(read_text(d / 'session-at') or birth(d / 'codex.log'))
         lived = mtime(d / 'codex.log') - started
-        made_driver = mtime(d / 'driver.pid') >= started
+        made_driver = any(alive(p / 'driver.pid') or mtime(p / 'driver.pid') >= started for p in driver_dirs(d))
         fresh_at = float((d / 'fresh-at').read_text() or 0) if (d / 'fresh-at').exists() else 0
         if (d / 'codex.log').exists() and lived < 300 and not made_driver and fresh_at and started >= fresh_at:
             return self.event(d, 'SHORT-SESSION', f'last fresh session lived {lived:.0f}s and started no driver')
@@ -516,7 +518,7 @@ class Keeper:
         """NEXT-COMMAND is one approved drive-loop argv, consumed after a detached start."""
         path = d / 'NEXT-COMMAND'
         if not path.exists(): return False
-        if alive(d / 'driver.pid'): return True
+        if any(alive(p / 'driver.pid') for p in driver_dirs(d)): return True
         if (d / 'STOP').exists(): return False
         try:
             lines = path.read_text().strip().splitlines()
@@ -578,8 +580,8 @@ class Keeper:
         self.st.setdefault('release_ready', []).append(digest)
 
     def waiting_heavy(self, d):
-        for name in ('driver.log', 'codex.log'):
-            lines = tail_text(d / name).splitlines()
+        for path in [d / 'codex.log', *(p / 'driver.log' for p in driver_dirs(d))]:
+            lines = tail_text(path).splitlines()
             if lines and re.search(r'heavy\.sh:.*(?:waiting|lock|slots?)', lines[-1]): return True
         # Slot-count waits can be silent. A heavy wrapper sleeping under this
         # lane is queued; a wrapper with the actual job child is running work.
@@ -589,7 +591,8 @@ class Keeper:
             fields = line.split(None, 2)
             if len(fields)==3 and fields[0].isdigit() and fields[1].isdigit():
                 rows.append((int(fields[0]), int(fields[1]), fields[2]))
-        descendants = {int(read_text(d / name)) for name in ('pid', 'driver.pid') if read_text(d / name).isdigit()}
+        tracked = [d / 'pid', *(p / 'driver.pid' for p in driver_dirs(d))]
+        descendants = {int(read_text(p)) for p in tracked if read_text(p).isdigit()}
         while True:
             found = {pid for pid, parent, _ in rows if parent in descendants}
             if found <= descendants: break
@@ -599,10 +602,50 @@ class Keeper:
         return any(parent in wrappers and re.match(r'(?:\S*/)?sleep(?:\s|$)', command)
                    for _, parent, command in rows)
 
+    def tend_driver(self, C, d, driver):
+        L = self.lane(driver)
+        cmd = driver / 'driver.cmd'
+        exit_note = (driver / 'DRIVER-EXIT').read_text().strip() if (driver / 'DRIVER-EXIT').exists() else None
+        if (driver / 'driver.pid').exists() and cmd.exists() and exit_note in (None, 'term') and not (driver / 'DRIVER-FAILED.md').exists():
+            spec = json.loads(cmd.read_text())
+            name = [a for a in spec['args'] if a != '--once'][1]
+            if subprocess.run(['pgrep', '-f', f'sleepsafe.py --name {name} '], capture_output=True).returncode == 0:
+                self.event(d, 'DRIVER-ORPHAN', f'drive-loop is gone but its driver {name} still runs', key=f'{driver}|ORPHAN|{int(mtime(driver / "driver.pid"))}'); return True
+            L['restarts'] = [t for t in L.get('restarts', []) if now() - t < 6 * 3600]
+            if len(L['restarts']) >= 3:
+                self.event(d, 'DRIVER-DYING', 'drive-loop killed three times in six hours', key=f'{driver}|DYING|{int(L["restarts"][0])}'); return True
+            if '--once' not in spec['args'] and not self.may_spend(self.lane_engine(d), d):
+                return True
+            L['restarts'].append(now())
+            self.log(f'DRIVER-RESTART {d.name}: drive-loop was killed ({exit_note or "no exit recorded"})')
+            self.run(['bash', str(SCRIPTS / 'drive-loop.sh'), *spec['args']], spec['cwd'], driver / 'driver.log'); return True
+        failed = driver / 'DRIVER-FAILED.md'
+        if failed.exists() and mtime(failed) > self.acked(d):
+            self.event(d, 'DRIVER-FAILED', read_text(failed)[:1200], key=f'{driver}|DF|{int(mtime(failed))}')
+            if (d / 'pid').exists() and L.get('driver_failed') != int(mtime(failed)):
+                L['driver_failed'] = int(mtime(failed))
+                self.resume(C, d, self.msg('msg-driver-failed.md', MSG_DRIVER_FAILED + '\nFailure report: ' + str(failed)), 'driver failed'); return True
+            return True
+        return False
+
     def tend(self, C, d):
         L = self.lane(d)
-        s_alive, d_alive = alive(d / 'pid'), alive(d / 'driver.pid')
-        quiet = now() - newest_in(d)
+        drivers = driver_dirs(d)
+        s_alive, d_alive = alive(d / 'pid'), any(alive(p / 'driver.pid') for p in drivers)
+        progress = max(newest_in(p) for p in drivers)
+        quiet = now() - progress
+        if not s_alive and not d_alive and not (d / 'STOP').exists():
+            for driver in drivers:
+                if (driver / 'DRIVER-FAILED.md').exists() and self.tend_driver(C, d, driver):
+                    return
+            completed = (read_text(d / 'SESSION-EXIT') == '0' or
+                         any(read_text(p / 'DRIVER-EXIT') == '0' for p in drivers) or self.closing(d))
+            interrupted = any((p / 'driver.cmd').exists() and read_text(p / 'DRIVER-EXIT') in ('', 'term') for p in drivers)
+            if completed and not interrupted:
+                errors = missing_deliverables(d)
+                if errors:
+                    self.event(d, 'DRIVER-FAILED', '; '.join(errors))
+                    return
         # A READY-<n> is a checkpoint for the integrator, not the end of the lane: report it even while work goes on.
         for f in os.listdir(d):
             if f.startswith('READY-') and CLOSING.match(f) and mtime(d / f) > self.acked(d):
@@ -611,16 +654,16 @@ class Keeper:
             if self.waiting_heavy(d):
                 # An ack clears pending events. Do not recreate this healthy
                 # wait on every tick until the lane starts a new driver/session.
-                started = max(mtime(d / 'driver.pid'), mtime(d / 'pid'))
+                started = max(mtime(d / 'pid'), *(mtime(p / 'driver.pid') for p in drivers))
                 if started > self.acked(d):
                     self.event(d, 'HEAVY-WAIT', 'waiting on the heavy lock; lane remains running',
                                key=f'{d}|HEAVY-WAIT|{int(started)}')
                 return
             if quiet > STALL:
                 self.event(d, 'STALLED', f'{"session" if s_alive else "driver"} running, lane folder silent {quiet/3600:.1f} h',
-                           key=f'{d}|STALLED|{int(newest_in(d))}')
+                           key=f'{d}|STALLED|{int(progress)}')
             elif quiet > QUIET:
-                bucket = int(newest_in(d))
+                bucket = int(progress)
                 self.event(d, 'QUIET', f'{"session" if s_alive else "driver"} running, lane folder silent {quiet/60:.0f} min',
                            key=f'{d}|QUIET|{bucket}')
             return
@@ -635,34 +678,17 @@ class Keeper:
         if (d / 'STOP').exists():
             return
         if self.start_next_command(d): return
-        cmd = d / 'driver.cmd'
-        exit_note = (d / 'DRIVER-EXIT').read_text().strip() if (d / 'DRIVER-EXIT').exists() else None
-        if (d / 'driver.pid').exists() and cmd.exists() and exit_note in (None, 'term') and not (d / 'DRIVER-FAILED.md').exists():
-            spec = json.loads(cmd.read_text())
-            name = [a for a in spec['args'] if a != '--once'][1]
-            if subprocess.run(['pgrep', '-f', f'sleepsafe.py --name {name} '], capture_output=True).returncode == 0:
-                return self.event(d, 'DRIVER-ORPHAN', f'drive-loop is gone but its driver {name} still runs', key=f'{d}|ORPHAN|{int(mtime(d / "driver.pid"))}')
-            L['restarts'] = [t for t in L.get('restarts', []) if now() - t < 6 * 3600]
-            if len(L['restarts']) >= 3:
-                return self.event(d, 'DRIVER-DYING', 'drive-loop killed three times in six hours', key=f'{d}|DYING|{int(L["restarts"][0])}')
-            if '--once' not in spec['args'] and not self.may_spend(self.lane_engine(d), d):
-                return
-            L['restarts'].append(now())
-            self.log(f'DRIVER-RESTART {d.name}: drive-loop was killed ({exit_note or "no exit recorded"})')
-            return self.run(['bash', str(SCRIPTS / 'drive-loop.sh'), *spec['args']], spec['cwd'], d / 'driver.log')
-        failed = d / 'DRIVER-FAILED.md'
-        if failed.exists() and mtime(failed) > self.acked(d):
-            if (d / 'pid').exists() and L.get('driver_failed') != int(mtime(failed)):
-                L['driver_failed'] = int(mtime(failed))
-                return self.resume(C, d, self.msg('msg-driver-failed.md', MSG_DRIVER_FAILED), 'driver failed')
-            return self.event(d, 'DRIVER-FAILED', 'three failed runs; see DRIVER-FAILED.md', key=f'{d}|DF|{int(mtime(failed))}')
+        for driver in drivers:
+            if self.tend_driver(C, d, driver): return
         if not (d / 'pid').exists():
-            ex = d / 'DRIVER-EXIT'
-            if ex.exists() and mtime(ex) > self.acked(d):
-                code = ex.read_text().strip()
-                self.event(d, 'JOB-FINISHED' if code == '0' else 'JOB-FAILED', f'drive-loop exit {code}', key=f'{d}|EXIT|{int(mtime(ex))}')
+            for driver in drivers:
+                ex = driver / 'DRIVER-EXIT'
+                if ex.exists() and mtime(ex) > self.acked(d):
+                    code = ex.read_text().strip()
+                    self.event(d, 'JOB-FINISHED' if code == '0' else 'JOB-FAILED', f'{driver.name}: drive-loop exit {code}', key=f'{driver}|EXIT|{int(mtime(ex))}')
             return
         if self.handoff(d):
+            self.event(d, 'HANDOFF-IDLE', 'HANDOFF.md without a live driver; continuation still required')
             return self.launch(C, d, 'handoff, no live driver')
         tail = tail_text(d / 'codex.log')
         if TRANSIENT.search(tail):
@@ -687,7 +713,7 @@ class Keeper:
             C = Path(c)
             if not C.is_dir():
                 continue
-            yield C, [d for d in sorted(C.iterdir()) if d.is_dir() and ((d / 'pid').exists() or (d / 'driver.pid').exists())]
+            yield C, [d for d in sorted(C.iterdir()) if d.is_dir() and ((d / 'pid').exists() or any((p / 'driver.pid').exists() for p in driver_dirs(d)))]
 
     def clear_events(self, remote_pending):
         for key, e in list(self.st['events'].items()):
@@ -1169,7 +1195,7 @@ retire refuses an over-long or run-together handover, so fix it and retire again
         tracked = [self.k / 'coordinator.pid']
         lanes = [(C, d) for C, ds in self.lanes() for d in ds]
         for _, d in lanes:
-            tracked += [d / 'pid', d / 'driver.pid']
+            tracked += [d / 'pid', *(p / 'driver.pid' for p in driver_dirs(d))]
         tracked_pids = [int(t) for t in map(read_text, tracked) if t.isdigit()]
         # Detached release wrappers can legitimately have ppid 1. Protect the
         # holder's ancestors and descendants, including the heavy-slot wrapper.
@@ -1205,8 +1231,8 @@ retire refuses an over-long or run-together handover, so fix it and retire again
             return any(x in table[p]['cmd'] or where.startswith(x) for x in paths)
 
         # STOPPED-BUT-RUNNING
-        for _, d in lanes:
-            stop = d / 'STOP'
+        for root, d in [(d, p) for _, d in lanes for p in driver_dirs(d)]:
+            stop = root / 'STOP'
             if not stop.exists() or now() - mtime(stop) < 600 or not alive(d / 'driver.pid'):
                 continue
             pid = int(read_text(d / 'driver.pid'))
@@ -1252,7 +1278,7 @@ retire refuses an over-long or run-together handover, so fix it and retire again
                        f'{largest_dirs(c.get("disk_watch", []))}', key=f'runaway|{key}', name='machine')
 
     def running_lanes(self):
-        return [d for _, ds in self.lanes() for d in ds if alive(d / 'pid') or alive(d / 'driver.pid')]
+        return [d for _, ds in self.lanes() for d in ds if alive(d / 'pid') or any(alive(p / 'driver.pid') for p in driver_dirs(d))]
 
     def capacity_event(self):
         c = self.cfg.get('capacity') or {}

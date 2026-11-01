@@ -12,6 +12,7 @@
 # from budget.py); <state-dir>/engine names the engine (default codex; «none» for drivers that call no model).
 # --once jobs (release cycles, gates) never wait.
 # sleepsafe.py is $SLEEPSAFE, else ~/.agents/bin/sleepsafe.py, else the one on PATH. Runs under bash 3.2 (macOS) and Linux.
+scripts=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve().parent)' "${BASH_SOURCE[0]}")
 once=0; [[ $1 == --once ]] && { once=1; shift; }
 S=$(cd "$1" && pwd -P); name=$2; limit=$3; shift 3; [[ $1 == -- ]] && shift
 SLEEPSAFE=${SLEEPSAFE:-$HOME/.agents/bin/sleepsafe.py}
@@ -24,6 +25,7 @@ trap 'echo term > $S/DRIVER-EXIT; exit 143' TERM INT HUP
 finish() { echo $1 > $S/DRIVER-EXIT; exit $1; }
 failures=0
 while true; do
+  [[ -e $S/DONE.md && ! -e $S/STOP ]] && { python3 "$scripts/deliverables.py" check "$S" || finish $?; }
   [[ -e $S/STOP || -e $S/DONE.md ]] && { echo "$(date -u +%FT%TZ) drive-loop: stop file"; finish 0; }
   if (( ! once )); then
     engine=$(cat $S/engine 2>/dev/null || echo codex); hold=${AGENTS_BUDGET_DIR:-$HOME/.agents/budget}/HOLD-$engine
@@ -36,6 +38,9 @@ while true; do
   "$SLEEPSAFE" --name $name --limit $limit -- "$@"
   code=$?
   echo "$(date -u +%FT%TZ) drive-loop: exit $code"
+  if (( code == 0 )); then
+    python3 "$scripts/deliverables.py" check "$S" || finish $?
+  fi
   (( code == 0 )) && { echo "$(date -u +%FT%TZ) drive-loop: driver finished"; finish 0; }
   if (( code == 124 || code == 125 )); then failures=0; else failures=$((failures + 1)); fi
   if (( failures >= 3 || (once && failures >= 1) )); then

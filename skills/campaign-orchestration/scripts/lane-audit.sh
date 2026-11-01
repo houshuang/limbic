@@ -9,6 +9,7 @@
 #   UNWATCHED      live lane that no running watch.sh names, while no lane-keeper heartbeat is fresh
 # A lane is closed (skipped) only by an exact DONE.md, READY-<n>.md, DRIVER-FINISHED.json or RETIRED (one line: why),
 # and only while nothing in it runs. DONE.partial*.md and similar never close a lane.
+[ -n "${ZSH_VERSION:-}" ] || exec zsh "$0" "$@"
 setopt null_glob
 repo=$1; shift; dirs=(); loop=0
 while (( $# )); do [[ $1 == --loop ]] && { loop=$2; shift 2; continue; }; dirs+=$1; shift; done

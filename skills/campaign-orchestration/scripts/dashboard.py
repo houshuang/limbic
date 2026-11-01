@@ -121,10 +121,17 @@ def newest_file(d):
     return best
 
 
+def driver_dirs(d):
+    # Keep the remote scan self-contained: dashboard.py is also sent over SSH on stdin.
+    return [d] + sorted(p for p in d.iterdir() if p.is_dir() and not p.is_symlink()
+                        and ((p / 'driver.cmd').is_file() or (p / 'driver.pid').is_file()))
+
+
 def progress_line(d):
     """The last non-empty line of driver.log, else the newest file's name."""
-    for name in ('driver.log', 'processing-driver.log'):
-        lines = [ANSI.sub('', l).strip() for l in tail(d / name).splitlines()]
+    logs = [d / 'processing-driver.log', *(p / 'driver.log' for p in driver_dirs(d))]
+    for path in sorted(logs, key=mtime, reverse=True):
+        lines = [ANSI.sub('', l).strip() for l in tail(path).splitlines()]
         lines = [l for l in lines if l]
         if lines:
             return lines[-1][:200]
@@ -132,7 +139,8 @@ def progress_line(d):
 
 
 def scan_lane(d, host):
-    s_alive, d_alive = alive(d / 'pid'), alive(d / 'driver.pid')
+    drivers = driver_dirs(d)
+    s_alive, d_alive = alive(d / 'pid'), any(alive(p / 'driver.pid') for p in drivers)
     closing = [f for f in os.listdir(d) if CLOSING.match(f)]
     close = max(closing, key=lambda f: mtime(d / f)) if closing else ''
     readies = [f for f in closing if f.startswith('READY-')]
@@ -149,6 +157,8 @@ def scan_lane(d, host):
         state = 'pausing' if stop else 'running'
     elif stop:
         state = 'paused' if paused else 'stopped'
+    elif any(mtime(p / 'DRIVER-FAILED.md') > handled for p in drivers):
+        state = 'DRIVER-FAILED'
     elif close:
         state = close.split('.')[0].split('-')[0]
         if state == 'READY' and handled >= mtime(d / close):
@@ -157,7 +167,7 @@ def scan_lane(d, host):
         state = 'handoff'
     else:
         state = 'idle'
-    last, _ = newest_file(d)
+    last = max(newest_file(p)[0] for p in drivers)
     return {
         'lane': d.name, 'campaign': d.parent.name, 'host': host, 'state': state,
         'session': s_alive, 'driver': d_alive,
@@ -178,7 +188,7 @@ def scan(dirs, host='local'):
         if not C.is_dir():
             continue
         for d in sorted(C.iterdir()):
-            if d.is_dir() and ((d / 'pid').exists() or (d / 'driver.pid').exists()):
+            if d.is_dir() and ((d / 'pid').exists() or any((p / 'driver.pid').exists() for p in driver_dirs(d))):
                 try:
                     rows.append(scan_lane(d, host))
                 except OSError:
