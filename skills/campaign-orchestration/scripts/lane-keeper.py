@@ -847,7 +847,7 @@ class Keeper:
     def coordinator_live(self):
         """Retired IDs never revive; other sessions need a lease, watch, headless PID or recent work."""
         lease = self.lease()
-        if lease:
+        if lease and not self.lease_is_executor(lease):
             return f'lease {lease["owner"]}'
         retired = mtime(self.k / 'retired')
         ids = retired_ids(self.k / 'retired')
@@ -964,6 +964,20 @@ class Keeper:
             return L if float(L['until']) > now() else None
         except (OSError, ValueError, KeyError, TypeError):
             return None
+
+    def lease_is_executor(self, lease):
+        """A lease owned by a lane folder is an integration lock, not a coordinator: coordinators still start
+        (and stay off main) so lanes keep launching while it runs. On 1 Nov 480-min executor leases left
+        events and open queue items unhandled for hours."""
+        owner = str(lease.get('owner', ''))
+        return bool(owner) and any((Path(c) / owner).is_dir() for c in self.cfg.get('campaigns', []))
+
+    def lease_line(self):
+        lease = self.lease()
+        if not lease or not self.lease_is_executor(lease):
+            return ''
+        return (f"Integration is locked by lane {lease['owner']} (keeper/LEASE): do not integrate, commit to main or start "
+                "another integrator. Handle the other events and launch open queue items; leave READY events for the lock owner.\n")
 
     def set_lease(self, owner, minutes, note=''):
         L = {'owner': owner, 'until': now() + minutes * 60, 'note': note, 'set': stamp()}
@@ -1092,7 +1106,7 @@ never a bare `git worktree add` of the whole repo: six full 8 GB recovery checko
 the worktree when its work is integrated. If you must use the main checkout, run `git status` there \
 first, and never run `git reset --hard`, `git checkout -- <path>`, `git restore`, `git stash` or `git clean` in a checkout \
 you did not create: other sessions keep uncommitted work in them.
-{self.priorities_line()}Do not watch long jobs from this session and do not arm monitors. Start long jobs detached under \
+{self.lease_line()}{self.priorities_line()}Do not watch long jobs from this session and do not arm monitors. Start long jobs detached under \
 `{SCRIPTS / 'drive-loop.sh'}` in a folder under one of the campaign dirs (use --once for a job that must not rerun on \
 failure, such as a release cycle); use subprocess.Popen with stdin=DEVNULL and start_new_session=True, since nohup alone does not leave the tool process group. The keeper reports how they end and starts a coordinator then.
 Before you end, write {self.state_dir}/keeper-HANDOVER-<YYYYMMDD-HHMM>.md in normally spaced sentences, at most \

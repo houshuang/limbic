@@ -124,6 +124,18 @@ class RetireTest(unittest.TestCase):
         self.assertIsNone(self.K.coordinator_live())
         (self.K.k / 'LEASE').write_text(json.dumps({'owner': 'old', 'until': self.t - 1}))
         self.assertIsNone(self.K.coordinator_live())
+
+    def test_lane_executor_lease_locks_integration_but_not_coordination(self):
+        camp = Path(self.K.cfg['campaigns'][0]) if self.K.cfg.get('campaigns') else None
+        if camp is None:
+            camp = Path(tempfile.mkdtemp()); self.K.cfg['campaigns'] = [str(camp)]
+        (camp / 'serial-executor').mkdir(parents=True, exist_ok=True)
+        self.K.set_lease('serial-executor', 480, 'queue')
+        self.assertIsNone(self.K.coordinator_live())
+        self.assertIn('locked by lane serial-executor', self.K.lease_line())
+        self.K.set_lease('interactive-night', 60, 'owner session')
+        self.assertEqual(self.K.coordinator_live(), 'lease interactive-night')
+        self.assertEqual(self.K.lease_line(), '')
         (self.K.k / 'LEASE').write_text('not json')
         self.assertIsNone(self.K.coordinator_live())
 
