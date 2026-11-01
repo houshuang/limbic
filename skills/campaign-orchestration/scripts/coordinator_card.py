@@ -28,7 +28,8 @@ def summarize(mark, body):
     if not owner:
         owner = re.search(r'\blane\s+([\w-]*\d[\w-]*)', body)
     waits = re.search(r'\bwaits? (?:on|until|for)\s+(.+?)(?=;|\.(?:\s|$)|$)', body, re.I)
-    return (f'- [{mark}] **{name}** · owner: {owner.group(1).rstrip('.') if owner else "?"}'
+    who = owner.group(1).rstrip('.') if owner else '?'
+    return (f'- [{mark}] **{name}** · owner: {who}'
             + f' · wait: {waits.group(1).strip() if waits else "?"}')
 
 
