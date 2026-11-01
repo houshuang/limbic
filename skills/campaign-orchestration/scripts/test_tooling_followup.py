@@ -159,6 +159,50 @@ class ParkedTest(unittest.TestCase):
         self.K.tend(C,d);self.assertNotIn('PARKED-STALE',[e['kind'] for e in self.K.st['events'].values()])
 
 
+class RetirementTest(unittest.TestCase):
+    setUp=fixtures.RetireTest.setUp
+    lane=fixtures.FrictionTest.lane
+
+    def retired_history(self):
+        C,d=self.lane()
+        marker(d,cwd=self.tmp/'removed')
+        (d/'DRIVER-FAILED.md').write_text('historical failed method')
+        (d/'EXPECTS').write_text('{"files":["never-accepted.json"]}')
+        (d/'HANDOFF.md').write_text('old continuation')
+        for p in d.iterdir():os.utime(p,(self.t-100,self.t-100))
+        (d/'RETIRED').write_text('Reviewed: superseded by integrated successor; evidence retained')
+        return C,d
+
+    def test_retired_removed_cwd_and_failed_contract_do_not_reemit_owner(self):
+        C,d=self.retired_history()
+        with mock.patch.object(self.K,'run') as run:self.K.tend(C,d)
+        self.assertFalse(self.K.st['events']);run.assert_not_called()
+        # Retirement classifies history only; direct launch ownership remains refused.
+        from driver_state import valid
+        self.assertFalse(valid(d))
+        self.assertTrue(deliverables.missing(d))
+
+    def test_unretired_missing_cwd_is_still_actionable(self):
+        C,d=self.retired_history();(d/'RETIRED').unlink()
+        self.K.tend(C,d)
+        self.assertIn('DRIVER-OWNER',[e['kind'] for e in self.K.st['events'].values()])
+
+    def test_newer_unfinished_execution_cannot_hide_behind_old_retirement(self):
+        C,d=self.retired_history()
+        os.utime(d/'driver.cmd',(self.t+10,self.t+10))
+        self.K.tend(C,d)
+        self.assertIn('DRIVER-OWNER',[e['kind'] for e in self.K.st['events'].values()])
+
+    def test_independently_owned_live_child_is_not_hidden_or_restarted(self):
+        C,d=self.retired_history();child=d/'processing-driver';child.mkdir()
+        marker(child,cwd=self.tmp,pid=os.getpid())
+        with mock.patch.object(lk,'owns_process',return_value=True), mock.patch.object(self.K,'waiting_heavy',return_value=False), mock.patch.object(self.K,'run') as run:
+            self.K.tend(C,d)
+        self.assertFalse(self.K.st['events']);run.assert_not_called()
+        self.K.cfg['campaigns']=[str(C)]
+        with mock.patch.object(lk,'owns_process',return_value=True):self.assertEqual(self.K.running_lanes(),[d])
+
+
 class ParkedLaunchTest(unittest.TestCase):
     def test_stale_registry_refused_before_mutating_handoff_or_spawning(self):
         with tempfile.TemporaryDirectory() as temp:

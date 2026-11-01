@@ -225,6 +225,7 @@ wrappers were called dead or reaped. Shared enforcement now replaces the private
   After sanctioned worktree removal, a commit contract resolves only through a matching released lane registry
   with `removed_utc` and an `integrated_commit` containing the branch and already on the shared repository's HEAD.
   Missing/unreleased/unintegrated paths still refuse; never recreate a checkout to satisfy a completion check.
+  Released-owner lookup isolates unrelated malformed/legacy registry files; exactly one matching registry and both ancestry checks remain mandatory. Diagnostics distinguish the checked EXPECTS path from a registry/ancestry failure.
 - `drive-loop.sh`, `launch.sh` and `resume.sh` refuse zero-exit completion with exit **65** and `DRIVER-FAILED.md`
   naming the missing/invalid item. A session handing work to a live driver defers the contract to its completion;
   the keeper checks it when idle. A failed DONE/READY cannot override the contract or a failure report.
@@ -235,6 +236,7 @@ wrappers were called dead or reaped. Shared enforcement now replaces the private
 - Invoke `scripts/lane-audit.sh …` directly via its executable shebang. Accidental `bash lane-audit.sh …` re-execs zsh.
 
 - STOPped lanes and idle handoffs older than 24 hours without RETIRED raise actionable `PARKED-STALE`, at most once per 24 hours across acknowledgments/reloads. Old idle handoffs require a coordinator decision. Launch/resume checks any existing `~/.agents/lanes/<lane>.json` against a present Git root and matching branch before changing handoff/session files or spawning. Missing/released paths refuse; do not recreate old parked work or duplicate its replacement lane.
+  An explicit RETIRED newer than execution and handoff markers closes idle historical failures even when their cwd has been removed. It never accepts their data or permits launch; newer ownership markers or a live child keep work actionable.
 
 Regressions: `scripts/test_tooling_followup.py`, `scripts/test_repeats.py` (fake zero-exit launch, driver, JSONL, commit, nested wrappers and bash audit).
 

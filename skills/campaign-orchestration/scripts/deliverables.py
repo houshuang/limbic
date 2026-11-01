@@ -24,12 +24,30 @@ def commit_repository(repo, branch):
     """
     if repo.is_dir():
         return repo
-    for path in LANE_REGISTRY.glob('*.json'):
-        row = json.loads(path.read_text())
-        if Path(row.get('path', '')).resolve() != repo.resolve() or row.get('branch') != branch:
-            continue
+    diagnostics = []
+    matches = []
+    for path in sorted(LANE_REGISTRY.glob('*.json')):
+        try:
+            row = json.loads(path.read_text())
+            if not isinstance(row, dict):
+                raise ValueError('expected a lane registry object')
+            if not isinstance(row.get('path'), str) or not row['path']:
+                raise ValueError('missing lane path')
+            if Path(row['path']).resolve() != repo.resolve() or row.get('branch') != branch:
+                continue
+            matches.append((path, row))
+        except (OSError, ValueError, TypeError) as error:
+            # Unrelated historical/partial registries cannot invalidate this
+            # contract. They cannot prove its release either.
+            diagnostics.append(str(path) + ': ' + str(error))
+    if len(matches) != 1:
+        detail = '; registry diagnostics: ' + '; '.join(diagnostics) if diagnostics else ''
+        raise ValueError(f'released repository {repo}: expected one matching registry for {branch}, found {len(matches)}' + detail)
+    for path, row in matches:
         if not (row.get('released') and row.get('removed_utc') and row.get('integrated_commit')):
-            break
+            raise ValueError(f'released repository {repo}: incomplete release in {path}')
+        if not isinstance(row.get('shared_root'), str):
+            raise ValueError(f'released repository {repo}: missing shared_root in {path}')
         shared = Path(row['shared_root'])
         env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
         def ancestor(a, b):
@@ -37,8 +55,7 @@ def commit_repository(repo, branch):
                                   env=env, capture_output=True).returncode == 0
         if shared.is_dir() and ancestor(branch, row['integrated_commit']) and ancestor(row['integrated_commit'], 'HEAD'):
             return shared
-        break
-    return repo
+        raise ValueError(f'released repository {repo}: unproved branch/integration ancestry in {path} through {shared}')
 
 
 def live_driver(lane, *, children_only=False):
@@ -67,6 +84,9 @@ def missing(lane):
         return []
     try:
         spec = json.loads(contract.read_text())
+    except (OSError, ValueError) as error:
+        return ['invalid EXPECTS at ' + str(contract.absolute()) + ': ' + str(error)]
+    try:
         if not isinstance(spec, dict) or set(spec) - {'files', 'jsonl', 'commit'} or not spec:
             raise ValueError('expected files, jsonl or commit')
         errors = []
@@ -103,7 +123,7 @@ def missing(lane):
                 errors.append('missing commit: ' + branch + ' since ' + base + ' in ' + str(repo))
         return errors
     except (OSError, ValueError, TypeError, KeyError) as error:
-        return ['invalid EXPECTS: ' + str(error)]
+        return ['contract evaluation failed at ' + str(contract.absolute()) + ': ' + str(error)]
 
 
 def check(lane, *, allow_continuation=False):

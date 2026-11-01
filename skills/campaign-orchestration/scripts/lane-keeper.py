@@ -662,6 +662,17 @@ class Keeper:
         L = self.lane(d)
         drivers = driver_dirs(d)
         s_alive, d_alive = alive(d / 'pid'), any(alive(p / 'driver.pid') for p in drivers)
+        # Retirement is an explicit disposition of this execution, including
+        # failed historical contracts and a subsequently removed cwd. Never
+        # reinterpret it as acceptance, or let an old retirement hide new work.
+        retired = mtime(d / 'RETIRED')
+        activity = [d / 'pid', d / 'session-at', d / 'NEXT-COMMAND', *d.glob('HANDOFF*.md')]
+        children = [p for p in d.iterdir() if p.is_dir() and not p.is_symlink()
+                    and ((p / 'driver.cmd').exists() or (p / 'driver.pid').exists())]
+        for folder in [d, *children]:
+            activity.extend(folder / name for name in ('driver.cmd', 'driver.pid', 'DRIVER-EXIT', 'DRIVER-FAILED.md'))
+        if retired and read_text(d / 'RETIRED') and not s_alive and not d_alive and all(mtime(p) <= retired for p in activity):
+            return
         progress = max(newest_in(p) for p in drivers)
         quiet = now() - progress
         if self.parked_stale(d, s_alive or d_alive):
