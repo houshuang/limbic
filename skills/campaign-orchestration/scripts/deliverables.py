@@ -83,9 +83,17 @@ def missing(lane):
     if not contract.exists():
         return []
     try:
-        spec = json.loads(contract.read_text())
-    except (OSError, ValueError) as error:
+        text = contract.read_text()
+    except OSError as error:
         return ['invalid EXPECTS at ' + str(contract.absolute()) + ': ' + str(error)]
+    try:
+        spec = json.loads(text)
+    except ValueError as error:
+        # Coordinators write a bare list of required files; read it as {"files": [...]}.
+        names = [line.strip() for line in text.splitlines() if line.strip()]
+        if not names or any(' ' in n or n.startswith(('{', '[')) or '..' in n.split('/') for n in names):
+            return ['invalid EXPECTS at ' + str(contract.absolute()) + ': ' + str(error)]
+        spec = {'files': names}
     try:
         if not isinstance(spec, dict) or set(spec) - {'files', 'jsonl', 'commit'} or not spec:
             raise ValueError('expected files, jsonl or commit')

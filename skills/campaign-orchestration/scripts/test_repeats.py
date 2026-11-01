@@ -26,6 +26,16 @@ class ContractsTest(unittest.TestCase):
         return subprocess.run(['bash', str(SCRIPTS/'drive-loop.sh'), '--once', str(self.lane), 'fixture', '30', '--', 'true'],
                               env={**os.environ, 'SLEEPSAFE': str(self.safe)}, capture_output=True, text=True)
 
+    def test_plain_file_list_expects_is_read_as_files(self):
+        # The exact EXPECTS a coordinator wrote on 1 Nov 23:00 (contents-driver-throughput-20261101-2308).
+        (self.lane/'EXPECTS').write_text('RESULTS.json\nDONE.md\n')
+        self.assertEqual(deliverables.missing(self.lane), ['missing file: RESULTS.json', 'missing file: DONE.md'])
+        (self.lane/'RESULTS.json').write_text('{}'); (self.lane/'DONE.md').write_text('done')
+        self.assertEqual(deliverables.missing(self.lane), [])
+        for bad in ('', '{not json', 'DONE.md and more', '../escape.md'):
+            (self.lane/'EXPECTS').write_text(bad)
+            self.assertIn('invalid EXPECTS', str(deliverables.missing(self.lane)), bad)
+
     def test_zero_exit_missing_deliverable_is_failure_65(self):
         (self.lane/'EXPECTS').write_text('{"files":["DONE.md"]}')
         result = self.drive()
