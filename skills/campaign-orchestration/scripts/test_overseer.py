@@ -43,6 +43,40 @@ class OverseerTest(unittest.TestCase):
         with mock.patch.object(overseer.subprocess, 'run', return_value=mock.Mock(stdout=out)):
             self.assertEqual(overseer.budget_ok(), (True, 'claude: OK: claude 0% used of a 11% line'))
 
+    def review_cfg(self):
+        req, rev = self.d / 'REVIEW-REQUEST.md', self.d / 'REVIEW.md'
+        cfg = json.loads(self.cfg.read_text())
+        cfg['overseer']['reviews'] = [{'request': str(req), 'review': str(rev)}]
+        self.cfg.write_text(json.dumps(cfg))
+        return req, rev
+
+    def test_review_runs_when_request_is_newer_and_not_when_answered(self):
+        req, rev = self.review_cfg()
+        rev.write_text('old'); req.write_text('please'); os.utime(rev, (1, 1))
+        calls = []
+        def fake(cmd, **kw):
+            calls.append(cmd); rev.write_text('## Verdict\nAPPROVE'); return mock.Mock(returncode=0)
+        with mock.patch.object(overseer, 'budget_ok', return_value=(True, 'claude: OK')), \
+             mock.patch.object(overseer.subprocess, 'run', side_effect=fake):
+            overseer.review(self.cfg)
+            overseer.review(self.cfg)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][calls[0].index('--model') + 1], 'fable')
+        self.assertIn(str(req), calls[0][2])
+
+    def test_failed_review_is_reported_and_not_retried_at_once(self):
+        req, rev = self.review_cfg()
+        req.write_text('please')
+        with mock.patch.object(overseer, 'budget_ok', return_value=(True, 'claude: OK')), \
+             mock.patch.object(overseer.subprocess, 'run', return_value=mock.Mock(returncode=1)) as run:
+            overseer.review(self.cfg)
+            overseer.review(self.cfg)
+            self.assertEqual(run.call_count, 1)
+        self.assertIn('failed (1, attempt 1 of 3)', (self.d / 'R.md').read_text())
+        seen = json.loads((self.d / 'st' / 'reviews.json').read_text())
+        seen[str(req)]['t'] -= 1801
+        self.assertTrue(overseer.review_due({'request': str(req), 'review': str(rev)}, seen, __import__('time').time()))
+
 
 if __name__ == '__main__':
     unittest.main()
