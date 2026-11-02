@@ -91,6 +91,7 @@ import fcntl, hashlib, json, os, re, shlex, shutil, signal, subprocess, sys, tim
 from pathlib import Path
 from session_guard import require_lane_workspace, last_session_id, local_codex_session, tail_text
 import budget
+from launch_environment import environment as launch_environment
 from coordinator_card import make_card
 
 DEFAULT_CONFIG = Path.home() / 'src/skard/.coordinator.json'
@@ -479,6 +480,12 @@ class Keeper:
         model = (d / 'model').read_text().split() if (d / 'model').exists() else []
         if not self.may_spend(self.lane_engine(d), d, new=True):
             return
+        # The shell checks again under the session lock; this first check must
+        # precede the keeper's fresh-launch accounting as well.
+        try:
+            launch_environment(d, 'claude' if Keeper.claude_lane(d) else 'codex', path=PATH)
+        except (OSError, ValueError) as error:
+            return self.event(d, 'LAUNCH-REFUSED', str(error))
         if not self.dry:
             (d / 'fresh').write_text(str(n + 1)); (d / 'fresh-at').write_text(str(int(now())))
         self.log(f'FRESH {d.name} ({why})')

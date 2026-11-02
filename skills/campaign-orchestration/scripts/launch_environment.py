@@ -7,20 +7,20 @@ import socket
 import sys
 
 
-def environment(lane, engine=None):
+def environment(lane, engine=None, *, path=None):
     exports = {}
     # Both the keeper service and manual ssh launches must use alif's login.
     if socket.gethostname().split('.')[0].startswith('alif') or str(Path(lane).absolute()).startswith(('/srv/agents/skard/', '/srv/media/agents/skard/')):
         exports['CODEX_HOME'] = '/opt/alif/.codex'
     if engine:
-        executable = shutil.which(engine)
+        executable = shutil.which(engine, path=path)
         if not executable:
             raise ValueError(engine + ' is not executable on PATH; no launch state consumed')
         # Codex's npm entry point uses /usr/bin/env node. An absolute CLI path
         # alone does not repair a non-login shell's missing Node PATH.
         with open(executable, 'rb') as stream:
             header = stream.readline(256)
-        if b'/usr/bin/env node' in header and not shutil.which('node'):
+        if b'/usr/bin/env node' in header and not shutil.which('node', path=path):
             raise ValueError('node is not executable on PATH for ' + executable)
         exports['LANE_EXECUTABLE'] = str(Path(executable).absolute())
     return exports

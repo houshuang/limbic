@@ -84,7 +84,7 @@ def render(lane, argv, code, log=None, reason='', since=None):
         text += '\nRecorded driver.pid: ' + (lane / 'driver.pid').read_text().strip() + '\n'
     except OSError:
         pass
-    if auth or code == 77:
+    if auth or 'Provider status: AUTHENTICATION-FAILED' in reason:
         text += '\nProvider status: AUTHENTICATION-FAILED; process liveness/exit zero does not prove extraction.\n'
     if reason:
         text += '\n' + reason + '\n'

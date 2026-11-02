@@ -146,6 +146,39 @@ class FailureReporting(unittest.TestCase):
         self.assertEqual(r.returncode, 77)
         self.assertIn('AUTHENTICATION-FAILED', (lane / 'DRIVER-FAILED.md').read_text())
 
+    def test_native_77_is_reported_without_inventing_authentication_failure(self):
+        lane = self.root / 'native77'; lane.mkdir()
+        r = self.call(sys.executable, str(S / 'deliverables.py'), 'run', str(lane), '--',
+                      '/bin/sh', '-c', 'echo native permission failure; exit 77')
+        self.assertEqual(r.returncode, 77)
+        report = (lane / 'DRIVER-FAILED.md').read_text()
+        self.assertIn('Process exit code: 77', report)
+        self.assertNotIn('AUTHENTICATION-FAILED', report)
+
+    def test_real_keeper_refuses_missing_cli_before_fresh_accounting(self):
+        import test_lane_keeper
+        keeper_module = test_lane_keeper.lk
+        lane = self.capture('final-validation')
+        row = json.loads((lane / 'driver.cmd').read_text())
+        row['cwd'] = str(lane); row['args'][1] = str(lane)
+        (lane / 'driver.cmd').write_text(json.dumps(row))
+        cfg = self.root / 'config.json'
+        cfg.write_text(json.dumps(dict(repo=str(self.root), state=str(self.root / 'keeper-state'),
+                                       budget=dict(enabled=False))))
+        keeper = keeper_module.Keeper(cfg)
+        old_path = keeper_module.PATH
+        try:
+            keeper_module.PATH = self.restricted_env(lane)['PATH']
+            keeper.launch(lane.parent, lane, 'captured failed-launch regression')
+        finally:
+            keeper_module.PATH = old_path
+        self.assertFalse((lane / 'fresh').exists())
+        self.assertFalse((lane / 'fresh-at').exists())
+        self.assertFalse((lane / 'session-at').exists())
+        self.assertIn('codex is not executable on PATH', (keeper.k / 'EVENTS').read_text())
+        self.assertEqual([e['kind'] for e in keeper.st['events'].values()], ['LAUNCH-REFUSED'])
+        self.assertFalse((lane.parent / 'autoresume.log').exists())
+
     def test_normal_incident_discussion_is_not_auth_failure(self):
         lane = self.root / 'lane'; lane.mkdir()
         r = self.call(sys.executable, str(S / 'deliverables.py'), 'run', str(lane), '--',
