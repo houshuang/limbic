@@ -15,6 +15,8 @@
 scripts=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve().parent)' "${BASH_SOURCE[0]}")
 once=0; [[ $1 == --once ]] && { once=1; shift; }
 S=$(cd "$1" && pwd -P) || exit 2; name=$2; limit=$3; shift 3; [[ $1 == -- ]] && shift
+prepared=$(python3 "$scripts/launch_environment.py" "$S") || exit $?
+eval "$prepared"
 SLEEPSAFE=${SLEEPSAFE:-$HOME/.agents/bin/sleepsafe.py}
 [ -x "$SLEEPSAFE" ] || SLEEPSAFE=$(command -v sleepsafe.py) || { echo "drive-loop: no sleepsafe.py (set SLEEPSAFE)"; exit 2; }
 if ! python3 "$scripts/driver_state.py" "$S" --verify-claim 2>/dev/null; then
@@ -25,8 +27,8 @@ python3 "$scripts/driver_state.py" "$S" || exit $?
 owner() { [[ $(cat "$S/driver.pid" 2>/dev/null) == $$ ]]; }
 echo $$ > "$S/driver.pid"
 python3 -c 'import json, os, sys; print(json.dumps({"cwd": os.getcwd(), "args": sys.argv[1:]}))' \
-  $([[ $once == 1 ]] && echo --once) $S $name $limit -- "$@" > $S/driver.cmd
-rm -f $S/DRIVER-FAILED.md $S/DRIVER-EXIT
+  $([[ $once == 1 ]] && echo --once) "$S" "$name" "$limit" -- "$@" > "$S/driver.cmd"
+python3 "$scripts/deliverables.py" archive "$S"
 trap 'owner && echo term > "$S/DRIVER-EXIT"; exit 143' TERM INT HUP
 finish() { owner && echo "$1" > "$S/DRIVER-EXIT"; exit "$1"; }
 failures=0
@@ -35,14 +37,14 @@ while true; do
   [[ -e $S/DONE.md && ! -e $S/STOP ]] && { python3 "$scripts/deliverables.py" check "$S" || finish $?; }
   [[ -e $S/STOP || -e $S/DONE.md ]] && { echo "$(date -u +%FT%TZ) drive-loop: stop file"; finish 0; }
   if (( ! once )); then
-    engine=$(cat $S/engine 2>/dev/null || echo codex); hold=${AGENTS_BUDGET_DIR:-$HOME/.agents/budget}/HOLD-$engine
+    engine=$(cat "$S/engine" 2>/dev/null || echo codex); hold=${AGENTS_BUDGET_DIR:-$HOME/.agents/budget}/HOLD-$engine
     if [[ $engine != none && -e $hold ]]; then
       echo "$(date -u +%FT%TZ) drive-loop: budget hold ($(cat $hold 2>/dev/null)); waiting"
       while [[ -e $hold && ! -e $S/STOP && ! -e $S/DONE.md ]]; do sleep ${BUDGET_POLL:-300}; done
       continue
     fi
   fi
-  "$SLEEPSAFE" --name $name --limit $limit -- "$@"
+  python3 "$scripts/failure_report.py" attempt "$S" -- "$SLEEPSAFE" --name "$name" --limit "$limit" -- "$@"
   code=$?
   echo "$(date -u +%FT%TZ) drive-loop: exit $code"
   if (( code == 0 )); then
@@ -51,9 +53,9 @@ while true; do
   fi
   (( code == 0 )) && { echo "$(date -u +%FT%TZ) drive-loop: driver finished"; finish 0; }
   if (( code == 124 || code == 125 )); then failures=0; else failures=$((failures + 1)); fi
-  if (( failures >= 3 || (once && failures >= 1) )); then
+  if (( code == 77 || failures >= 3 || (once && failures >= 1) )); then
     owner || exit 65
-    { echo "# $name: $failures failed run(s) in a row ($(date -u +%FT%TZ))"; echo; echo '```'; tail -40 $S/driver.log 2>/dev/null; echo '```'; } > $S/DRIVER-FAILED.md
+    python3 "$scripts/failure_report.py" promote "$S" || finish $?
     finish $code
   fi
   sleep 5

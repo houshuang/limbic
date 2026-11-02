@@ -120,7 +120,6 @@ def main():
         except (FileNotFoundError,ValueError): recent=False
         if recent:
             print(f'refused: lane {lane.name} launched in the last 120 s');return 3
-        (lane/'session-at').write_text(str(int(time.time()))+'\n')
         return subprocess.run(command,env={**os.environ,'LANE_SESSION_GUARDED':str(lane)}).returncode
 
 

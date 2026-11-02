@@ -1,0 +1,21 @@
+{
+  "final-validation": {
+    "source": "/Users/stian/src/skard-state/campaign-20261023/contents-shared-admission-20261101-2320/final-validation",
+    "sha256": {
+      "driver.pid": "c45700254245ae63a9f5c4ece80e00e8efe01daccea80ad6eaa0148f9d59bb8f",
+      "driver.cmd": "b12c3b287df2e690f8f56e9ef9511155139ac7c187ab0d0f7c088153e0b8a987",
+      "DRIVER-FAILED.md": "57805841ce80be57d0dffd8abef5ff7781e0f0ddd9b84c097d4f6a76662d4683",
+      "launch.log": "c1b3a10656ccda3ab2eba115882cb5d986bdb3835e42c65ff178fae1f0f3b57f",
+      "check-0.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "check-1.log": "325b8bfaa144b4053d119ff87a05dfc2acb379a4f825c0f974e936316852a5a3",
+      "check-2.log": "1f18ef06bf8520018647503dc7a1fe2fb61fa52ee9735281f434a3795812816e",
+      "RESULTS.json": "2e525ed85b2bc7dd154b43c9f1b64bd5e2576db8c1ab7ef56298dd3ed23a4bec",
+      "run.py": "1ad4dbff854b66a4a8f14386363975cc2eea133f193ddee9d18f425cfc92c25e"
+    }
+  },
+  "alif-auth": {
+    "source": "/srv/agents/skard/campaign-research/contents-everywhere-20261101",
+    "driver.log.sha256": "4cd0fd0191cd3af845852a88f6584436fb8ca7433b577d7dced3f9caac77ac14",
+    "selection": "first four timestamped 2026-11-01T22 auth error lines"
+  }
+}

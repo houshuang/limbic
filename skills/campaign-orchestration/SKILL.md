@@ -84,6 +84,17 @@ Read this before launching worker lanes, and add to it after every incident
   capped. The keeper runs the campaign's own copy of costguard.py, so refresh that copy to get the skip row.
 - A cost-capped lane can write `NEXT-COMMAND`: one command line, `bash <installed scripts>/drive-loop.sh [--once] <lane-state-dir> <job> <limit> -- <driver argv>`. This is an already authorised continuation. The keeper starts it detached instead of a handoff session and consumes the file after launch; use `--once` for release cycles. A handoff may prepare this command even when told to stop new work.
 - Optional `.coordinator.json` `release_scope` names a `RELEASE-SCOPE` file (relative to the repo, or absolute): one commit or path to a lane READY file per line, with `#` comments. READY files resolve relative to the scope file; labelled `HEAD` or `commit` IDs identify deliverables (bases and measurements are ignored). When all are on main and no release cycle is alive, the keeper emits `RELEASE-READY` once per scope hash.
+- Launch and resume resolve the requested CLI (and Node for npm Codex) before consuming handoffs,
+  DONE, failure markers or the session cooldown. Refusals name the missing executable. Alif hostnames
+  and `/srv/{media/,}agents/skard/` state paths use `CODEX_HOME=/opt/alif/.codex`, including manual drive-loops.
+- Driver failures include exact argv, status and the last 20 lines from a unique attempt capture.
+  Failed `RESULTS.json` checks add their exact `command`, `returncode` and lane-local `log`; legacy
+  `launch.log`/check logs are labelled fallbacks. Old failure/exit markers move to `failure-history/`.
+  An authentication error in actual CLI/provider output returns 77 even if the driver exits zero;
+  this is a reporting boundary, not a claim that a live process extracted books. Recovered runs and
+  private extraction outcomes still need their own admission checks. No credentials are changed.
+  Read-only historical diagnosis: `python3 scripts/failure_report.py inspect <lane-state-dir> <exit-code>`
+  (use the campaign scripts directory, not a project `scripts/` folder). It never executes recorded argv.
 - `resume.sh <campaign-dir> <lane> <message-file>` resumes the lane's **own**
   session (`codex exec resume <session-id> "<msg>"` or `claude -p --resume <session-id> "<msg>"`), so the worker keeps its
   context. Use it to deliver rule changes too: a running session read the

@@ -1,0 +1,45 @@
+{
+  "revision": "0be21515639c46aba67fc93dd069349ad3ece1cf",
+  "status": "FAIL",
+  "checks": [
+    {
+      "command": [
+        "/usr/bin/python3",
+        "-m",
+        "py_compile",
+        "scripts/contents_audit.py",
+        "tests/test_contents_audit.py",
+        "tests/test_contents_audit_frozen.py"
+      ],
+      "returncode": 0,
+      "log": "/Users/stian/src/skard-state/campaign-20261023/contents-shared-admission-20261101-2320/final-validation/check-0.log"
+    },
+    {
+      "command": [
+        "/usr/bin/python3",
+        "-m",
+        "unittest",
+        "tests.test_contents_audit",
+        "tests.test_contents_audit_frozen",
+        "-q"
+      ],
+      "returncode": 0,
+      "log": "/Users/stian/src/skard-state/campaign-20261023/contents-shared-admission-20261101-2320/final-validation/check-1.log"
+    },
+    {
+      "command": [
+        "bash",
+        "scripts/heavy.sh",
+        "python3",
+        "scripts/preflight.py",
+        "--base",
+        "0871a15b63bdcfdf2f1856befa22148f8f2cffe6",
+        "--rev",
+        "0be21515639c46aba67fc93dd069349ad3ece1cf",
+        "--json"
+      ],
+      "returncode": 1,
+      "log": "/Users/stian/src/skard-state/campaign-20261023/contents-shared-admission-20261101-2320/final-validation/check-2.log"
+    }
+  ]
+}

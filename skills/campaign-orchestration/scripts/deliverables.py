@@ -7,11 +7,11 @@ Used by drive-loop and detached launch/resume, without changing lanes that have 
 import os
 import time
 import json
-import signal
 from pathlib import Path
 import subprocess
 import sys
 from driver_state import driver_dirs, owns_process
+from failure_report import archive, write, run
 
 LANE_REGISTRY = Path.home() / '.agents/lanes'
 
@@ -141,7 +141,7 @@ def check(lane, *, allow_continuation=False):
         return 0
     if errors:
         message = '# Deliverable contract failed\n\n' + '\n'.join('- ' + e for e in errors) + '\n'
-        (Path(lane) / 'DRIVER-FAILED.md').write_text(message)
+        write(lane, [sys.executable, str(Path(__file__).resolve()), 'check', str(lane)], 65, reason=message)
         print(message, file=sys.stderr)
         return 65
     return 0
@@ -151,17 +151,10 @@ def main():
     mode, lane = sys.argv[1:3]
     if mode == 'check':
         return check(lane, allow_continuation='--allow-continuation' in sys.argv[3:])
-    process = subprocess.Popen(sys.argv[4:])
-    def forward(signum, frame):
-        try:
-            process.send_signal(signum)
-        except ProcessLookupError:
-            pass
-    for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
-        signal.signal(signum, forward)
-    code = process.wait()
-    if code < 0:
-        code = 128 - code
+    if mode == 'archive':
+        archive(lane, ('DRIVER-FAILED.md', 'DRIVER-EXIT', 'SESSION-EXIT'))
+        return 0
+    code = run(lane, sys.argv[4:], inherited=mode == 'session')
     if code == 0 and not live_driver(lane, children_only=True):
         code = check(lane)
     (Path(lane) / 'SESSION-EXIT').write_text(str(code) + '\n')

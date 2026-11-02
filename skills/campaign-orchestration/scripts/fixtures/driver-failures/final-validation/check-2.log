@@ -1,0 +1,561 @@
+{
+  "base": "0871a15b6",
+  "rev": "0be215156",
+  "changed_paths": 4,
+  "evidence": {
+    "data": "revision graph checks",
+    "candidate_graph_sha256": null,
+    "render": "renderer against configured artifact; does not prove candidate data",
+    "field_loss": "comparison with promoted artifact preimages"
+  },
+  "lost": {
+    "errors": [
+      "reader-0782ca6661: lost toc_read.agreed (data/textbooks/toc/reader-0782ca6661.json); declare id + field in EXPECTED-CHANGES",
+      "reader-0782ca6661: lost toc_read.confirmed (data/textbooks/toc/reader-0782ca6661.json); declare id + field in EXPECTED-CHANGES",
+      "reader-0782ca6661: lost toc_read.disputes (data/textbooks/toc/reader-0782ca6661.json); declare id + field in EXPECTED-CHANGES",
+      "reader-0782ca6661: lost toc_read.dropped (data/textbooks/toc/reader-0782ca6661.json); declare id + field in EXPECTED-CHANGES",
+      "reader-0782ca6661: lost toc_read.entries_after (data/textbooks/toc/reader-0782ca6661.json); declare id + field in EXPECTED-CHANGES",
+      "reader-0782ca6661: lost toc_read.entries_before (data/textbooks/toc/reader-0782ca6661.json); declare id + field in EXPECTED-CHANGES",
+      "reader-0782ca6661: lost toc_read.held (data/textbooks/toc/reader-0782ca6661.json); declare id + field in EXPECTED-CHANGES",
+      "reader-0782ca6661: lost toc_read.held_share (data/textbooks/toc/reader-0782ca6661.json); declare id + field in EXPECTED-CHANGES",
+      "reader-0782ca6661: lost toc_read.reads.a (data/textbooks/toc/reader-0782ca6661.json); declare id + field in EXPECTED-CHANGES",
+      "reader-0782ca6661: lost toc_read.reads.b (data/textbooks/toc/reader-0782ca6661.json); declare id + field in EXPECTED-CHANGES",
+      "reader-0782ca6661: lost toc_read.reads.tiebreak (data/textbooks/toc/reader-0782ca6661.json); declare id + field in EXPECTED-CHANGES",
+      "reader-0782ca6661: lost toc_read.rich (data/textbooks/toc/reader-0782ca6661.json); declare id + field in EXPECTED-CHANGES",
+      "reader-0782ca6661: lost toc_read.rule_conflicts (data/textbooks/toc/reader-0782ca6661.json); declare id + field in EXPECTED-CHANGES",
+      "reader-0782ca6661: lost toc_read.ruled (data/textbooks/toc/reader-0782ca6661.json); declare id + field in EXPECTED-CHANGES",
+      "reader-0782ca6661: lost toc_read.settled (data/textbooks/toc/reader-0782ca6661.json); declare id + field in EXPECTED-CHANGES",
+      "reader-0782ca6661: lost toc_read.texts_after (data/textbooks/toc/reader-0782ca6661.json); declare id + field in EXPECTED-CHANGES",
+      "reader-7cc9ca457d-78f843ef39: lost toc_read.agreed (data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json); declare id + field in EXPECTED-CHANGES",
+      "reader-7cc9ca457d-78f843ef39: lost toc_read.confirmed (data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json); declare id + field in EXPECTED-CHANGES",
+      "reader-7cc9ca457d-78f843ef39: lost toc_read.cross_page_merged (data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json); declare id + field in EXPECTED-CHANGES",
+      "reader-7cc9ca457d-78f843ef39: lost toc_read.disputes (data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json); declare id + field in EXPECTED-CHANGES",
+      "reader-7cc9ca457d-78f843ef39: lost toc_read.dropped (data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json); declare id + field in EXPECTED-CHANGES",
+      "reader-7cc9ca457d-78f843ef39: lost toc_read.entries_after (data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json); declare id + field in EXPECTED-CHANGES",
+      "reader-7cc9ca457d-78f843ef39: lost toc_read.entries_before (data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json); declare id + field in EXPECTED-CHANGES",
+      "reader-7cc9ca457d-78f843ef39: lost toc_read.held (data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json); declare id + field in EXPECTED-CHANGES",
+      "reader-7cc9ca457d-78f843ef39: lost toc_read.held_share (data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json); declare id + field in EXPECTED-CHANGES",
+      "reader-7cc9ca457d-78f843ef39: lost toc_read.orphan_holds (data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json); declare id + field in EXPECTED-CHANGES",
+      "reader-7cc9ca457d-78f843ef39: lost toc_read.reads.a (data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json); declare id + field in EXPECTED-CHANGES",
+      "reader-7cc9ca457d-78f843ef39: lost toc_read.reads.b (data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json); declare id + field in EXPECTED-CHANGES",
+      "reader-7cc9ca457d-78f843ef39: lost toc_read.reads.tiebreak (data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json); declare id + field in EXPECTED-CHANGES",
+      "reader-7cc9ca457d-78f843ef39: lost toc_read.rich (data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json); declare id + field in EXPECTED-CHANGES",
+      "reader-7cc9ca457d-78f843ef39: lost toc_read.rule_conflicts (data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json); declare id + field in EXPECTED-CHANGES",
+      "reader-7cc9ca457d-78f843ef39: lost toc_read.ruled (data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json); declare id + field in EXPECTED-CHANGES",
+      "reader-7cc9ca457d-78f843ef39: lost toc_read.settled (data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json); declare id + field in EXPECTED-CHANGES",
+      "reader-7cc9ca457d-78f843ef39: lost toc_read.shrunk (data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json); declare id + field in EXPECTED-CHANGES",
+      "reader-7cc9ca457d-78f843ef39: lost toc_read.texts_after (data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json); declare id + field in EXPECTED-CHANGES"
+    ],
+    "losses": [
+      {
+        "id": "reader-0782ca6661",
+        "field": "toc_read.agreed",
+        "before": 0,
+        "after": null,
+        "path": "data/textbooks/toc/reader-0782ca6661.json",
+        "declared": false
+      },
+      {
+        "id": "reader-0782ca6661",
+        "field": "toc_read.confirmed",
+        "before": 0,
+        "after": null,
+        "path": "data/textbooks/toc/reader-0782ca6661.json",
+        "declared": false
+      },
+      {
+        "id": "reader-0782ca6661",
+        "field": "toc_read.disputes",
+        "before": 0,
+        "after": null,
+        "path": "data/textbooks/toc/reader-0782ca6661.json",
+        "declared": false
+      },
+      {
+        "id": "reader-0782ca6661",
+        "field": "toc_read.dropped",
+        "before": 0,
+        "after": null,
+        "path": "data/textbooks/toc/reader-0782ca6661.json",
+        "declared": false
+      },
+      {
+        "id": "reader-0782ca6661",
+        "field": "toc_read.entries_after",
+        "before": 0,
+        "after": null,
+        "path": "data/textbooks/toc/reader-0782ca6661.json",
+        "declared": false
+      },
+      {
+        "id": "reader-0782ca6661",
+        "field": "toc_read.entries_before",
+        "before": 0,
+        "after": null,
+        "path": "data/textbooks/toc/reader-0782ca6661.json",
+        "declared": false
+      },
+      {
+        "id": "reader-0782ca6661",
+        "field": "toc_read.held",
+        "before": 0,
+        "after": null,
+        "path": "data/textbooks/toc/reader-0782ca6661.json",
+        "declared": false
+      },
+      {
+        "id": "reader-0782ca6661",
+        "field": "toc_read.held_share",
+        "before": 0.0,
+        "after": null,
+        "path": "data/textbooks/toc/reader-0782ca6661.json",
+        "declared": false
+      },
+      {
+        "id": "reader-0782ca6661",
+        "field": "toc_read.reads.a",
+        "before": "gemini-2.5-flash",
+        "after": null,
+        "path": "data/textbooks/toc/reader-0782ca6661.json",
+        "declared": false
+      },
+      {
+        "id": "reader-0782ca6661",
+        "field": "toc_read.reads.b",
+        "before": "gpt-6-luna",
+        "after": null,
+        "path": "data/textbooks/toc/reader-0782ca6661.json",
+        "declared": false
+      },
+      {
+        "id": "reader-0782ca6661",
+        "field": "toc_read.reads.tiebreak",
+        "before": "gemini-2.5-pro",
+        "after": null,
+        "path": "data/textbooks/toc/reader-0782ca6661.json",
+        "declared": false
+      },
+      {
+        "id": "reader-0782ca6661",
+        "field": "toc_read.rich",
+        "before": 0,
+        "after": null,
+        "path": "data/textbooks/toc/reader-0782ca6661.json",
+        "declared": false
+      },
+      {
+        "id": "reader-0782ca6661",
+        "field": "toc_read.rule_conflicts",
+        "before": 0,
+        "after": null,
+        "path": "data/textbooks/toc/reader-0782ca6661.json",
+        "declared": false
+      },
+      {
+        "id": "reader-0782ca6661",
+        "field": "toc_read.ruled",
+        "before": 0,
+        "after": null,
+        "path": "data/textbooks/toc/reader-0782ca6661.json",
+        "declared": false
+      },
+      {
+        "id": "reader-0782ca6661",
+        "field": "toc_read.settled",
+        "before": 0,
+        "after": null,
+        "path": "data/textbooks/toc/reader-0782ca6661.json",
+        "declared": false
+      },
+      {
+        "id": "reader-0782ca6661",
+        "field": "toc_read.texts_after",
+        "before": 0,
+        "after": null,
+        "path": "data/textbooks/toc/reader-0782ca6661.json",
+        "declared": false
+      },
+      {
+        "id": "reader-7cc9ca457d-78f843ef39",
+        "field": "toc_read.agreed",
+        "before": 0,
+        "after": null,
+        "path": "data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json",
+        "declared": false
+      },
+      {
+        "id": "reader-7cc9ca457d-78f843ef39",
+        "field": "toc_read.confirmed",
+        "before": 0,
+        "after": null,
+        "path": "data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json",
+        "declared": false
+      },
+      {
+        "id": "reader-7cc9ca457d-78f843ef39",
+        "field": "toc_read.cross_page_merged",
+        "before": 0,
+        "after": null,
+        "path": "data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json",
+        "declared": false
+      },
+      {
+        "id": "reader-7cc9ca457d-78f843ef39",
+        "field": "toc_read.disputes",
+        "before": 0,
+        "after": null,
+        "path": "data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json",
+        "declared": false
+      },
+      {
+        "id": "reader-7cc9ca457d-78f843ef39",
+        "field": "toc_read.dropped",
+        "before": 0,
+        "after": null,
+        "path": "data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json",
+        "declared": false
+      },
+      {
+        "id": "reader-7cc9ca457d-78f843ef39",
+        "field": "toc_read.entries_after",
+        "before": 0,
+        "after": null,
+        "path": "data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json",
+        "declared": false
+      },
+      {
+        "id": "reader-7cc9ca457d-78f843ef39",
+        "field": "toc_read.entries_before",
+        "before": 0,
+        "after": null,
+        "path": "data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json",
+        "declared": false
+      },
+      {
+        "id": "reader-7cc9ca457d-78f843ef39",
+        "field": "toc_read.held",
+        "before": 0,
+        "after": null,
+        "path": "data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json",
+        "declared": false
+      },
+      {
+        "id": "reader-7cc9ca457d-78f843ef39",
+        "field": "toc_read.held_share",
+        "before": 0.0,
+        "after": null,
+        "path": "data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json",
+        "declared": false
+      },
+      {
+        "id": "reader-7cc9ca457d-78f843ef39",
+        "field": "toc_read.orphan_holds",
+        "before": 0,
+        "after": null,
+        "path": "data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json",
+        "declared": false
+      },
+      {
+        "id": "reader-7cc9ca457d-78f843ef39",
+        "field": "toc_read.reads.a",
+        "before": "gpt-6.1-sol",
+        "after": null,
+        "path": "data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json",
+        "declared": false
+      },
+      {
+        "id": "reader-7cc9ca457d-78f843ef39",
+        "field": "toc_read.reads.b",
+        "before": "gpt-6-sol",
+        "after": null,
+        "path": "data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json",
+        "declared": false
+      },
+      {
+        "id": "reader-7cc9ca457d-78f843ef39",
+        "field": "toc_read.reads.tiebreak",
+        "before": "gpt-6.1-sol",
+        "after": null,
+        "path": "data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json",
+        "declared": false
+      },
+      {
+        "id": "reader-7cc9ca457d-78f843ef39",
+        "field": "toc_read.rich",
+        "before": 0,
+        "after": null,
+        "path": "data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json",
+        "declared": false
+      },
+      {
+        "id": "reader-7cc9ca457d-78f843ef39",
+        "field": "toc_read.rule_conflicts",
+        "before": 0,
+        "after": null,
+        "path": "data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json",
+        "declared": false
+      },
+      {
+        "id": "reader-7cc9ca457d-78f843ef39",
+        "field": "toc_read.ruled",
+        "before": 0,
+        "after": null,
+        "path": "data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json",
+        "declared": false
+      },
+      {
+        "id": "reader-7cc9ca457d-78f843ef39",
+        "field": "toc_read.settled",
+        "before": 0,
+        "after": null,
+        "path": "data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json",
+        "declared": false
+      },
+      {
+        "id": "reader-7cc9ca457d-78f843ef39",
+        "field": "toc_read.shrunk",
+        "before": 0,
+        "after": null,
+        "path": "data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json",
+        "declared": false
+      },
+      {
+        "id": "reader-7cc9ca457d-78f843ef39",
+        "field": "toc_read.texts_after",
+        "before": 0,
+        "after": null,
+        "path": "data/textbooks/toc/reader-7cc9ca457d-78f843ef39.json",
+        "declared": false
+      }
+    ],
+    "checked": 240932,
+    "structured_records_checked": 491
+  },
+  "feedback": {
+    "errors": []
+  },
+  "graph": {
+    "seconds": 5.5,
+    "concepts_changed": 0,
+    "bundles_pending": 0,
+    "assertions_checked": 0,
+    "full": false,
+    "source_evidence": {
+      "sources": [],
+      "ran": false
+    },
+    "errors": [],
+    "notes": []
+  },
+  "registry": {
+    "seconds": 0.8,
+    "errors": [],
+    "notes": []
+  },
+  "readers": {
+    "errors": [],
+    "flags": [],
+    "merge_candidates": [
+      {
+        "rule": "reader_duplicate_opening",
+        "id": "rw-bernhard-severin-ingemann--morgensang-f1e921|rw-bernhard-severin-ingemann--smaborns-morgensang-16a76d",
+        "observed": "8d2531afe88eb38356cf753d8e4f4fee0f205ca61f77c170026c1165f3e1294a",
+        "evidence": {
+          "author": "bernhard-severin-ingemann",
+          "opening": "nu titter til hinanden de fagre blomster smaa",
+          "works": [
+            {
+              "work": "rw-bernhard-severin-ingemann--morgensang-f1e921",
+              "title": "Morgensang",
+              "atlas_work_id": null,
+              "whole": "rw-bernhard-severin-ingemann--morgensang-f1e921",
+              "library_url": "/bibliotek/lassen-1/078/"
+            },
+            {
+              "work": "rw-bernhard-severin-ingemann--smaborns-morgensang-16a76d",
+              "title": "Smaabørns Morgensang",
+              "atlas_work_id": null,
+              "whole": "rw-bernhard-severin-ingemann--smaborns-morgensang-16a76d",
+              "library_url": "/bibliotek/erichsen-2/077/"
+            }
+          ]
+        }
+      },
+      {
+        "rule": "reader_duplicate_opening",
+        "id": "rw-bernhard-severin-ingemann--nu-vagne-ale-guds-fugle-9c0605|rw-bernhard-severin-ingemann--smaborns-sang-6dc0b9",
+        "observed": "7e33b8c2bd1db766ae746f60daa1582ece4a54e6db17003a1c8bae1abccf0dfa",
+        "evidence": {
+          "author": "bernhard-severin-ingemann",
+          "opening": "nu vaagner alle guds fugle smaa",
+          "works": [
+            {
+              "work": "rw-bernhard-severin-ingemann--nu-vagne-ale-guds-fugle-9c0605",
+              "title": "Nu vaagne alle Guds fugle",
+              "atlas_work_id": null,
+              "whole": "rw-bernhard-severin-ingemann--nu-vagne-ale-guds-fugle-9c0605",
+              "library_url": "/bibliotek/lassen-1/188/"
+            },
+            {
+              "work": "rw-bernhard-severin-ingemann--smaborns-sang-6dc0b9",
+              "title": "Smaabørns Sang",
+              "atlas_work_id": null,
+              "whole": "rw-bernhard-severin-ingemann--smaborns-sang-6dc0b9",
+              "library_url": "/bibliotek/erichsen-2/120/"
+            }
+          ]
+        }
+      },
+      {
+        "rule": "reader_duplicate_opening",
+        "id": "rw-christian-richardt--i-skoven-57a6e1|rw-christian-richardt--solens-brylup-450e81",
+        "observed": "693d024dc98d8a7df6e85d4d6b53fd7941d9c1619d34eecb604ccb8956efe22a",
+        "evidence": {
+          "author": "christian-richardt",
+          "opening": "der er saa travlt i skoven",
+          "works": [
+            {
+              "work": "rw-christian-richardt--i-skoven-57a6e1",
+              "title": "I skoven",
+              "atlas_work_id": null,
+              "whole": "rw-christian-richardt--i-skoven-57a6e1",
+              "library_url": "/bibliotek/erichsen-2/076/"
+            },
+            {
+              "work": "rw-christian-richardt--solens-brylup-450e81",
+              "title": "Solens bryllup",
+              "atlas_work_id": null,
+              "whole": "rw-christian-richardt--solens-brylup-450e81",
+              "library_url": "/bibliotek/lassen-1/175/"
+            }
+          ]
+        }
+      },
+      {
+        "rule": "reader_duplicate_opening",
+        "id": "rw-elias-blix--no-livnar-det-i-lundar-34550a|rw-elias-blix--varsong-7f30f5",
+        "observed": "ed00af0cb3d1f57032617f8ca47fd60e0d5a0a6cc9366856114a80e6b943afe4",
+        "evidence": {
+          "author": "elias-blix",
+          "opening": "no livnar det i lundar",
+          "works": [
+            {
+              "work": "rw-elias-blix--no-livnar-det-i-lundar-34550a",
+              "title": "No livnar det i lundar",
+              "atlas_work_id": null,
+              "whole": "rw-elias-blix--no-livnar-det-i-lundar-34550a",
+              "library_url": "/bibliotek/rolfsen-5/076/"
+            },
+            {
+              "work": "rw-elias-blix--varsong-7f30f5",
+              "title": "Vaarsong",
+              "atlas_work_id": null,
+              "whole": "rw-elias-blix--varsong-7f30f5",
+              "library_url": "/bibliotek/garborg/030/"
+            }
+          ]
+        }
+      },
+      {
+        "rule": "reader_duplicate_opening",
+        "id": "rw-esaias-tegner--fritiofs-saga-6e1948|rw-pkt-lodoen-norges-historie-193--isfarten-4b3bb3",
+        "observed": "afc163371cc9443570c83a8b34eb097c20b4c790fd84a011d7c6ff7d5604e67e",
+        "evidence": {
+          "author": "esaias-tegner",
+          "opening": "kong ring med sin dronning til gjestebud for",
+          "works": [
+            {
+              "work": "rw-esaias-tegner--fritiofs-saga-6e1948",
+              "title": "Frithiofs saga",
+              "atlas_work_id": null,
+              "whole": "rw-esaias-tegner--fritiofs-saga-6e1948",
+              "library_url": "/bibliotek/lassen-3/098/"
+            },
+            {
+              "work": "rw-pkt-lodoen-norges-historie-193--isfarten-4b3bb3",
+              "title": "Isfarten",
+              "atlas_work_id": null,
+              "whole": "rw-pkt-lodoen-norges-historie-193--isfarten-4b3bb3",
+              "library_url": "/bibliotek/erichsen-3/034/"
+            }
+          ]
+        }
+      },
+      {
+        "rule": "reader_duplicate_opening",
+        "id": "rw-esaias-tegner--fritiofs-saga-6e1948|rw-pkt-lodoen-norges-historie-193--fritjovs-vikingebalk-81f0e9",
+        "observed": "19923723a6488dca2778e43ebb270c17e2014c266e34f26a95eae91de5b0aa08",
+        "evidence": {
+          "author": "esaias-tegner",
+          "opening": "nu han svævede kring paa det vildene hav",
+          "works": [
+            {
+              "work": "rw-esaias-tegner--fritiofs-saga-6e1948",
+              "title": "Frithiofs saga",
+              "atlas_work_id": null,
+              "whole": "rw-esaias-tegner--fritiofs-saga-6e1948",
+              "library_url": "/bibliotek/lassen-4/057/"
+            },
+            {
+              "work": "rw-pkt-lodoen-norges-historie-193--fritjovs-vikingebalk-81f0e9",
+              "title": "Fridtjovs Vikingebalk",
+              "atlas_work_id": null,
+              "whole": "rw-pkt-lodoen-norges-historie-193--fritjovs-vikingebalk-81f0e9",
+              "library_url": "/bibliotek/erichsen-3/033/"
+            }
+          ]
+        }
+      },
+      {
+        "rule": "reader_duplicate_opening",
+        "id": "rw-knud-lyne-rahbek--katen-den-gamle-ok-den-unge-mus-5dff82|rw-knud-lyne-rahbek--katen-den-unge-ok-den-gamle-mus-468ca5",
+        "observed": "05028d551bf1945db2e575f56d705c836f7a019404ac923bcedeca189f1655c0",
+        "evidence": {
+          "author": "knud-lyne-rahbek",
+          "opening": "katten du lille søde dyr kom hid til mig",
+          "works": [
+            {
+              "work": "rw-knud-lyne-rahbek--katen-den-gamle-ok-den-unge-mus-5dff82",
+              "title": "Katten, den gamle og den unge Mus",
+              "atlas_work_id": null,
+              "whole": "rw-knud-lyne-rahbek--katen-den-gamle-ok-den-unge-mus-5dff82",
+              "library_url": "/bibliotek/erichsen-3/010/"
+            },
+            {
+              "work": "rw-knud-lyne-rahbek--katen-den-unge-ok-den-gamle-mus-468ca5",
+              "title": "Katten, den unge og den gamle mus",
+              "atlas_work_id": null,
+              "whole": "rw-knud-lyne-rahbek--katen-den-unge-ok-den-gamle-mus-468ca5",
+              "library_url": "/bibliotek/lassen-1/155/"
+            }
+          ]
+        }
+      }
+    ],
+    "exceptions": [],
+    "counts": {},
+    "inventory": {
+      "works": 32557,
+      "occurrences": 75125,
+      "occurrences_with_openings": 1411,
+      "opening_urls": 2878
+    },
+    "version": "0be21515639c46aba67fc93dd069349ad3ece1cf",
+    "notes": []
+  },
+  "tracked": {
+    "seconds": 0.4,
+    "entries": 39,
+    "errors": [],
+    "notes": []
+  },
+  "render": {
+    "seconds": 24.4,
+    "snapshot": "a3607ef87ab7",
+    "rendered": 73,
+    "topic_overlay": false,
+    "errors": []
+  },
+  "seconds": 65.4,
+  "verdict": "FAIL lost"
+}
