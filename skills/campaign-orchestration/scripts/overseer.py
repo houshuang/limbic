@@ -77,8 +77,9 @@ def run(config):
 REVIEW_PROMPT = """A code review was requested in {request}. It is {now}. Read the request, the previous review {review} \
 if it exists, and the diff the request names. Review read-only: correctness bugs, data loss, wrong terminal states, \
 rows that become unclaimable, double processing, bypassed holds, rate-limit and memory safety. Check that every earlier \
-must-fix the request claims to fix is fixed with a test that fails on the old code. Run the focused tests and \
-/usr/bin/python3 -m py_compile on changed Python files. Do not flag style, cosmetics, hypothetical future mutation or \
+must-fix the request claims to fix is fixed with a test that fails on the old code. Run only the focused tests for \
+the changed files and /usr/bin/python3 -m py_compile on changed Python files; never run whole-graph, native or full \
+suites (they hold the shared disk for many minutes), and stop any single command after 5 minutes. Do not flag style, cosmetics, hypothetical future mutation or \
 speculative performance. Be decisive: this review gates production. Do not edit code or commit. If {review} exists, \
 copy it to {backup} first. Then write {review}: a title naming the reviewed commit, one paragraph on what you ran, \
 `## Verdict` with exactly APPROVE, APPROVE after N must-fix, or REJECT, then `## Findings`, numbered, each marked \
