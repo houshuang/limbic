@@ -8,15 +8,18 @@ The caps read Codex token_count records. Lanes whose model file names a Claude m
 bill) are listed as skipped and never capped.
 """
 import json, glob, os, sys, time, re
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from session_guard import last_session_id
 C = os.environ.get('CAMPAIGN_DIR', '/Users/stian/src/skard-state/campaign-20261023')
 CLAUDE = re.compile(r'^(opus|sonnet|haiku|fable|claude-)')
 CTX, TURNS, RATE = 150_000, 120, 15_000_000
 def session_file(lane):
     logs = sorted(glob.glob(f'{C}/{lane}/codex*.log'), key=os.path.getmtime)
     for log in reversed(logs):
-        m = re.search(r'session id: (\S+)', open(log, errors='ignore').read(4000))
-        if m:
-            f = glob.glob(os.path.expanduser(f'~/.codex/sessions/*/*/*/*{m.group(1)}.jsonl'))
+        # Logs are appended across sessions: charge the latest session, not the first header in the file.
+        sid = last_session_id(log)
+        if sid:
+            f = glob.glob(os.path.expanduser(f'~/.codex/sessions/*/*/*/*{sid}.jsonl'))
             if f: return f[0], os.path.getmtime(log)
     return None, None
 rows, over = [], []
