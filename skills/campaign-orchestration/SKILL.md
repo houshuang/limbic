@@ -86,7 +86,7 @@ Read this before launching worker lanes, and add to it after every incident
 - Optional `.coordinator.json` `release_scope` names a `RELEASE-SCOPE` file (relative to the repo, or absolute): one commit or path to a lane READY file per line, with `#` comments. READY files resolve relative to the scope file; labelled `HEAD` or `commit` IDs identify deliverables (bases and measurements are ignored). When all are on main and no release cycle is alive, the keeper emits `RELEASE-READY` once per scope hash.
 - Launch and resume resolve the requested CLI (and Node for npm Codex) before consuming handoffs,
   DONE, failure markers or the session cooldown. Refusals name the missing executable. Alif hostnames
-  and `/srv/{media/,}agents/skard/` state paths use `CODEX_HOME=/opt/alif/.codex`, including manual drive-loops.
+  and `/srv/{media/,}agents/skard/` state paths use `CODEX_HOME=/opt/alif/.codex`, including manual drive-loops. Since 2 Nov 2026 it is also the only home: `/root/.codex` links to it and `/etc/environment` sets it, so no command can pick up a stale login.
 - Driver failures include exact argv, status and the last 20 lines from a unique attempt capture.
   Failed `RESULTS.json` checks add their exact `command`, `returncode` and lane-local `log`; legacy
   `launch.log`/check logs are labelled fallbacks. Old failure/exit markers move to `failure-history/`.
