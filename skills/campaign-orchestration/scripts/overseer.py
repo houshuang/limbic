@@ -3,7 +3,7 @@
 questions the owner would ask, acts within the authority its prompt grants, and appends a short report.
 
     overseer.py run --config REPO/.coordinator.json      (launchd, hourly)
-    overseer.py review --config REPO/.coordinator.json   (launchd, every 2 min)
+    overseer.py review --config REPO/.coordinator.json   (launchd, every 2 min; starts up to review_parallel reviews)
     overseer.py status --config REPO/.coordinator.json
 
 Config (in .coordinator.json): "overseer": {"prompt": PATH, "state": DIR, "report": PATH, "model": "opus",
@@ -99,29 +99,73 @@ def review_due(item, seen, now):
     return last.get('failures', 0) < 3 and now - last.get('t', 0) >= 1800
 
 
+def review_items(o):
+    """Explicit request/review pairs plus every REVIEW-REQUEST.md matched by review_globs (its REVIEW.md beside it)."""
+    import glob
+    items = list(o.get('reviews', []))
+    known = {str(Path(i['request'])) for i in items}
+    for pattern in o.get('review_globs', []):
+        for request in sorted(glob.glob(pattern)):
+            if request not in known:
+                items.append({'request': request, 'review': str(Path(request).with_name('REVIEW.md'))})
+    return items
+
+
+def request_lock(state, request):
+    import hashlib
+    folder = state / 'review-locks'; folder.mkdir(parents=True, exist_ok=True)
+    return folder / (hashlib.sha256(str(request).encode()).hexdigest()[:16] + '.lock')
+
+
+def locked(path):
+    with open(path, 'a') as f:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return True
+        fcntl.flock(f, fcntl.LOCK_UN)
+        return False
+
+
+def launch(config, item):
+    """Each review runs in its own detached process so one slow review does not hold the others."""
+    subprocess.Popen([sys.executable, str(Path(__file__).resolve()), 'review-one', '--config', str(config),
+                      item['request'], item['review']], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True)
+
+
 def review(config):
     cfg, o = load(config)
     state = Path(o['state']); state.mkdir(parents=True, exist_ok=True)
-    lock = open(state / 'review.lock', 'w')
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        return 0
     ledger = state / 'reviews.json'
     seen = json.loads(ledger.read_text()) if ledger.exists() else {}
-    due = [i for i in o.get('reviews', []) if review_due(i, seen, time.time())]
+    items = review_items(o)
+    busy = sum(1 for i in items if locked(request_lock(state, i['request'])))
+    due = [i for i in items if review_due(i, seen, time.time()) and not locked(request_lock(state, i['request']))]
     if not due:
         return 0
     ok, line = budget_ok()
     if not ok:
         return 0
-    item = due[0]
+    for item in due[:max(0, o.get('review_parallel', 3) - busy)]:
+        launch(config, item)
+    return 0
+
+
+def review_one(config, item):
+    cfg, o = load(config)
+    state = Path(o['state']); state.mkdir(parents=True, exist_ok=True)
+    lock = open(request_lock(state, item['request']), 'w')
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return 0
     request, target = Path(item['request']), Path(item['review'])
     mtime = request.stat().st_mtime
-    stamp = time.strftime('%Y%m%d-%H%M')
+    stamp = time.strftime('%Y%m%d-%H%M%S')
     prompt = REVIEW_PROMPT.format(request=request, review=target, now=time.strftime('%Y-%m-%d %H:%M %Z'),
                                   backup=target.with_name(f'{target.stem}-before-{stamp}.md'))
-    log = state / f'review-{stamp}.log'
+    log = state / f'review-{stamp}-{request_lock(state, request).stem}.log'
     env = {k: v for k, v in os.environ.items() if k not in ('ANTHROPIC_API_KEY', 'OPENAI_API_KEY')}
     cmd = ['claude', '-p', prompt, '--model', o.get('review_model', 'fable'), '--permission-mode', 'bypassPermissions',
            '--output-format', 'stream-json', '--verbose']
@@ -133,10 +177,14 @@ def review(config):
         except subprocess.TimeoutExpired:
             code = 'timeout'
     written = target.exists() and target.stat().st_mtime >= mtime
-    entry = seen.get(str(request)) or {}
-    failures = 0 if written else (entry.get('failures', 0) + 1 if entry.get('mtime') == mtime else 1)
-    seen[str(request)] = {'mtime': mtime, 't': time.time(), 'exit': code, 'log': str(log), 'failures': failures}
-    ledger.write_text(json.dumps(seen, indent=1) + '\n')
+    ledger = state / 'reviews.json'
+    with open(state / 'reviews.lock', 'w') as ledger_lock:
+        fcntl.flock(ledger_lock, fcntl.LOCK_EX)
+        seen = json.loads(ledger.read_text()) if ledger.exists() else {}
+        entry = seen.get(str(request)) or {}
+        failures = 0 if written else (entry.get('failures', 0) + 1 if entry.get('mtime') == mtime else 1)
+        seen[str(request)] = {'mtime': mtime, 't': time.time(), 'exit': code, 'log': str(log), 'failures': failures}
+        ledger.write_text(json.dumps(seen, indent=1) + '\n')
     if not written:
         with open(o['report'], 'a') as f:
             f.write(f'\n## {time.strftime("%Y-%m-%d %H:%M")} · review of {request} failed ({code}, attempt {failures} of 3); '
@@ -153,6 +201,8 @@ def status(config):
 
 if __name__ == '__main__':
     args = sys.argv[1:]
+    if args[:1] == ['review-one'] and len(args) == 5 and args[1] == '--config':
+        sys.exit(review_one(args[2], {'request': args[3], 'review': args[4]}))
     if len(args) < 3 or args[0] not in ('run', 'review', 'status') or args[1] != '--config':
         raise SystemExit(__doc__)
     sys.exit({'run': run, 'review': review, 'status': status}[args[0]](args[2]))

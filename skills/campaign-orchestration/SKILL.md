@@ -231,6 +231,8 @@ watcher processes were running the next morning.
   events show as `alif:<lane>`; `lane-keeper.py ack alif-ts:/srv/agents/skard/campaign-research/<lane> "<note>"` writes
   HANDLED there, and the mirrored event clears once the alif keeper has cleared it. Update alif with `git -C /srv/agents/skard/limbic pull`.
 
+- **Code review requests are per lane** (2 Nov 2026): a lane writes `REVIEW-REQUEST.md` in its own campaign lane folder and gets a Fable `REVIEW.md` beside it within minutes (`overseer.py review`, launchd every 2 min, up to `review_parallel` at once, folders matched by `overseer.review_globs`). Never share one request file between lanes: on 2 Nov two lanes overwrote each other and one would have read the other's verdict.
+
 ## Repeated completion and status failures (1 Nov 2026)
 
 Five zero-exit workers/drivers stopped before their assigned deliverables; three nested `processing-driver/`
